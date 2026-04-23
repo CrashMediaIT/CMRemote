@@ -268,6 +268,19 @@ services.AddScoped<IPackageInstallJobService, PackageInstallJobService>();
 services.AddScoped<IUploadedMsiService, UploadedMsiService>();
 // First-boot setup wizard skeleton (ROADMAP.md "M1 — First-boot setup wizard").
 services.AddScoped<ISetupStateService, SetupStateService>();
+// First-boot setup wizard — M1.1 (preflight) / M1.2 (DB connection) /
+// M1.3 (legacy import) / wizard progress (ROADMAP.md "M1 — First-boot
+// setup wizard").
+services.AddScoped<Remotely.Server.Services.Setup.ISetupWizardProgressService,
+    Remotely.Server.Services.Setup.SetupWizardProgressService>();
+services.AddScoped<Remotely.Server.Services.Setup.IConnectionStringWriter,
+    Remotely.Server.Services.Setup.ConnectionStringWriter>();
+services.AddScoped<Remotely.Server.Services.Setup.IPreflightService,
+    Remotely.Server.Services.Setup.PreflightService>();
+services.AddScoped<Remotely.Server.Services.Setup.IDatabaseConnectionTester,
+    Remotely.Server.Services.Setup.PostgresConnectionTester>();
+services.AddScoped<Remotely.Server.Services.Setup.ISetupImportService,
+    Remotely.Server.Services.Setup.SetupImportService>();
 services.AddHostedService<RemoteControlSessionCleaner>();
 services.AddHostedService<RemoteControlSessionReconnector>();
 

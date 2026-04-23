@@ -1,0 +1,163 @@
+@*
+    M1.1 — Welcome / preflight step. Runs the IPreflightService
+    checks (writable data dir, TLS endpoint configured, bind ports)
+    and renders the result inline. Failures block "Continue";
+    warnings do not.
+
+    See ROADMAP.md "M1 — First-boot setup wizard" step 1.
+*@
+
+@page "/setup/preflight"
+@layout EmptyLayout
+@rendermode InteractiveServer
+
+@using Remotely.Server.Components.Layout
+@using Remotely.Server.Services
+@using Remotely.Server.Services.Setup
+@inject ISetupStateService SetupState
+@inject ISetupWizardProgressService Progress
+@inject IPreflightService Preflight
+@inject NavigationManager Navigation
+
+<PageTitle>CMRemote — Setup: Preflight</PageTitle>
+
+@if (_alreadyCompleted)
+{
+    <div class="container py-5">
+        <h1 class="display-5">Setup already complete</h1>
+        <p class="lead">
+            Return to the <a href="/">main panel</a>.
+        </p>
+    </div>
+}
+else
+{
+    <div class="container py-5">
+        <nav aria-label="breadcrumb" class="mb-3">
+            <ol class="breadcrumb">
+                <li class="breadcrumb-item"><a href="/setup">Setup</a></li>
+                <li class="breadcrumb-item active" aria-current="page">Preflight</li>
+            </ol>
+        </nav>
+
+        <h1 class="display-6">Preflight checks</h1>
+        <p class="text-muted">
+            Verifying that this host can run CMRemote. Failures block continuing;
+            warnings are advisory.
+        </p>
+
+        @if (_report is null)
+        {
+            <p>Running checks…</p>
+        }
+        else
+        {
+            <ul class="list-group mb-4">
+                @foreach (var check in _report.Checks)
+                {
+                    <li class="list-group-item d-flex justify-content-between align-items-start">
+                        <div class="ms-2 me-auto">
+                            <div class="fw-bold">@check.Name</div>
+                            <small class="text-muted">@check.Detail</small>
+                        </div>
+                        <span class="badge @BadgeFor(check.Status) rounded-pill">@check.Status</span>
+                    </li>
+                }
+            </ul>
+
+            <div class="d-flex gap-2">
+                <button class="btn btn-outline-secondary"
+                        type="button"
+                        disabled="@_running"
+                        @onclick="RunChecks">
+                    @(_running ? "Re-running…" : "Re-run checks")
+                </button>
+                <button class="btn btn-primary"
+                        type="button"
+                        disabled="@(!_report.CanContinue || _saving)"
+                        @onclick="Continue">
+                    @(_saving ? "Saving…" : "Continue")
+                </button>
+            </div>
+
+            @if (!_report.CanContinue)
+            {
+                <div class="alert alert-danger mt-3" role="alert">
+                    One or more preflight checks failed. Please resolve the issues
+                    above and re-run the checks before continuing.
+                </div>
+            }
+        }
+
+        @if (!string.IsNullOrEmpty(_error))
+        {
+            <div class="alert alert-danger mt-3" role="alert">@_error</div>
+        }
+    </div>
+}
+
+@code {
+    private bool _alreadyCompleted;
+    private bool _running;
+    private bool _saving;
+    private string? _error;
+    private PreflightReport? _report;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _alreadyCompleted = await SetupState.IsSetupCompletedAsync();
+        if (!_alreadyCompleted)
+        {
+            await RunChecks();
+        }
+    }
+
+    private async Task RunChecks()
+    {
+        if (_running) return;
+        _running = true;
+        _error = null;
+        try
+        {
+            _report = await Preflight.RunChecksAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = $"Preflight crashed: {ex.Message}";
+        }
+        finally
+        {
+            _running = false;
+        }
+    }
+
+    private async Task Continue()
+    {
+        if (_saving) return;
+        if (_report is null || !_report.CanContinue) return;
+
+        _saving = true;
+        _error = null;
+        try
+        {
+            await Progress.SetCurrentStepAsync(SetupWizardStep.Preflight);
+            Navigation.NavigateTo("/setup/database");
+        }
+        catch (Exception ex)
+        {
+            _error = $"Failed to advance the wizard: {ex.Message}";
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private static string BadgeFor(PreflightStatus status) => status switch
+    {
+        PreflightStatus.Passed => "bg-success",
+        PreflightStatus.Warning => "bg-warning text-dark",
+        PreflightStatus.Failed => "bg-danger",
+        _ => "bg-secondary",
+    };
+}
