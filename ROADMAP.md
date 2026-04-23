@@ -37,7 +37,7 @@ This roadmap is therefore organised in three bands:
 
 ## Band 1 — Rewrite & cut-over *(top priority)*
 
-### Current focus *(end of slice R1b / S4 / M1 scaffold, Apr 2026)*
+### Current focus *(end of slice R1b / S4 / M1+M2 scaffolds, Apr 2026)*
 
 Module 0 (wire-protocol spec + JSON test-vector corpus), slice **R1a**
 (`cmremote-wire` JSON round-trip + redacting `Debug`), slice **R1b**
@@ -49,16 +49,23 @@ policy), **S2** (supply-chain CI via `cargo-deny`, `cargo-audit`,
 and parser hardening — `proptest` suite on stable + `cargo-fuzz`
 targets under `agent-rs/crates/cmremote-wire/fuzz/` seeded from the
 corpus + nightly scheduled workflow
-[`fuzz.yml`](.github/workflows/fuzz.yml)), and the **M1 scaffolding**
+[`fuzz.yml`](.github/workflows/fuzz.yml)), the **M1 scaffolding**
 slice (empty `/setup` flow + `CMRemote.Setup.Completed` marker stored
 in `KeyValueRecords`, redirect middleware that routes uncompleted
 setups to `/setup`, and a startup heuristic that auto-marks any
 already-populated database so existing deployments are not hijacked
-into the wizard) are merged. The slice R1b codec and the S1–S2
-supply-chain gates were shipped in one PR by design so the gate caught
-the new `rmp-serde` dependency on the way in; S3 followed in the next
-PR; S4 landed next, unblocking slice R2; the M1 scaffolding landed
-alongside, unblocking M2.
+into the wizard), and the **M2 scaffolding** slice (new
+[`Migration.Legacy/`](Migration.Legacy/) library project — public
+`MigrationOptions` / `MigrationReport` / `LegacySchemaVersion` /
+`IRowConverter<TLegacy,TV2>` / `ILegacySchemaInspector` /
+`IMigrationRunner` contracts, a default `MigrationRunner` orchestrator
+that reflects converters by their `HandlesSchemaVersion`, and a
+reference `OrganizationRowConverter`) are merged. The slice R1b codec
+and the S1–S2 supply-chain gates were shipped in one PR by design so
+the gate caught the new `rmp-serde` dependency on the way in; S3
+followed in the next PR; S4 landed next, unblocking slice R2; the M1
+scaffolding landed alongside, unblocking M2; the M2 scaffolding
+followed in the next PR.
 
 The next milestones, ordered so security work continues to land
 alongside functional work rather than behind it, are:
@@ -67,11 +74,16 @@ alongside functional work rather than behind it, are:
    server over WebSocket and reconnects cleanly across restarts). Now
    unblocked — S4's fuzz + proptest coverage gates R2's new parser
    surfaces on the way in.
-2. **M2 — Schema converter library** (`CMRemote.Migration.Legacy`
-   project + `cmremote migrate` CLI). Now unblocked by the M1
-   scaffold; lands the per-version row-converter functions that the
-   wizard's import step (M1.3) and headless / scripted migrations
-   both consume.
+2. **M2 — Legacy reader + CLI** (next M2 sub-slice). Concrete
+   `ILegacySchemaInspector` implementation that opens the source
+   connection (SQLite / SQL Server / Postgres) and probes for the
+   known `__EFMigrationsHistory` + `Organizations` + `Devices` +
+   `AspNetUsers` table set, the per-entity row readers that feed
+   `IRowConverter<TLegacy,TV2>` instances, the target writer, and the
+   `cmremote migrate --from <conn> --to <conn>` CLI wrapper. The
+   public surface (this scaffold's interfaces + `MigrationRunner`
+   composition) is fixed so the wizard's import step (M1.3) can bind
+   against the runner once the reader lands.
 
 Both milestones are parallelizable.
 
@@ -298,11 +310,37 @@ The wizard is non-blocking past step 3: if the operator skips the import
 they can run it later from `/admin/migration`. **The operator is never
 forced to wait for agents to upgrade before reaching the main panel.**
 
-**M2 — Schema converter library.** A new `CMRemote.Migration.Legacy`
+**M2 — Schema converter library.** *(🟡 in progress — scaffolding shipped.)*
+The skeleton landed in this slice: a new
+[`Migration.Legacy/`](Migration.Legacy/) library project (assembly
+`Remotely.Migration.Legacy`, references `Shared`) with the public
+contracts the wizard's import step (M1.3) and the headless CLI both
+bind against — `MigrationOptions`, `MigrationReport` (+ `EntityReport`,
+JSON round-trip, `ReportSchemaVersion`), `LegacySchemaVersion` (open
+enum: `Unknown`, `Empty`, `UpstreamLegacy_2026_04`, …),
+`IRowConverter<TLegacy,TV2>` with a `ConverterResult<T>`
+`Ok`/`Skip`/`Fail` discriminated union, `ILegacySchemaInspector`,
+`IMigrationRunner` — plus a default `MigrationRunner` orchestrator
+that reflects converters by their `HandlesSchemaVersion` and emits a
+report even when detection fails or the inspector throws, and a
+reference `OrganizationRowConverter` that pins the conversion contract
+end-to-end (identity preservation, name truncation at the v2 25-char
+cap, skip-on-missing-name, fail-on-missing-id). Tests:
+`Tests/Migration.Legacy.Tests/` (13 tests) cover the converter happy /
+edge / failure paths, the runner's known / empty / unknown-schema
+branches, inspector exception handling, cancellation, and report JSON
+round-trip.
+
+A new `CMRemote.Migration.Legacy`
 project owns the read-side schema reflection and the per-version row
 converters. It exposes a CLI (`cmremote migrate --from <conn> --to
 <conn>`) so headless / scripted migrations are possible and so the
-wizard's import step is a thin UI over the same code.
+wizard's import step is a thin UI over the same code. The next M2
+sub-slice lands the concrete `ILegacySchemaInspector` (which opens
+the source connection and probes for the canonical
+`__EFMigrationsHistory` + `Organizations` + `Devices` + `AspNetUsers`
+table set), per-entity row readers, the target writer, and the CLI
+wrapper.
 
 **M3 — Background agent-upgrade pipeline.** Once the operator is in the
 main panel, an `IHostedService`
