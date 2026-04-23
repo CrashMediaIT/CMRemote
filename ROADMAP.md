@@ -37,7 +37,7 @@ This roadmap is therefore organised in three bands:
 
 ## Band 1 — Rewrite & cut-over *(top priority)*
 
-### Current focus *(end of slice R1b / S4 / M1+M2 scaffolds + M2 inspector + M2 reader + M2 writer-contract, Apr 2026)*
+### Current focus *(end of slice R1b / S4 / M1 scaffold + **M2 complete** — Apr 2026)*
 
 Module 0 (wire-protocol spec + JSON test-vector corpus), slice **R1a**
 (`cmremote-wire` JSON round-trip + redacting `Debug`), slice **R1b**
@@ -54,80 +54,105 @@ slice (empty `/setup` flow + `CMRemote.Setup.Completed` marker stored
 in `KeyValueRecords`, redirect middleware that routes uncompleted
 setups to `/setup`, and a startup heuristic that auto-marks any
 already-populated database so existing deployments are not hijacked
-into the wizard), the **M2 scaffolding** slice (new
-[`Migration.Legacy/`](Migration.Legacy/) library project — public
-`MigrationOptions` / `MigrationReport` / `LegacySchemaVersion` /
-`IRowConverter<TLegacy,TV2>` / `ILegacySchemaInspector` /
-`IMigrationRunner` contracts, a default `MigrationRunner` orchestrator
-that reflects converters by their `HandlesSchemaVersion`, and a
-reference `OrganizationRowConverter`), the **M2 inspector**
-slice (concrete
-[`LegacySchemaInspector`](Migration.Legacy/LegacySchemaInspector.cs)
-that opens the source connection through a connection-string-shape
-provider detector
-[`LegacyDbProviderDetector`](Migration.Legacy/LegacyDbProviderDetector.cs)
-covering SQLite / SQL Server / PostgreSQL, probes for the canonical
-`__EFMigrationsHistory` + `Organizations` + `Devices` + `AspNetUsers`
-set, and classifies the result into `Empty` / `UpstreamLegacy_2026_04`
-/ `Unknown` — partial canonical sets are reported `Unknown` so the
-runner refuses to import rather than risk silent data loss), the
-**M2 reader** slice (new
-[`ILegacyRowReader<TLegacy>`](Migration.Legacy/ILegacyRowReader.cs)
-async-streaming contract + reference
-[`LegacyOrganizationReader`](Migration.Legacy/Readers/LegacyOrganizationReader.cs)
-that keyset-paginates `Organizations` ordered by `ID` across all
-three providers, plus a
-[`MigrationRunner`](Migration.Legacy/MigrationRunner.cs) that now
-pairs each applicable converter with the matching reader by
-`EntityName + HandlesSchemaVersion`, streams rows through
-`IRowConverter.Convert`, and accumulates `RowsRead` / `RowsConverted`
-/ `RowsSkipped` / `RowsFailed` / per-row `Errors` (capped at
-`EntityReport.MaxErrorsPerEntity`) on the report; converters with no
-matching reader are surfaced with a warning rather than silently
-dropped), and the **M2 writer-contract** slice (new
-[`ILegacyRowWriter<TV2>`](Migration.Legacy/ILegacyRowWriter.cs)
-async per-row write contract — implementations must be idempotent
-upserts by primary key so a resumed run does not duplicate; the
-runner now accepts a writers collection on a third constructor
-overload, pairs writer with converter by
-`EntityName + HandlesSchemaVersion`, invokes the writer on every
-`ConverterResult.Ok` when `MigrationOptions.DryRun=false`,
-accumulates a new `EntityReport.RowsWritten` counter, catches
-per-row writer exceptions into `RowsFailed` + capped `Errors`
-without aborting the run, and demotes a writer-less entity to
-"dry-run for this entity only" with a single warning when the
-operator asked for a real import — concrete Postgres
-`LegacyOrganizationWriter` follows in the next sub-slice once a
-live-Postgres test path is wired into CI) are merged. The slice
-R1b codec and the S1–S2 supply-chain gates were shipped in one PR
-by design so the gate caught the new `rmp-serde` dependency on the
-way in; S3 followed in the next PR; S4 landed next, unblocking
-slice R2; the M1 scaffolding landed alongside, unblocking M2; the
-M2 scaffolding followed in the next PR; the M2 inspector followed
-after that, unblocking the M2 reader; the M2 reader landed next,
-unblocking the M2 writer-contract; the M2 writer-contract landed
-next, unblocking the **concrete Postgres `LegacyOrganizationWriter`**
-+ remaining per-entity readers / converters / writers
-(Devices, AspNetUsers, …) + the `cmremote migrate` CLI.
+into the wizard), and the **complete M2 milestone** are merged.
 
-The next milestones, ordered so security work continues to land
-alongside functional work rather than behind it, are:
+**M2 — Schema converter library + CLI** is shipped end-to-end across
+this PR's progressive slices:
+
+- **Scaffolding** —
+  [`Migration.Legacy/`](Migration.Legacy/) library project, public
+  `MigrationOptions` / `MigrationReport` / `LegacySchemaVersion` /
+  `IRowConverter<TLegacy,TV2>` / `ILegacySchemaInspector` /
+  `ILegacyRowReader<TLegacy>` / `ILegacyRowWriter<TV2>` /
+  `IMigrationRunner` contracts + the default `MigrationRunner`
+  orchestrator + the reference `OrganizationRowConverter`.
+- **Inspector** —
+  [`LegacySchemaInspector`](Migration.Legacy/LegacySchemaInspector.cs)
+  + connection-string-shape provider detection
+  ([`LegacyDbProviderDetector`](Migration.Legacy/LegacyDbProviderDetector.cs))
+  for SQLite / SQL Server / PostgreSQL; classifies a source DB as
+  `Empty` / `UpstreamLegacy_2026_04` / `Unknown` and refuses to
+  import on partial canonical sets.
+- **Readers** — keyset-paginated, deterministic-order, async-streaming
+  ADO.NET readers for all three canonical upstream tables:
+  [`LegacyOrganizationReader`](Migration.Legacy/Readers/LegacyOrganizationReader.cs),
+  [`LegacyDeviceReader`](Migration.Legacy/Readers/LegacyDeviceReader.cs),
+  [`LegacyAspNetUserReader`](Migration.Legacy/Readers/LegacyAspNetUserReader.cs).
+  Per-provider SQL is centralised in
+  [`LegacyKeysetSql`](Migration.Legacy/Readers/LegacyKeysetSql.cs)
+  so identifier-quoting + `LIMIT`-vs-`TOP` rules are one decision
+  per provider rather than copy-pasted per reader.
+- **Converters** — identity-preserving (PK round-tripped byte-stable
+  per ROADMAP M1.3 so resumed runs are safe and the agent's
+  persisted device id keeps matching post-import) row converters for
+  every entity:
+  [`OrganizationRowConverter`](Migration.Legacy/Converters/OrganizationRowConverter.cs),
+  [`DeviceRowConverter`](Migration.Legacy/Converters/DeviceRowConverter.cs),
+  [`AspNetUserRowConverter`](Migration.Legacy/Converters/AspNetUserRowConverter.cs).
+  ASP.NET Identity columns (`PasswordHash`, `SecurityStamp`,
+  `ConcurrencyStamp`, `LockoutEnd`, …) round-trip verbatim so
+  existing user passwords + 2FA state survive the migration —
+  the entire reason an importer exists rather than asking operators
+  to re-invite users.
+- **Writer contract + runner wiring** —
+  [`ILegacyRowWriter<TV2>`](Migration.Legacy/ILegacyRowWriter.cs)
+  + the third `MigrationRunner` constructor overload that pairs
+  writer with converter by `EntityName + HandlesSchemaVersion`,
+  invokes the writer on every `ConverterResult.Ok` when
+  `MigrationOptions.DryRun=false`, accumulates
+  `EntityReport.RowsWritten`, catches per-row writer exceptions
+  into `RowsFailed` + capped `Errors` (re-throws
+  `OperationCanceledException` so explicit cancellation is honoured),
+  and demotes a writer-less entity to "dry-run for this entity only"
+  with a single warning when the operator asked for a real import.
+- **Concrete Postgres writers** — production
+  [`LegacyOrganizationWriter`](Migration.Legacy/Writers/LegacyOrganizationWriter.cs),
+  [`LegacyDeviceWriter`](Migration.Legacy/Writers/LegacyDeviceWriter.cs),
+  [`LegacyUserWriter`](Migration.Legacy/Writers/LegacyUserWriter.cs)
+  that all upsert via `INSERT … ON CONFLICT ("PK") DO UPDATE SET …`
+  against the v2 Postgres schema. Idempotent by primary key (so
+  resumed runs overwrite rather than duplicate). Gated by
+  [`PostgresWriterRuntime.ValidateAndCreate`](Migration.Legacy/Writers/PostgresWriterRuntime.cs),
+  which rejects non-Postgres connection-string shapes (the v2
+  schema is Postgres-only — we refuse to silently write SQL Server
+  inserts to a Postgres-conn-string field).
+- **CLI** — new [`Migration.Cli/`](Migration.Cli/) console project
+  publishing as `cmremote-migrate`. Surface:
+  `cmremote migrate --from <sourceConn> --to <targetConn> [--dry-run]
+  [--batch-size N]`. Composes the full converter / reader / writer
+  triple set; honours Ctrl+C via a `CancellationTokenSource`;
+  pretty-prints the per-entity `MigrationReport`; exit codes
+  `0` clean, `1` row-level failures, `2` fatal error,
+  `64` (BSD `EX_USAGE`) usage error. The wizard's M1.3 import step
+  binds the same `MigrationRunner`, so CLI and UI share one codepath.
+
+**Tests:** 103 across two test projects —
+[`Tests/Migration.Legacy.Tests/`](Tests/Migration.Legacy.Tests/)
+(90 tests; converter unit tests for all three entities, real
+end-to-end SQLite reader tests with multi-page keyset pagination,
+inspector classification, runner integration including writer wiring,
+target-validator tests for the Postgres writer runtime) +
+[`Tests/Migration.Cli.Tests/`](Tests/Migration.Cli.Tests/) (13
+tests; argument parsing, exit-code mapping, end-to-end dry-run smoke
+test against an in-memory SQLite source seeded with the canonical
+upstream schema, report-printer formatting). The concrete Postgres
+writers' `INSERT … ON CONFLICT` paths are not exercised in CI
+(Postgres isn't available); they are covered by the
+`PostgresWriterRuntime` validator tests + manual verification, with
+a follow-up integration job tracked separately.
+
+The next milestones are now:
 
 1. **R2 — Connection / heartbeat loop** (Rust agent connects to a dev
    server over WebSocket and reconnects cleanly across restarts). Now
    unblocked — S4's fuzz + proptest coverage gates R2's new parser
    surfaces on the way in.
-2. **M2 — Concrete Postgres writer + remaining readers + CLI** (next M2 sub-slice).
-   The concrete `LegacyOrganizationWriter : ILegacyRowWriter<Organization>`
-   that lands rows in the v2 Postgres schema via an idempotent
-   `INSERT … ON CONFLICT (ID) DO UPDATE` keyset upsert (transactional
-   per batch; honours `MigrationOptions.DryRun` indirectly via the
-   runner that already gates the write). The per-entity readers +
-   converters + writers for `Devices` and `AspNetUsers` (the other
-   two canonical upstream tables already probed by the inspector).
-   The `cmremote migrate --from <conn> --to <conn>` CLI wrapper that
-   calls into the same `MigrationRunner` the wizard's import step
-   (M1.3) will use.
+2. **M1.3 — Wizard import step** wires the now-complete
+   `cmremote-migrate` runner into the `/setup` flow, so an operator
+   can import directly from the wizard rather than dropping to a
+   shell. Live-Postgres integration test coverage for the writers
+   lands here too (the wizard step exercises the same `INSERT … ON
+   CONFLICT` paths against the wizard's own test container).
 
 Both milestones are parallelizable.
 
@@ -354,113 +379,137 @@ The wizard is non-blocking past step 3: if the operator skips the import
 they can run it later from `/admin/migration`. **The operator is never
 forced to wait for agents to upgrade before reaching the main panel.**
 
-**M2 — Schema converter library.** *(🟡 in progress — scaffolding + inspector + reader + writer-contract shipped.)*
-The skeleton landed in an earlier slice: a new
-[`Migration.Legacy/`](Migration.Legacy/) library project (assembly
-`Remotely.Migration.Legacy`, references `Shared`) with the public
-contracts the wizard's import step (M1.3) and the headless CLI both
-bind against — `MigrationOptions`, `MigrationReport` (+ `EntityReport`,
-JSON round-trip, `ReportSchemaVersion`), `LegacySchemaVersion` (open
-enum: `Unknown`, `Empty`, `UpstreamLegacy_2026_04`, …),
-`IRowConverter<TLegacy,TV2>` with a `ConverterResult<T>`
-`Ok`/`Skip`/`Fail` discriminated union, `ILegacySchemaInspector`,
-`IMigrationRunner` — plus a default `MigrationRunner` orchestrator
-that reflects converters by their `HandlesSchemaVersion` and emits a
-report even when detection fails or the inspector throws, and a
-reference `OrganizationRowConverter` that pins the conversion contract
-end-to-end (identity preservation, name truncation at the v2 25-char
-cap, skip-on-missing-name, fail-on-missing-id).
+**M2 — Schema converter library + CLI.** *(✅ shipped.)*
+A new [`Migration.Legacy/`](Migration.Legacy/) library project
+(assembly `Remotely.Migration.Legacy`, references `Shared`) holds the
+public contracts the wizard's import step (M1.3) and the headless
+CLI both bind against — `MigrationOptions`, `MigrationReport`
+(+ `EntityReport`, JSON round-trip, `ReportSchemaVersion`),
+`LegacySchemaVersion` (open enum: `Unknown`, `Empty`,
+`UpstreamLegacy_2026_04`, …), `IRowConverter<TLegacy,TV2>` with a
+`ConverterResult<T>` `Ok`/`Skip`/`Fail` discriminated union,
+`ILegacySchemaInspector`,
+[`ILegacyRowReader<TLegacy>`](Migration.Legacy/ILegacyRowReader.cs),
+[`ILegacyRowWriter<TV2>`](Migration.Legacy/ILegacyRowWriter.cs),
+`IMigrationRunner` — plus the default
+[`MigrationRunner`](Migration.Legacy/MigrationRunner.cs) orchestrator
+that pairs converter / reader / writer by `EntityName +
+HandlesSchemaVersion`, streams every entity end to end, and emits a
+report even when detection fails or the inspector throws.
 
-The **inspector slice** added the concrete
-[`LegacySchemaInspector`](Migration.Legacy/LegacySchemaInspector.cs):
-it picks the right ADO.NET driver from the connection-string shape
-via [`LegacyDbProviderDetector`](Migration.Legacy/LegacyDbProviderDetector.cs)
-(PostgreSQL on `Host=`, SQL Server on `Server=` / `Initial Catalog=`,
-SQLite on `Data Source=` / `Filename=`), opens the source connection,
-runs the per-provider table-list query
-(`sqlite_master` for SQLite, `INFORMATION_SCHEMA.TABLES` for SQL
-Server, `information_schema.tables` filtered to schema `public` for
-PostgreSQL), and feeds the result into a pure
-`Classify(IReadOnlyCollection<string>)` rule. Empty database →
-`Empty`; full canonical set (case-insensitive, so the PostgreSQL
-identifier-folding case still matches) → `UpstreamLegacy_2026_04`;
-partial canonical set or unrelated tables → `Unknown` (the runner
-already refuses to import on `Unknown` to avoid silent data loss).
-Connection / query failures bubble through the runner's existing
-fatal-error path so the wizard / CLI surface a clean message rather
-than a stack trace.
+The concrete
+[`LegacySchemaInspector`](Migration.Legacy/LegacySchemaInspector.cs)
+opens the source connection through the connection-string-shape
+provider detector
+[`LegacyDbProviderDetector`](Migration.Legacy/LegacyDbProviderDetector.cs)
+(SQLite on `Data Source=` / `Filename=`, SQL Server on `Server=` /
+`Initial Catalog=`, PostgreSQL on `Host=`), runs the per-provider
+table-list query, and classifies a source DB as `Empty`,
+`UpstreamLegacy_2026_04`, or `Unknown` — partial canonical sets are
+reported `Unknown` so the runner refuses to import rather than risk
+silent data loss.
 
-The **reader slice** added the
-[`ILegacyRowReader<TLegacy>`](Migration.Legacy/ILegacyRowReader.cs)
-async-streaming contract (one implementation per
-`(LegacySchemaVersion, entity)` pair, single source connection per
-`ReadAsync`, deterministic ordering by primary key so a resumed run
-sees the same sequence) and the reference
+Per-entity **readers** keyset-paginate the three canonical upstream
+tables in `MigrationOptions.BatchSize`-sized pages ordered by primary
+key (deterministic so a resumed run sees the same sequence): SQLite
++ PostgreSQL share `LIMIT @batch`; SQL Server uses `TOP(@batch)`.
 [`LegacyOrganizationReader`](Migration.Legacy/Readers/LegacyOrganizationReader.cs)
-that keyset-paginates `Organizations` ordered by `ID` across all
-three providers in `MigrationOptions.BatchSize`-sized pages (SQLite
-+ PostgreSQL share `LIMIT @batch`; SQL Server uses `TOP(@batch)`).
-The
-[`MigrationRunner`](Migration.Legacy/MigrationRunner.cs) gained a
-second constructor that accepts readers; it now pairs each
-applicable converter with the matching reader by `EntityName +
-HandlesSchemaVersion`, streams rows through `IRowConverter.Convert`
-via a typed reflective inner loop, and accumulates `RowsRead` /
-`RowsConverted` / `RowsSkipped` / `RowsFailed` / per-row `Errors`
-(capped at `EntityReport.MaxErrorsPerEntity`) on the report.
-Converters with no matching reader are reported with zero rows + a
-warning rather than silently dropped, so the wizard surfaces "this
-entity isn't importable yet" while remaining entities still flow.
+walks `Organizations`,
+[`LegacyDeviceReader`](Migration.Legacy/Readers/LegacyDeviceReader.cs)
+walks `Devices` (with provider-portable `DateTimeOffset`
+materialisation that handles SQLite's TEXT representation),
+[`LegacyAspNetUserReader`](Migration.Legacy/Readers/LegacyAspNetUserReader.cs)
+walks `AspNetUsers` (cursor on `Id`, the lower-case ASP.NET Identity
+spelling). The per-provider SQL is centralised in
+[`LegacyKeysetSql`](Migration.Legacy/Readers/LegacyKeysetSql.cs) so
+identifier-quoting + `LIMIT`-vs-`TOP` rules are one decision per
+provider rather than copy-pasted per reader.
 
-The **writer-contract slice** added the
-[`ILegacyRowWriter<TV2>`](Migration.Legacy/ILegacyRowWriter.cs)
-async per-row write contract (one impl per
-`(LegacySchemaVersion, entity)` pair, must be **idempotent by primary
-key** — the identity-preservation rule from M1.3 means primary keys
-are byte-stable across reruns, so an upsert keyed off id is enough).
-The runner gained a third constructor overload
-`(inspector, converters, readers, writers, logger?)` (existing
-overloads still exist and forward empty writer / reader sets, so
-existing callers compile unchanged); it pairs writer with converter
-by `EntityName + HandlesSchemaVersion` and the v2 CLR generic
-argument, invokes the writer on every `ConverterResult.Ok` when
-`MigrationOptions.DryRun=false`, accumulates a new
-`EntityReport.RowsWritten` counter, catches per-row writer
-exceptions into `RowsFailed` + capped `Errors` (the run does not
-abort over a single bad row; `OperationCanceledException` is
-re-thrown so explicit cancellation is honoured), and demotes a
-writer-less entity to "dry-run for this entity only" with a single
-warning when the operator asked for a real import — converted rows
-are still counted but not persisted, rather than silently dropped.
-The concrete Postgres writer is **not yet wired** in this slice and
-follows once a live-Postgres test path is available in CI; the
-in-memory test double in
-[`MigrationRunnerWriterIntegrationTests`](Tests/Migration.Legacy.Tests/MigrationRunnerWriterIntegrationTests.cs)
-pins the contract end-to-end in the meantime.
+Per-entity **converters** preserve identity (PK round-tripped
+byte-stable per ROADMAP M1.3 so resumed runs are safe and the
+agent's persisted device id keeps matching post-import) and copy
+scalar fields:
+[`OrganizationRowConverter`](Migration.Legacy/Converters/OrganizationRowConverter.cs)
+(name truncated at the v2 25-char cap, skip-on-missing-name,
+fail-on-missing-id),
+[`DeviceRowConverter`](Migration.Legacy/Converters/DeviceRowConverter.cs)
+(skip-on-missing-org so half-deleted orgs don't bring down the run,
+forces `IsOnline=false` so the panel doesn't claim devices are
+online before the agent has re-handshaked, truncates `Alias` /
+`Tags` / `Notes` to the v2 caps),
+[`AspNetUserRowConverter`](Migration.Legacy/Converters/AspNetUserRowConverter.cs)
+(round-trips `PasswordHash` / `SecurityStamp` / `ConcurrencyStamp`
+/ `LockoutEnd` / `TwoFactorEnabled` verbatim so existing user
+passwords + 2FA state survive the migration — the entire reason an
+importer exists).
 
-Tests: [`Tests/Migration.Legacy.Tests/`](Tests/Migration.Legacy.Tests/)
-(63 tests; +6 in this slice) cover the writer wiring end-to-end —
-DryRun honoured (writer never called), real-run happy path writes
-every converted row, no-writer-for-converter when `DryRun=false`
-demotes to dry-run-with-warning (one warning per entity, not per
-row), per-row writer exceptions become `RowsFailed` + capped
-`Errors` while sibling rows still flow, the writer is asserted
-idempotent across reruns (re-running against the same target ends
-with one row per id even though the test double's append log
-records both writes), and a constructor null-writers guard.
+The runner accepts a writers collection; on every
+`ConverterResult.Ok` it invokes the matching writer when
+`MigrationOptions.DryRun=false`, accumulates
+`EntityReport.RowsWritten`, catches per-row writer exceptions into
+`RowsFailed` + capped `Errors` (re-throws
+`OperationCanceledException` so explicit cancellation is honoured),
+and demotes a writer-less entity to "dry-run for this entity only"
+with a single warning when the operator asked for a real import.
 
-A new `CMRemote.Migration.Legacy`
-project owns the read-side schema reflection and the per-version row
-converters / writers. It exposes a CLI (`cmremote migrate --from
-<conn> --to <conn>`) so headless / scripted migrations are possible
-and so the wizard's import step is a thin UI over the same code.
-The next M2 sub-slice lands the **concrete Postgres
-`LegacyOrganizationWriter`** (idempotent `INSERT … ON CONFLICT
-(ID) DO UPDATE` by primary key; transactional per batch; honours
-`MigrationOptions.DryRun` indirectly via the runner's existing
-gate), the per-entity readers + converters + writers for `Devices`
-and `AspNetUsers` (the other two canonical upstream tables already
-probed by the inspector), and the CLI wrapper.
+Concrete **Postgres writers** all upsert via
+`INSERT … ON CONFLICT ("PK") DO UPDATE SET …` against the v2 schema:
+[`LegacyOrganizationWriter`](Migration.Legacy/Writers/LegacyOrganizationWriter.cs),
+[`LegacyDeviceWriter`](Migration.Legacy/Writers/LegacyDeviceWriter.cs),
+[`LegacyUserWriter`](Migration.Legacy/Writers/LegacyUserWriter.cs).
+Idempotent by primary key (so resumed runs overwrite rather than
+duplicate). Gated by
+[`PostgresWriterRuntime.ValidateAndCreate`](Migration.Legacy/Writers/PostgresWriterRuntime.cs),
+which rejects non-Postgres connection-string shapes — the v2 schema
+is Postgres-only and we refuse to silently write a SQL Server
+INSERT to a Postgres-conn-string field.
+
+The new [`Migration.Cli/`](Migration.Cli/) console project publishes
+as `cmremote-migrate` and exposes the same runner over the shell:
+`cmremote migrate --from <sourceConn> --to <targetConn> [--dry-run]
+[--batch-size N]`. Composes the full converter / reader / writer
+triple set; honours Ctrl+C via a `CancellationTokenSource`;
+pretty-prints the per-entity `MigrationReport`; exit codes `0`
+clean, `1` row-level failures, `2` fatal error, `64` (BSD `EX_USAGE`)
+usage error. The wizard's M1.3 import step binds the same
+`MigrationRunner`, so CLI and UI share one codepath.
+
+Tests: 103 across two projects.
+[`Tests/Migration.Legacy.Tests/`](Tests/Migration.Legacy.Tests/)
+(90 tests) covers the writer-contract wiring end-to-end (DryRun
+honoured, real-run happy path, no-writer-for-converter demotion-with-warning,
+per-row writer exception isolation, idempotency-across-reruns,
+constructor null guards), the new converters
+([`DeviceRowConverterTests`](Tests/Migration.Legacy.Tests/DeviceRowConverterTests.cs)
++ [`AspNetUserRowConverterTests`](Tests/Migration.Legacy.Tests/AspNetUserRowConverterTests.cs)
+— identity preservation, skip/fail rules, length-cap truncation,
+Identity-column round-trip), real end-to-end SQLite reader paths for
+Organizations and Devices (multi-page keyset pagination across 3
+pages of 12 rows at batch size 5, NULL-name pass-through to the
+converter, scalar materialisation of every projected column
+including the SQLite-TEXT `DateTimeOffset` round-trip), and the
+Postgres writer runtime validator
+([`PostgresWriterRuntimeTests`](Tests/Migration.Legacy.Tests/PostgresWriterRuntimeTests.cs)
+— blank-string guard, non-Postgres-shape rejection, Postgres-shape
+acceptance).
+[`Tests/Migration.Cli.Tests/`](Tests/Migration.Cli.Tests/) (13
+tests) covers argument parsing (happy path, short flags, missing
+required, value-after-flag missing, non-positive / non-integer
+batch, unknown flag), exit-code mapping (clean / row-failures /
+fatal-trumps-row-failures), and an end-to-end dry-run smoke test
+that builds the CLI's runner against an in-memory SQLite source
+seeded with the canonical upstream schema and asserts every entity
+streams through with the expected per-entity counts and zero
+`RowsWritten` + zero exit code, plus a report-printer formatting
+guard so the operator-visible plain-text columns don't drift
+silently.
+
+The concrete Postgres writers' `INSERT … ON CONFLICT` paths are not
+exercised against a live DB in CI (Postgres isn't available in the
+test runner); they are covered by the validator tests + manual
+verification for now, with live-DB integration coverage tracked as
+part of the M1.3 wizard work which already needs a Postgres test
+container.
 
 **M3 — Background agent-upgrade pipeline.** Once the operator is in the
 main panel, an `IHostedService`
