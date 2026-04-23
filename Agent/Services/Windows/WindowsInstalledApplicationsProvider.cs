@@ -51,6 +51,11 @@ public class WindowsInstalledApplicationsProvider : IInstalledApplicationsProvid
         RegexOptions.Compiled);
 
     private const int MaxOutputCharacters = 16 * 1024;
+
+    // 15 minutes accommodates legitimately slow MSI uninstalls (Office,
+    // Adobe Creative Cloud, Visual Studio components) on spinning disks
+    // while still bounding rogue installers. AppX removals and most
+    // QuietUninstallString invocations finish in seconds.
     private static readonly TimeSpan UninstallTimeout = TimeSpan.FromMinutes(15);
 
     private readonly ILogger<WindowsInstalledApplicationsProvider> _logger;
