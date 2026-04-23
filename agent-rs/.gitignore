@@ -1,0 +1,7 @@
+# Cargo build artefacts
+target/
+Cargo.lock.bak
+
+# Editor / OS noise
+*.swp
+.DS_Store
