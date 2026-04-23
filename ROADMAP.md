@@ -1,16 +1,159 @@
 # CMRemote Roadmap
 
-This roadmap tracks the work required to (1) finish the Package Manager feature
-set on top of the existing codebase, (2) harden the result, and (3) replace the
-remaining upstream-derived code so that **CMRemote** stands on its own as an
-independent, clean-room re-architecture rather than a downstream of the original
-project. The clean-room work is intentionally scheduled **last** so functional
-features ship to users first.
+> **Project status (Apr 2026):** CMRemote is **not yet in production**. That
+> changes the calculus: the **clean-room rewrite — and specifically the move
+> to Rust** — is now the **top priority**. Per project-owner direction we
+> stop trying to ship Package Manager polish on top of the inherited .NET
+> codebase and instead invest that time in the rewrite, with a hard
+> requirement that the cut-over from the old Docker image to the new
+> application is **non-destructive** for any database or agent that exists
+> in the field today.
+
+This roadmap is therefore organised in three bands:
+
+1. **Band 1 — Rewrite & cut-over (now).** Rust agent, clean-room server,
+   first-boot setup wizard, in-place migration of the legacy Docker
+   database to PostgreSQL, and a background agent-upgrade pipeline that
+   honours device-online state and a 60-day inactivity cut-off.
+2. **Band 2 — Feature work to carry forward.** Package Manager (PRs A/B/C1
+   already shipped, C2/C3/D queued) and the agent-deployment redesign
+   (PR E). These are still on the roadmap but are now subordinate to
+   Band 1 and will be re-implemented inside the clean-room codebase
+   rather than further extended on top of the legacy one.
+3. **Band 3 — UI / brand alignment.** During the Razor UI rebuild the
+   application's colour scheme is realigned with **crashmedia.ca**.
 
 > **Status legend**
 > ✅ shipped  &nbsp;·&nbsp;  🟡 in progress  &nbsp;·&nbsp;  🔜 planned
 
 ---
+
+## Band 1 — Rewrite & cut-over *(top priority)*
+
+### 🟡 Track R — Rust agent + clean-room server *(now the lead track)*
+
+The full module-by-module plan is in
+[Clean-room redesign / separation track](#clean-room-redesign--separation-track-lead-track)
+below. Summary of the new tempo:
+
+- **No new feature work lands on the legacy .NET agent** (`Agent/`) once the
+  Rust workspace (slice **R0**) is in. The .NET agent enters
+  maintenance-only mode immediately and is removed one release after the
+  Rust agent reaches Windows parity (slice **R6**).
+- The clean-room **server** rewrite (Modules 3–6) runs in parallel with the
+  Rust agent slices, gated only by the wire-protocol freeze (Module 0) and
+  the `Shared` re-derivation (Module 1).
+- Any Package Manager work that has not already shipped (PRs C2, C3, D, E)
+  is re-targeted at the clean-room codebase rather than added to the
+  legacy one.
+
+### 🔜 PR M — Migration & cut-over from the legacy Docker image
+
+When CMRemote v2 replaces the upstream Docker image in a deployment, the
+operator must be able to drop the new image in *on top of* the existing
+volume / database / agent fleet without losing data and without bricking
+agents that happen to be offline that day. PR M delivers that path.
+
+**M1 — First-boot setup wizard.** On first start, if no `appsettings`
+database connection string is configured **and** no
+`CMRemote.Setup.Completed` marker row exists, every request is redirected
+to `/setup`. The wizard is a small server-rendered flow (no auth — it is
+only reachable while the marker is unset; the wizard refuses to load once
+the marker is written):
+
+1. **Welcome / preflight** — checks writable data dir, TLS certs, and that
+   the bind ports are free.
+2. **Database connection** — Postgres-only host / port / db / user /
+   password / SSL-mode form. The wizard performs a live `SELECT 1` round
+   trip and, on success, writes the connection string to
+   `appsettings.Production.json` (file mode `600`) and reloads
+   configuration. It does not proceed until the round trip succeeds.
+3. **Import existing database** *(optional, shown only when an upstream
+   schema is detected on a separate connection — SQLite file path or
+   SQL Server / Postgres conn-string from the legacy image)*. Reads the
+   legacy schema in batches, maps rows through versioned converter
+   functions into the v2 Postgres schema (organisations, users, devices,
+   shared files, scripts, alerts, audit). Idempotent, resumable, with a
+   live progress page and a written `migration-report.json` artefact.
+   Devices are imported with their existing IDs and shared secrets so
+   already-deployed agents reconnect under the same record.
+4. **Admin bootstrap** *(only if no users were imported)* — creates the
+   first organisation + server-admin account.
+5. **Done** — writes the `CMRemote.Setup.Completed` marker, signs the
+   operator into the main panel, and queues the agent-upgrade sweep
+   defined in **M3**.
+
+The wizard is non-blocking past step 3: if the operator skips the import
+they can run it later from `/admin/migration`. **The operator is never
+forced to wait for agents to upgrade before reaching the main panel.**
+
+**M2 — Schema converter library.** A new `CMRemote.Migration.Legacy`
+project owns the read-side schema reflection and the per-version row
+converters. It exposes a CLI (`cmremote migrate --from <conn> --to
+<conn>`) so headless / scripted migrations are possible and so the
+wizard's import step is a thin UI over the same code.
+
+**M3 — Background agent-upgrade pipeline.** Once the operator is in the
+main panel, an `IHostedService`
+(`AgentUpgradeOrchestrator`) drives the fleet upgrade asynchronously.
+
+- A new `AgentUpgradeStatus` table tracks every device:
+  `DeviceId, FromVersion, ToVersion, State, LastAttemptAt,
+   LastAttemptError, AttemptCount, EligibleAt, CompletedAt`.
+  States: `Pending → Skipped(Inactive) | Skipped(OptOut) | Scheduled
+  → InProgress → Succeeded | Failed → (retry) Pending`.
+- **60-day inactivity cut-off.** On enrolment into the pipeline, any
+  device whose `LastOnline` is older than `UtcNow − 60 days` is moved
+  straight to `Skipped(Inactive)` and **not contacted**. The state is
+  re-evaluated when the device next reconnects (see below).
+- **Online devices** are upgraded in a bounded-concurrency queue
+  (default 5 in flight per server, tunable). The upgrade itself reuses
+  the **existing** PR E installer surface — the server publishes the
+  new agent build, the running legacy agent fetches it over the
+  authenticated hub, swaps binary + service definition, and reconnects.
+  Success is observed when the device next sends a heartbeat tagged
+  with the new agent version.
+- **Offline devices** are not contacted while offline. The
+  `AgentHub.OnConnectedAsync` path checks the device's
+  `AgentUpgradeStatus`: if the row is `Pending` *and* `LastOnline`
+  (now updated) is within 60 days, the upgrade is **dispatched the
+  instant the device connects**, before any user-facing job is
+  delivered to it. If the row is `Skipped(Inactive)` and the device
+  has now re-appeared, the row is flipped back to `Pending` and the
+  same on-connect dispatch fires.
+- **Failure handling.** Failed upgrades are retried with exponential
+  backoff (max 5 attempts, capped at 24 h). After exhaustion the row
+  stays `Failed` and surfaces in the admin **Agent upgrade** dashboard
+  with the device id, last error, and a "Retry" button.
+- **Safety rails.** The orchestrator refuses to dispatch an upgrade
+  while the device has an in-flight `PackageInstallJob`,
+  `BundleRunJob`, script, or remote-control session. It also refuses
+  to dispatch if the target build's SHA-256 / signature does not match
+  the manifest written by the publisher.
+
+**M4 — Admin "Agent upgrade" dashboard.**
+`/admin/agent-upgrade` shows totals (`Pending / Scheduled / InProgress /
+Succeeded / Failed / Skipped(Inactive) / Skipped(OptOut)`), a searchable
+device table with state + last error + last-online age, per-device
+*Retry* / *Skip* / *Force* actions, and a CSV export. The dashboard is
+read-mostly and is not on the critical path of any other admin task.
+
+**M5 — Tests & docs.**
+- `LegacyToV2ConverterTests` — golden-vector fixtures for the upstream
+  schema (one per known upstream release) round-trip into v2.
+- `AgentUpgradeOrchestratorTests` — deterministic clock-driven tests for
+  the 60-day cut-off, the on-connect dispatch path, the retry/backoff
+  state machine, and refusal-while-busy.
+- `Setup-Wizard.md` operator guide + `Migration.md` admin guide.
+
+---
+
+## Band 2 — Feature work to carry forward
+
+This band is the existing PR series. Items already shipped stay as
+historical record; pending items (C2, C3, D, E) are **re-targeted at the
+clean-room codebase** rather than the legacy one — they will land *after*
+the relevant clean-room module owns the surface area they touch.
 
 ## ✅ PR A — Per-device installed-applications inventory + uninstall
 
@@ -141,7 +284,14 @@ PowerShell installer:
 
 ---
 
-## 🟡 Clean-room redesign / separation track *(parallel, low-tempo)*
+## 🟡 Clean-room redesign / separation track *(lead track)*
+
+> **Priority change (Apr 2026):** this track is no longer a "parallel,
+> low-tempo" stream. It is the **lead** track. Per project-owner direction
+> (the application is not yet in production), no further feature work
+> lands on the legacy .NET agent and the Package Manager polish PRs (C2,
+> C3, D, E) re-target at the clean-room codebase rather than extending
+> the legacy one.
 
 The original codebase that this fork descends from is licensed permissively but
 the project owner wants **CMRemote** to stop being a downstream and become an
@@ -205,7 +355,7 @@ direction for this track:
 | 3 | `Server.Services` (data, auth, circuit, scripts) | Split monolithic `DataService` into focused services (`IDeviceQueryService`, `IDeviceCommandService`, `IUserDirectoryService`); rewrite each from spec. | After #1. |
 | 4 | `Server.Hubs` (`AgentHub`, `ViewerHub`, `CircuitConnection`) | Rewrite the dispatch layer using a generated client interface; remove duplicate authorization checks; centralize org-scope assertions. | After #3. |
 | 5 | `Desktop` / remote-control transport | Rewrite WebRTC / IceServer plumbing against a written protocol doc; consider switching to `Microsoft.MixedReality.WebRTC` or `SIPSorcery` to eliminate inherited code. The Rust agent's desktop transport (#2b last slice) tracks the same protocol doc. | Parallelizable with #4. |
-| 6 | `Server` Razor UI | Rebuild the layout shell (`MainLayout`, `NavMenu`) from scratch with a CMRemote design system; per-page Razor logic is rewritten module-by-module. The Package Manager pages added in PR B are already CMRemote-original and stay. | Last — depends on stable services. |
+| 6 | `Server` Razor UI | Rebuild the layout shell (`MainLayout`, `NavMenu`) from scratch with a CMRemote design system. **Adopt the crashmedia.ca colour scheme** — see [Band 3 — UI / brand alignment](#band-3--ui--brand-alignment) below for the palette and tokens that this rebuild must use. Per-page Razor logic is rewritten module-by-module. The Package Manager pages added in PR B are already CMRemote-original and stay (they are restyled against the new tokens but not re-authored). | Last — depends on stable services. |
 | 7 | Installer / agent deployment | Covered by PR E above; the Rust agent simplifies this dramatically (single static binary → MSI / `.deb` / `.rpm` / `.pkg` wrappers). | After #2b reaches Windows parity. |
 
 ### Rust agent (`agent-rs/`) — slice-by-slice delivery plan
@@ -248,3 +398,67 @@ target *verbatim* copies of source files — not independent reimplementations
 behind the same wire protocol. Following the spec-first / clean-room workflow
 above makes any future challenge straightforward to rebut: each file's history
 shows it was authored locally against a written contract, not copied.
+
+---
+
+## Band 3 — UI / brand alignment
+
+When the Razor UI is rebuilt as part of clean-room **Module 6**, the
+application's visual language is realigned with the public
+**crashmedia.ca** site so the admin panel reads as part of the same
+product family.
+
+> ⚠️ The hex values in the table below were extracted from a remote
+> palette-sampler service (the implementing PR could not pull
+> crashmedia.ca directly from the build environment at the time the
+> roadmap entry was written). **The implementing PR must re-sample the
+> live site** at the time of the work and reconcile any drift before
+> the tokens are baked into the design system.
+
+### Provisional palette (crashmedia.ca, Apr 2026)
+
+| Role | Token | Hex (provisional) |
+|---|---|---|
+| Brand primary | `--cm-brand-500` | `#6464f4` |
+| Brand primary (hover) | `--cm-brand-600` | `#6463d7` |
+| Brand accent (purple) | `--cm-accent-500` | `#875ce9` |
+| Brand secondary (royal) | `--cm-brand-400` | `#7084f8` |
+| Brand tint (light) | `--cm-brand-100` | `#bbbade` |
+| Brand tint (lighter) | `--cm-brand-050` | `#babcfb` |
+| Surface — page background | `--cm-surface-bg` | `#040515` |
+| Surface — panel | `--cm-surface-panel` | `#2d313e` |
+| Surface — raised | `--cm-surface-raised` | `#3c4452` |
+| Surface — accented panel | `--cm-surface-accent` | `#2e305f` |
+| Text — primary | `--cm-text-primary` | `#bbbade` |
+| Text — muted | `--cm-text-muted` | `#7c8493` |
+| Border / divider | `--cm-border` | `#545a67` |
+
+### Scope of the alignment work *(part of Module 6)*
+
+- Define the tokens above as CSS custom properties in a single
+  `wwwroot/css/cm-tokens.css` (no per-component duplication).
+- Replace the Bootstrap default theme variables (`$primary`,
+  `$body-bg`, `$body-color`, `$border-color`, link colours, button
+  hover/active states) with the CMRemote tokens via a Sass shim, so
+  every existing Bootstrap component picks up the new palette
+  automatically.
+- Audit all `style=`/inline colour literals (`grep -RIn '#[0-9A-Fa-f]\{3,6\}'
+  Server/`) and migrate them to `var(--cm-…)` references.
+- Re-run a contrast pass against WCAG AA for the chosen text /
+  surface combinations; adjust `--cm-text-muted` if it does not meet
+  4.5:1 against `--cm-surface-bg`.
+- Replace the existing favicon / brand mark with the CMRemote /
+  crashmedia.ca mark in `wwwroot/favicon.ico` and the Razor layout
+  `<header>` brand block.
+- Tests / acceptance: a Playwright smoke test that renders the login
+  page, the Devices grid, and the Package Manager landing page, and
+  asserts that the computed background of `<body>` is
+  `--cm-surface-bg` and the computed colour of the primary nav link
+  is `--cm-brand-500`. (One assertion each; the snapshot's purpose is
+  drift detection, not pixel-perfect comparison.)
+
+### Sequencing
+
+The colour-token work lands as the **first sub-PR of Module 6** so the
+remaining per-page rewrites in that module can be reviewed against
+the final palette rather than a moving target.

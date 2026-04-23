@@ -41,8 +41,5 @@ jobs:
       uses: microsoft/setup-msbuild@v1
 
     # Execute all unit tests in the solution.
-    # LibraryRestore=False disables the libman client-asset restore (CDN-dependent
-    # and therefore flaky in CI). The static JS assets it pulls are only needed
-    # at runtime for the Server's web UI, not by any unit-test project.
     - name: Execute unit tests
-      run: dotnet test -p:LibraryRestore=False
+      run: dotnet test

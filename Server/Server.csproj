@@ -38,7 +38,16 @@
     </PackageReference>
     <PackageReference Include="Microsoft.VisualStudio.Azure.Containers.Tools.Targets" Version="1.21.0" />
     <PackageReference Include="Microsoft.VisualStudio.Web.CodeGeneration.Design" Version="8.0.6" />
-    <PackageReference Include="Microsoft.Web.LibraryManager.Build" Version="2.1.175" />
+    <!--
+      Client-side libraries (font-awesome, microsoft-signalr, msgpack,
+      signalr-protocol-msgpack, bootstrap) are vendored under
+      wwwroot/lib/. We do **not** use Microsoft.Web.LibraryManager.Build:
+      its restore on every build hits public CDNs (unpkg, cdnjs) and
+      regularly fails the Server build when those CDNs are slow / down.
+      To upgrade a vendored library: `npm pack <name>@<version>`,
+      extract the relevant files into wwwroot/lib/<name>/, and bump the
+      <script> / <link> tags in Pages/*.cshtml.
+    -->
     <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="8.0.10" />
     <PackageReference Include="QRCoder" Version="1.6.0" />
     <PackageReference Include="Serilog.AspNetCore" Version="8.0.3" />
