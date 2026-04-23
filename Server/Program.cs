@@ -116,6 +116,7 @@ services.AddIdentityCore<RemotelyUser>(options =>
 services.AddScoped<IAuthorizationHandler, TwoFactorRequiredHandler>();
 services.AddScoped<IAuthorizationHandler, OrganizationAdminRequirementHandler>();
 services.AddScoped<IAuthorizationHandler, ServerAdminRequirementHandler>();
+services.AddScoped<IAuthorizationHandler, PackageManagerRequirementHandler>();
 services.AddSingleton<IEmailSender<RemotelyUser>, IdentityNoOpEmailSender>();
 
 services.AddAuthorization(options =>
@@ -133,6 +134,11 @@ services.AddAuthorization(options =>
     options.AddPolicy(PolicyNames.ServerAdminRequired, builder =>
     {
         builder.Requirements.Add(new ServerAdminRequirement());
+    });
+
+    options.AddPolicy(PolicyNames.PackageManagerRequired, builder =>
+    {
+        builder.Requirements.Add(new PackageManagerRequirement());
     });
 });
 
@@ -255,6 +261,7 @@ services.AddSingleton<IDesktopStreamCache, DesktopStreamCache>();
 services.AddSingleton<IRemoteControlSessionCache, RemoteControlSessionCache>();
 services.AddSingleton<ISystemTime, SystemTime>();
 services.AddSingleton<IAgentHubSessionCache, AgentHubSessionCache>();
+services.AddScoped<IInstalledApplicationsService, InstalledApplicationsService>();
 services.AddHostedService<RemoteControlSessionCleaner>();
 services.AddHostedService<RemoteControlSessionReconnector>();
 

@@ -8,6 +8,7 @@ using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Moq;
 using Remotely.Shared.Extensions;
 using Remotely.Shared.Interfaces;
+using Remotely.Shared.Services;
 using System.Threading.Tasks;
 
 namespace Remotely.Server.Tests;
@@ -45,6 +46,8 @@ public class AgentHubTests
             expiringTokenService.Object,
             remoteControlSessions.Object,
             messenger.Object,
+            new Mock<IInstalledApplicationsService>().Object,
+            new SystemTime(),
             logger.Object);
 
         var hubClients = new Mock<IHubCallerClients<IAgentHubClient>>();
@@ -88,6 +91,8 @@ public class AgentHubTests
             expiringTokenService.Object,
             remoteControlSessions.Object,
             messenger.Object,
+            new Mock<IInstalledApplicationsService>().Object,
+            new SystemTime(),
             logger.Object);
 
         var hubClients = new Mock<IHubCallerClients<IAgentHubClient>>();

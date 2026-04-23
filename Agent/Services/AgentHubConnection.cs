@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging;
 using Remotely.Agent.Extensions;
 using Remotely.Agent.Interfaces;
 using Remotely.Shared;
+using Remotely.Shared.Dtos;
 using Remotely.Shared.Enums;
 using Remotely.Shared.Interfaces;
 using Remotely.Shared.Models;
@@ -39,6 +40,7 @@ public class AgentHubConnection : IAgentHubConnection, IDisposable
     private readonly IDeviceInformationService _deviceInfoService;
     private readonly IFileLogsManager _fileLogsManager;
     private readonly IHttpClientFactory _httpFactory;
+    private readonly IInstalledApplicationsProvider _installedAppsProvider;
     private readonly ILogger<AgentHubConnection> _logger;
     private readonly IScriptExecutor _scriptExecutor;
     private readonly IScriptingShellFactory _scriptingShellFactory;
@@ -63,6 +65,7 @@ public class AgentHubConnection : IAgentHubConnection, IDisposable
         IFileLogsManager fileLogsManager,
         IHostApplicationLifetime appLifetime,
         IScriptingShellFactory scriptingShellFactory,
+        IInstalledApplicationsProvider installedAppsProvider,
         ILogger<AgentHubConnection> logger)
     {
         _configService = configService;
@@ -78,6 +81,7 @@ public class AgentHubConnection : IAgentHubConnection, IDisposable
         _fileLogsManager = fileLogsManager;
         _appLifetime = appLifetime;
         _scriptingShellFactory = scriptingShellFactory;
+        _installedAppsProvider = installedAppsProvider;
     }
 
     public bool IsConnected => _hubConnection?.State == HubConnectionState.Connected;
@@ -539,6 +543,142 @@ public class AgentHubConnection : IAgentHubConnection, IDisposable
         }
     }
 
+    public async Task RequestInstalledApplications(string requestId)
+    {
+        try
+        {
+            EnsureHubConnection();
+
+            if (!_isServerVerified)
+            {
+                _logger.LogWarning("RequestInstalledApplications attempted before server was verified.");
+                return;
+            }
+
+            _logger.LogInformation("Enumerating installed applications. RequestId={requestId}", requestId);
+
+            var (success, error, apps) = await _installedAppsProvider
+                .GetInstalledApplicationsAsync(_appLifetime.ApplicationStopping)
+                .ConfigureAwait(false);
+
+            var dto = new InstalledApplicationsResultDto
+            {
+                RequestId = requestId,
+                Success = success,
+                ErrorMessage = error,
+                Applications = apps,
+            };
+
+            await _hubConnection
+                .SendAsync("InstalledApplicationsResult", dto, _appLifetime.ApplicationStopping)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            // Service shutting down — nothing to report.
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error while enumerating installed applications.");
+            await TrySendInstalledApplicationsFailure(requestId, ex.Message).ConfigureAwait(false);
+        }
+    }
+
+    public async Task UninstallApplication(string requestId, string applicationKey)
+    {
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        try
+        {
+            EnsureHubConnection();
+
+            if (!_isServerVerified)
+            {
+                _logger.LogWarning("UninstallApplication attempted before server was verified.");
+                return;
+            }
+
+            _logger.LogInformation(
+                "Uninstall request received. RequestId={requestId} ApplicationKey={applicationKey}",
+                requestId, applicationKey);
+
+            var (success, exitCode, stdout, stderr, error) = await _installedAppsProvider
+                .UninstallApplicationAsync(applicationKey, _appLifetime.ApplicationStopping)
+                .ConfigureAwait(false);
+
+            stopwatch.Stop();
+
+            var dto = new UninstallApplicationResultDto
+            {
+                RequestId = requestId,
+                ApplicationKey = applicationKey,
+                Success = success,
+                ExitCode = exitCode,
+                Stdout = stdout,
+                Stderr = stderr,
+                ErrorMessage = error,
+                DurationMs = stopwatch.ElapsedMilliseconds,
+            };
+
+            _logger.LogInformation(
+                "Uninstall completed. RequestId={requestId} ApplicationKey={applicationKey} " +
+                "Success={success} ExitCode={exitCode} DurationMs={durationMs}",
+                requestId, applicationKey, success, exitCode, stopwatch.ElapsedMilliseconds);
+
+            await _hubConnection
+                .SendAsync("UninstallApplicationResult", dto, _appLifetime.ApplicationStopping)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex)
+        {
+            stopwatch.Stop();
+            _logger.LogError(ex, "Error while uninstalling application.");
+            try
+            {
+                await _hubConnection!.SendAsync(
+                    "UninstallApplicationResult",
+                    new UninstallApplicationResultDto
+                    {
+                        RequestId = requestId,
+                        ApplicationKey = applicationKey,
+                        Success = false,
+                        ExitCode = -1,
+                        ErrorMessage = ex.Message,
+                        DurationMs = stopwatch.ElapsedMilliseconds,
+                    });
+            }
+            catch
+            {
+                // Best-effort; original exception already logged.
+            }
+        }
+    }
+
+    private async Task TrySendInstalledApplicationsFailure(string requestId, string error)
+    {
+        try
+        {
+            if (_hubConnection is null)
+            {
+                return;
+            }
+            await _hubConnection.SendAsync(
+                "InstalledApplicationsResult",
+                new InstalledApplicationsResultDto
+                {
+                    RequestId = requestId,
+                    Success = false,
+                    ErrorMessage = error,
+                });
+        }
+        catch
+        {
+            // Best-effort.
+        }
+    }
+
     private async Task<bool> CheckForServerMigration()
     {
         if (_connectionInfo is null || _hubConnection is null)
@@ -644,6 +784,10 @@ public class AgentHubConnection : IAgentHubConnection, IDisposable
         _hubConnection.On(nameof(TriggerHeartbeat), TriggerHeartbeat);
 
         _hubConnection.On<string>(nameof(WakeDevice), WakeDevice);
+
+        _hubConnection.On<string>(nameof(RequestInstalledApplications), RequestInstalledApplications);
+
+        _hubConnection.On<string, string>(nameof(UninstallApplication), UninstallApplication);
     }
 
     private async Task<bool> VerifyServer()

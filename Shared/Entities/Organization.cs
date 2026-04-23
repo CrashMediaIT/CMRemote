@@ -34,6 +34,14 @@ public class Organization
     [StringLength(25)]
     public required string OrganizationName { get; set; }
 
+    /// <summary>
+    /// When true, organization administrators may use the Package Manager
+    /// (view installed apps, uninstall, install via Chocolatey). Off by
+    /// default — installing/removing software is a high-impact action and
+    /// must be opted in to per organization.
+    /// </summary>
+    public bool PackageManagerEnabled { get; set; }
+
     public ICollection<RemotelyUser> RemotelyUsers { get; set; } = [];
     public ICollection<SharedFile> SharedFiles { get; set; } = [];
 }

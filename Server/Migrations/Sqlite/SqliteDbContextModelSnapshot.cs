@@ -15,7 +15,7 @@ namespace Remotely.Server.Migrations.Sqlite
         protected override void BuildModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
-            modelBuilder.HasAnnotation("ProductVersion", "8.0.2");
+            modelBuilder.HasAnnotation("ProductVersion", "8.0.10");
 
             modelBuilder.Entity("DeviceGroupRemotelyUser", b =>
                 {
@@ -194,7 +194,7 @@ namespace Remotely.Server.Migrations.Sqlite
 
                     b.ToTable("RemotelyUsers", (string)null);
 
-                    b.HasDiscriminator<string>("Discriminator").HasValue("IdentityUser");
+                    b.HasDiscriminator().HasValue("IdentityUser");
 
                     b.UseTphMappingStrategy();
                 });
@@ -486,6 +486,24 @@ namespace Remotely.Server.Migrations.Sqlite
                     b.ToTable("DeviceGroups");
                 });
 
+            modelBuilder.Entity("Remotely.Shared.Entities.DeviceInstalledApplicationsSnapshot", b =>
+                {
+                    b.Property<string>("DeviceId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ApplicationsJson")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("FetchedAt")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("DeviceId");
+
+                    b.ToTable("DeviceInstalledApplicationsSnapshots");
+                });
+
             modelBuilder.Entity("Remotely.Shared.Entities.InviteLink", b =>
                 {
                     b.Property<string>("ID")
@@ -546,6 +564,9 @@ namespace Remotely.Server.Migrations.Sqlite
                         .IsRequired()
                         .HasMaxLength(25)
                         .HasColumnType("TEXT");
+
+                    b.Property<bool>("PackageManagerEnabled")
+                        .HasColumnType("INTEGER");
 
                     b.HasKey("ID");
 
@@ -1008,6 +1029,17 @@ namespace Remotely.Server.Migrations.Sqlite
                         .IsRequired();
 
                     b.Navigation("Organization");
+                });
+
+            modelBuilder.Entity("Remotely.Shared.Entities.DeviceInstalledApplicationsSnapshot", b =>
+                {
+                    b.HasOne("Remotely.Shared.Entities.Device", "Device")
+                        .WithOne()
+                        .HasForeignKey("Remotely.Shared.Entities.DeviceInstalledApplicationsSnapshot", "DeviceId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Device");
                 });
 
             modelBuilder.Entity("Remotely.Shared.Entities.InviteLink", b =>

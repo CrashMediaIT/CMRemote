@@ -46,6 +46,23 @@ public interface ICircuitConnection
     Task UpdateTags(string deviceID, string tags);
 
     /// <summary>
+    /// Asks the connected agent for the device to enumerate its installed
+    /// applications. Result arrives asynchronously via
+    /// <see cref="Models.Messages.InstalledApplicationsResultMessage"/>.
+    /// Returns the request ID on success, or an empty string when the
+    /// caller does not have access to the device or the device is offline.
+    /// </summary>
+    Task<string> RequestInstalledApplications(string deviceId);
+
+    /// <summary>
+    /// Asks the connected agent for the device to uninstall an
+    /// application identified by <paramref name="applicationKey"/>. The
+    /// server resolves the key to an opaque token before forwarding to
+    /// the agent — raw uninstall strings never leave the agent.
+    /// </summary>
+    Task<Result<string>> UninstallApplication(string deviceId, string applicationKey);
+
+    /// <summary>
     /// Sends a Wake-On-LAN request for the specified device to its peer devices.
     /// Peer devices are those in the same group or the same public IP.
     /// </summary>
@@ -64,6 +81,7 @@ public class CircuitConnection : CircuitHandler, ICircuitConnection
 {
     private readonly IHubContext<AgentHub, IAgentHubClient> _agentHubContext;
     private readonly IDataService _dataService;
+    private readonly IInstalledApplicationsService _installedApplicationsService;
     private readonly ISelectedCardsStore _cardStore;
     private readonly IAuthService _authService;
     private readonly ICircuitManager _circuitManager;
@@ -85,6 +103,7 @@ public class CircuitConnection : CircuitHandler, ICircuitConnection
         IExpiringTokenService expiringTokenService,
         IRemoteControlSessionCache remoteControlSessionCache,
         IAgentHubSessionCache agentSessionCache,
+        IInstalledApplicationsService installedApplicationsService,
         IMessenger messenger,
         ILogger<CircuitConnection> logger)
     {
@@ -97,6 +116,7 @@ public class CircuitConnection : CircuitHandler, ICircuitConnection
         _expiringTokenService = expiringTokenService;
         _remoteControlSessionCache = remoteControlSessionCache;
         _agentSessionCache = agentSessionCache;
+        _installedApplicationsService = installedApplicationsService;
         _messenger = messenger;
         _logger = logger;
     }
@@ -527,6 +547,69 @@ public class CircuitConnection : CircuitHandler, ICircuitConnection
             _logger.LogError(ex, "Error while waking devices.");
             return Result.Fail(ex);
         }
+    }
+
+    public async Task<string> RequestInstalledApplications(string deviceId)
+    {
+        var (canAccess, connectionId) = CanAccessDevice(deviceId);
+        if (!canAccess)
+        {
+            return string.Empty;
+        }
+
+        var requestId = Guid.NewGuid().ToString("N");
+        _logger.LogInformation(
+            "Installed-applications inventory requested. Device={deviceId} Actor={username} RequestId={requestId}",
+            deviceId,
+            User.UserName,
+            requestId);
+
+        await _agentHubContext.Clients.Client(connectionId).RequestInstalledApplications(requestId);
+        return requestId;
+    }
+
+    public async Task<Result<string>> UninstallApplication(string deviceId, string applicationKey)
+    {
+        var (canAccess, connectionId) = CanAccessDevice(deviceId);
+        if (!canAccess)
+        {
+            return Result.Fail<string>("Access denied or device offline.");
+        }
+
+        if (string.IsNullOrWhiteSpace(applicationKey))
+        {
+            return Result.Fail<string>("Application key is required.");
+        }
+
+        var token = _installedApplicationsService.IssueUninstallToken(deviceId, applicationKey);
+        if (token is null)
+        {
+            return Result.Fail<string>(
+                "Application not found in the latest inventory. Refresh the list and try again.");
+        }
+
+        // Token is single-use and was just minted from this same key —
+        // resolve it server-side to enforce the issue/redeem flow even
+        // for the first call. This means there is exactly one code path
+        // by which an applicationKey reaches the agent: it must have
+        // been present in the server's saved snapshot.
+        var resolved = _installedApplicationsService.ResolveUninstallToken(deviceId, token);
+        if (resolved is null)
+        {
+            return Result.Fail<string>("Internal error: failed to resolve uninstall token.");
+        }
+
+        var requestId = Guid.NewGuid().ToString("N");
+        _logger.LogWarning(
+            "Uninstall requested. Device={deviceId} Application={applicationKey} " +
+            "Actor={username} RequestId={requestId}",
+            deviceId,
+            resolved,
+            User.UserName,
+            requestId);
+
+        await _agentHubContext.Clients.Client(connectionId).UninstallApplication(requestId, resolved);
+        return Result.Ok(requestId);
     }
 
     private (bool canAccess, string connectionId) CanAccessDevice(string deviceId)

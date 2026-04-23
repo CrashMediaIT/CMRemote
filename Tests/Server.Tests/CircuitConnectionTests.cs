@@ -61,6 +61,7 @@ public class CircuitConnectionTests
             _expiringTokenService.Object,
             _remoteControlSessionCache.Object,
             _agentSessionCache.Object,
+            new Mock<IInstalledApplicationsService>().Object,
             _messenger.Object,
             _logger.Object);
     }

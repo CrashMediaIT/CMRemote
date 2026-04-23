@@ -22,6 +22,7 @@ public partial class DeviceCard : AuthComponentBase
     private ElementReference _card;
     private Version _currentVersion = new();
     private Theme _theme;
+    private bool _packageManagerEnabled;
     private DeviceCardState _state;
     private DeviceGroup[] _deviceGroups = Array.Empty<DeviceGroup>();
 
@@ -80,6 +81,12 @@ public partial class DeviceCard : AuthComponentBase
         _theme = await ThemeProvider.GetEffectiveTheme();
         _currentVersion = UpgradeService.GetCurrentVersion();
         _deviceGroups = DataService.GetDeviceGroups(UserName);
+
+        if (User.IsAdministrator && !string.IsNullOrEmpty(User.OrganizationID))
+        {
+            var orgResult = await DataService.GetOrganizationById(User.OrganizationID);
+            _packageManagerEnabled = orgResult.IsSuccess && orgResult.Value.PackageManagerEnabled;
+        }
 
         await Register<DeviceCardStateChangedMessage, string>(
             CircuitConnection.ConnectionId,

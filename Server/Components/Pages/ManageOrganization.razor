@@ -50,6 +50,17 @@ else if (User is not null)
                     <input type="checkbox" checked="@_organization?.IsDefaultOrganization" @onchange="DefaultOrgCheckChanged" />
                 </div>
             }
+            <div class="form-group">
+                <label class="mb-1">Package Manager</label>
+                <button class="btn btn-sm btn-secondary ms-2" @onclick="ShowPackageManagerHelp">
+                    <span class="oi oi-question-mark"></span>
+                </button>
+                <br />
+                <input type="checkbox"
+                       checked="@_organization?.PackageManagerEnabled"
+                       @onchange="PackageManagerEnabledChanged" />
+                <span class="ms-2 small text-muted">Allow org admins to view installed apps and uninstall software on managed devices.</span>
+            </div>
         </div>
     </div>
 

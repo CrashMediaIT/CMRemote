@@ -6,17 +6,25 @@
 
 <div class="ps-4 pb-1 pe-0 pt-0 navbar navbar-dark" style="background-color: rgba(0,0,0,0.3)">
     <a class="navbar-brand text-start" href="">
-        <div class="logo-title">
-            @if (!string.IsNullOrWhiteSpace(_organization?.OrganizationName))
-            {
-                @_organization.OrganizationName
-            }
-            else
-            {
-                <span>Remotely</span>
-            }
-        </div>
-        <div class="logo-subtitle">Support Portal</div>
+        @if (!string.IsNullOrWhiteSpace(_logoDataUri))
+        {
+            <img class="logo-image"
+                 src="@_logoDataUri"
+                 alt="@(string.IsNullOrWhiteSpace(_organization?.OrganizationName) ? "Remotely" : _organization!.OrganizationName)" />
+        }
+        else
+        {
+            <div class="logo-title">
+                @if (!string.IsNullOrWhiteSpace(_organization?.OrganizationName))
+                {
+                    @_organization.OrganizationName
+                }
+                else
+                {
+                    <span>Remotely</span>
+                }
+            </div>
+        }
     </a>
     <button class="navbar-toggler" @onclick="ToggleNavMenu">
         <span class="navbar-toggler-icon"></span>
@@ -152,6 +160,7 @@
     private RemotelyUser? _user;
     private Organization? _organization;
     private string? _currentUrl;
+    private string? _logoDataUri;
 
     public void Dispose()
     {
@@ -191,6 +200,16 @@
             if (orgResult.IsSuccess)
             {
                 _organization = orgResult.Value;
+            }
+        }
+
+        if (_organization is not null)
+        {
+            var brandingResult = await DataService.GetBrandingInfo(_organization.ID);
+            if (brandingResult.IsSuccess &&
+                brandingResult.Value?.Icon is { Length: > 0 } iconBytes)
+            {
+                _logoDataUri = $"data:image/png;base64,{Convert.ToBase64String(iconBytes)}";
             }
         }
     }

@@ -31,6 +31,7 @@ public class AppDb : IdentityDbContext
     public DbSet<BrandingInfo> BrandingInfos { get; set; }
     public DbSet<DeviceGroup> DeviceGroups { get; set; }
     public DbSet<Device> Devices { get; set; }
+    public DbSet<DeviceInstalledApplicationsSnapshot> DeviceInstalledApplicationsSnapshots { get; set; }
     public DbSet<InviteLink> InviteLinks { get; set; }
     public DbSet<KeyValueRecord> KeyValueRecords { get; set; }
     public DbSet<Organization> Organizations { get; set; }
@@ -174,6 +175,12 @@ public class AppDb : IdentityDbContext
                 x => JsonSerializer.Serialize(x, jsonOptions),
                 x => DeserializeStringArray(x, jsonOptions),
                 valueComparer: _stringArrayComparer);
+
+        builder.Entity<DeviceInstalledApplicationsSnapshot>()
+            .HasOne(x => x.Device)
+            .WithOne()
+            .HasForeignKey<DeviceInstalledApplicationsSnapshot>(x => x.DeviceId)
+            .OnDelete(DeleteBehavior.Cascade);
 
         builder.Entity<DeviceGroup>()
             .HasMany(x => x.Devices)
