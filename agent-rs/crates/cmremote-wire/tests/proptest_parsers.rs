@@ -197,13 +197,20 @@ proptest! {
         // model → On-disk secret hygiene. Regardless of what non-empty
         // token the struct holds, the redacting Debug must not print it.
         //
-        // We require the generated token to contain a non-ASCII-letter
-        // marker character so it is guaranteed not to be a substring of
-        // the fixed `<redacted>` placeholder that `Debug` writes.
-        let tagged_token = info.server_verification_token.as_ref().map(|t| {
-            // Prefix guarantees the token is not a substring of "<redacted>".
-            format!("SVT_{}#", t)
-        });
+        // We wrap the generated token in a fixed `SVT_…#` envelope so the
+        // substring check below is a genuine "is the token value in the
+        // rendered string" assertion. The underscore and trailing `#`
+        // (neither of which appear in the literal `<redacted>` marker
+        // that `Debug` writes) guarantee the wrapped token cannot be a
+        // substring of `<redacted>`, which would otherwise produce a
+        // false positive for very short random inputs like `"r"` or
+        // `"d"`.
+        const SVT_PREFIX: &str = "SVT_";
+        const SVT_SUFFIX: &str = "#";
+        let tagged_token = info
+            .server_verification_token
+            .as_ref()
+            .map(|t| format!("{SVT_PREFIX}{t}{SVT_SUFFIX}"));
         let tagged = ConnectionInfo {
             server_verification_token: tagged_token.clone(),
             ..info

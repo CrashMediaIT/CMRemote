@@ -80,19 +80,43 @@ jobs:
 
       - name: Seed corpus from docs/wire-protocol-vectors
         run: |
-          set -eux
+          set -eu
+          # Copy every .json vector from the source dir into the target
+          # corpus dir. An empty source directory is treated as a fatal
+          # seeding bug (the corpus is part of the repo — it is never
+          # legitimately missing); a source directory that contains no
+          # JSON files is merely logged so the workflow can still run
+          # with a libFuzzer-generated seed queue.
+          seed() {
+              local src_dir="$1"
+              local dest_dir="$2"
+              if [ ! -d "${src_dir}" ]; then
+                  echo "::error::corpus source directory missing: ${src_dir}"
+                  exit 1
+              fi
+              mkdir -p "${dest_dir}"
+              local copied=0
+              for f in "${src_dir}"/*.json; do
+                  [ -e "${f}" ] || continue
+                  cp -n "${f}" "${dest_dir}/"
+                  copied=$((copied + 1))
+              done
+              if [ "${copied}" -eq 0 ]; then
+                  echo "::warning::no seeds found in ${src_dir} (starting from an empty corpus)"
+              else
+                  echo "seeded ${copied} file(s) from ${src_dir} into ${dest_dir}"
+              fi
+          }
           case "${{ matrix.target }}" in
             fuzz_connection_info_json)
-              mkdir -p "corpus/${{ matrix.target }}"
-              cp -n ../../../../docs/wire-protocol-vectors/connection-info/valid/*.json \
-                    "corpus/${{ matrix.target }}/" || true
-              cp -n ../../../../docs/wire-protocol-vectors/connection-info/invalid/*.json \
-                    "corpus/${{ matrix.target }}/" || true
+              seed ../../../../docs/wire-protocol-vectors/connection-info/valid \
+                   "corpus/${{ matrix.target }}"
+              seed ../../../../docs/wire-protocol-vectors/connection-info/invalid \
+                   "corpus/${{ matrix.target }}"
               ;;
             fuzz_hub_envelope_json|fuzz_hub_envelope_msgpack)
-              mkdir -p "corpus/${{ matrix.target }}"
-              cp -n ../../../../docs/wire-protocol-vectors/envelope/*.json \
-                    "corpus/${{ matrix.target }}/" || true
+              seed ../../../../docs/wire-protocol-vectors/envelope \
+                   "corpus/${{ matrix.target }}"
               ;;
           esac
 
