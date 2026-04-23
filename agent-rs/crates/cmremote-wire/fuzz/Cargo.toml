@@ -1,0 +1,49 @@
+# Source: CMRemote, clean-room implementation.
+#
+# Coverage-guided fuzz targets for the wire-protocol parsers. Roadmap
+# reference: Track S / S4 — Fuzzing and parser hardening.
+#
+# This is an **out-of-workspace** crate on purpose: `cargo-fuzz` requires
+# a nightly Rust toolchain and links `libfuzzer-sys`, neither of which we
+# want to pull into the main `agent-rs/` workspace that ships on stable.
+# The explicit empty `[workspace]` table below stops Cargo from treating
+# this crate as a member of the parent workspace.
+
+[package]
+name = "cmremote-wire-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+license = "MIT"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+cmremote-wire = { path = ".." }
+serde_json = "1.0"
+
+[workspace]
+# Intentionally empty — see the module-level comment.
+
+[[bin]]
+name = "fuzz_connection_info_json"
+path = "fuzz_targets/fuzz_connection_info_json.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_hub_envelope_json"
+path = "fuzz_targets/fuzz_hub_envelope_json.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_hub_envelope_msgpack"
+path = "fuzz_targets/fuzz_hub_envelope_msgpack.rs"
+test = false
+doc = false
+
+[profile.release]
+debug = 1

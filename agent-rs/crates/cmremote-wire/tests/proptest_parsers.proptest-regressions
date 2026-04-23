@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 943c9316f30a81cdc9e3f21266914d0c09d0d708c8da2e1f469b12b044dacf3d # shrinks to comp = HubCompletion { kind: 3, invocation_id: "_", result: Some(Null), error: None }
+cc 361859eefe8a0895075bb2aa26ac3693b88df806bf79e4bc58d235d8305f160b # shrinks to info = ConnectionInfo { device_id: "-", host: None, organization_id: None, server_verification_token: Some("<redacted>") }
