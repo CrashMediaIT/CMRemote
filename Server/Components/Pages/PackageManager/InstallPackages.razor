@@ -1,0 +1,163 @@
+@page "/packages/install"
+@attribute [Authorize(Policy = PolicyNames.PackageManagerRequired)]
+@inherits AuthComponentBase
+
+@using Remotely.Server.Auth
+@using Remotely.Shared.Entities
+@using Remotely.Shared.Enums
+
+<PageTitle>Package Manager — Install Packages</PageTitle>
+
+<div class="d-flex flex-column gap-3">
+
+    <h2 class="mb-0">Install Packages</h2>
+    <p class="text-muted small mb-0">
+        Define org-scoped Chocolatey packages, then dispatch one to a target Windows device.
+        MSI / Executable providers will be added in a later release.
+    </p>
+
+    <div class="row g-3">
+        <div class="col-lg-5">
+            <div class="card">
+                <div class="card-header">Add Chocolatey package</div>
+                <div class="card-body">
+                    <EditForm Model="_newPackage" OnValidSubmit="HandleCreatePackage">
+                        <DataAnnotationsValidator />
+                        <div class="mb-2">
+                            <label class="form-label">Display name</label>
+                            <InputText class="form-control" @bind-Value="_newPackage.Name" />
+                            <ValidationMessage For="() => _newPackage.Name" />
+                        </div>
+                        <div class="mb-2">
+                            <label class="form-label">Chocolatey package id</label>
+                            <InputText class="form-control" @bind-Value="_newPackage.PackageIdentifier" placeholder="e.g. googlechrome" />
+                            <ValidationMessage For="() => _newPackage.PackageIdentifier" />
+                        </div>
+                        <div class="mb-2">
+                            <label class="form-label">Version (optional)</label>
+                            <InputText class="form-control" @bind-Value="_newPackage.Version" />
+                        </div>
+                        <div class="mb-2">
+                            <label class="form-label">Extra install arguments (optional)</label>
+                            <InputText class="form-control" @bind-Value="_newPackage.InstallArguments" />
+                            <div class="form-text small">Shell metacharacters are rejected.</div>
+                        </div>
+                        <div class="mb-2">
+                            <label class="form-label">Description (optional)</label>
+                            <InputTextArea class="form-control" rows="2" @bind-Value="_newPackage.Description" />
+                        </div>
+                        @if (!string.IsNullOrEmpty(_createError))
+                        {
+                            <div class="alert alert-danger py-1 px-2 small mb-2">@_createError</div>
+                        }
+                        <button type="submit" class="btn btn-primary" disabled="@_isWorking">Add Package</button>
+                    </EditForm>
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-7">
+            <div class="card">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <span>Org packages</span>
+                    <span class="small text-muted">@_packages.Count total</span>
+                </div>
+                <div class="table-responsive">
+                    <table class="table table-sm table-hover mb-0 align-middle">
+                        <thead>
+                            <tr>
+                                <th>Name</th>
+                                <th>Provider</th>
+                                <th>Identifier</th>
+                                <th>Version</th>
+                                <th></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @if (_packages.Count == 0)
+                            {
+                                <tr>
+                                    <td colspan="5" class="text-center text-muted small py-3">
+                                        No packages defined yet.
+                                    </td>
+                                </tr>
+                            }
+                            else
+                            {
+                                @foreach (var pkg in _packages)
+                                {
+                                    <tr @key="pkg.Id">
+                                        <td>@pkg.Name</td>
+                                        <td>@pkg.Provider</td>
+                                        <td><code>@pkg.PackageIdentifier</code></td>
+                                        <td>@(string.IsNullOrEmpty(pkg.Version) ? "latest" : pkg.Version)</td>
+                                        <td class="text-end">
+                                            <button type="button"
+                                                    class="btn btn-sm btn-outline-danger"
+                                                    @onclick="() => HandleDeletePackage(pkg.Id)"
+                                                    disabled="@_isWorking">
+                                                Delete
+                                            </button>
+                                        </td>
+                                    </tr>
+                                }
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-header">Dispatch to device</div>
+        <div class="card-body">
+            <p class="text-muted small mb-3">
+                Select a package and a target device. The job is queued, dispatched to the agent if online,
+                and its status appears under <a href="packages/jobs">Job Status</a>.
+            </p>
+            <div class="row g-2 align-items-end">
+                <div class="col-md-4">
+                    <label class="form-label">Package</label>
+                    <select class="form-select" @bind="_dispatchPackageId">
+                        <option value="">— pick a package —</option>
+                        @foreach (var pkg in _packages)
+                        {
+                            <option value="@pkg.Id">@pkg.Name (@pkg.PackageIdentifier)</option>
+                        }
+                    </select>
+                </div>
+                <div class="col-md-5">
+                    <label class="form-label">Target device</label>
+                    <select class="form-select" @bind="_dispatchDeviceId">
+                        <option value="">— pick a device —</option>
+                        @foreach (var d in _devices)
+                        {
+                            <option value="@d.ID">
+                                @d.DeviceName @(string.IsNullOrEmpty(d.Alias) ? string.Empty : "(" + d.Alias + ")")
+                                @(d.IsOnline ? "" : " — offline")
+                            </option>
+                        }
+                    </select>
+                </div>
+                <div class="col-md-3 d-flex gap-1">
+                    <button type="button"
+                            class="btn btn-primary flex-fill"
+                            @onclick="() => HandleDispatch(PackageInstallAction.Install)"
+                            disabled="@(_isWorking || string.IsNullOrEmpty(_dispatchPackageId) || string.IsNullOrEmpty(_dispatchDeviceId))">
+                        Install
+                    </button>
+                    <button type="button"
+                            class="btn btn-outline-secondary flex-fill"
+                            @onclick="() => HandleDispatch(PackageInstallAction.Uninstall)"
+                            disabled="@(_isWorking || string.IsNullOrEmpty(_dispatchPackageId) || string.IsNullOrEmpty(_dispatchDeviceId))">
+                        Uninstall
+                    </button>
+                </div>
+            </div>
+            @if (!string.IsNullOrEmpty(_dispatchMessage))
+            {
+                <div class="alert alert-@_dispatchMessageClass mt-3 py-1 px-2 small mb-0">@_dispatchMessage</div>
+            }
+        </div>
+    </div>
+</div>

@@ -17,9 +17,19 @@ public static class ChocolateyOutputParser
 {
     /// <summary>
     /// Exit codes Chocolatey treats as "the package operation succeeded
-    /// even though Windows reported a non-zero code". 1641 (reboot
-    /// initiated) and 3010 (reboot required) come from <c>msiexec</c>
-    /// and are explicitly success-meaning-please-reboot.
+    /// even though Windows reported a non-zero code".
+    /// <list type="bullet">
+    ///   <item><description><c>0</c> — clean success.</description></item>
+    ///   <item><description><c>1605</c> — <c>ERROR_UNKNOWN_PRODUCT</c> on uninstall;
+    ///         the package wasn't installed in the first place, which we treat as
+    ///         success because the desired post-state ("not installed") holds.</description></item>
+    ///   <item><description><c>1614</c> — <c>ERROR_PRODUCT_UNINSTALLED</c>; same idea
+    ///         as 1605 from the alternate uninstall code path.</description></item>
+    ///   <item><description><c>1641</c> — reboot was initiated by the installer.</description></item>
+    ///   <item><description><c>3010</c> — reboot required to finish the install.</description></item>
+    /// </list>
+    /// 1641 / 3010 mean the package operation succeeded and a reboot is pending —
+    /// the OS's problem, not the package manager's.
     /// </summary>
     public static readonly IReadOnlyCollection<int> SuccessfulExitCodes =
         new HashSet<int> { 0, 1605, 1614, 1641, 3010 };

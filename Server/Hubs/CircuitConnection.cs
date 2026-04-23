@@ -684,15 +684,29 @@ public class CircuitConnection : CircuitHandler, ICircuitConnection
         // access — silently dropping any forbidden / unknown devices.
         var allowedDevices = new List<string>(deviceIds.Count);
         var dispatchable = new List<(string DeviceId, string ConnectionId)>(deviceIds.Count);
+        var droppedDevices = new List<string>();
         foreach (var deviceId in deviceIds)
         {
             var (canAccess, connectionId) = CanAccessDevice(deviceId);
             if (!canAccess)
             {
+                droppedDevices.Add(deviceId);
                 continue;
             }
             allowedDevices.Add(deviceId);
             dispatchable.Add((deviceId, connectionId));
+        }
+
+        if (droppedDevices.Count > 0)
+        {
+            // Make the filtering visible in the audit trail so an
+            // operator-reported "the bundle didn't reach machine X"
+            // turns up in the logs as a deliberate access drop, not a
+            // silent agent failure.
+            _logger.LogInformation(
+                "Bundle dispatch dropped {droppedCount} target(s) the caller cannot access. " +
+                "BundleId={bundleId} Actor={username} DroppedDeviceIds={droppedDeviceIds}",
+                droppedDevices.Count, bundleId, User.UserName, droppedDevices);
         }
 
         if (allowedDevices.Count == 0)

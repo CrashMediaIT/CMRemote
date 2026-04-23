@@ -1,0 +1,60 @@
+@page "/packages/devices"
+@attribute [Authorize(Policy = PolicyNames.PackageManagerRequired)]
+@inherits AuthComponentBase
+
+@using Remotely.Server.Auth
+@using Remotely.Shared.Entities
+
+<PageTitle>Package Manager — Devices</PageTitle>
+
+<h2>Devices</h2>
+<p class="text-muted small">
+    Drill into a single device to view its installed-applications inventory and uninstall apps.
+</p>
+
+@if (_devices.Count == 0)
+{
+    <div class="text-muted">No devices.</div>
+}
+else
+{
+    <div class="table-responsive">
+        <table class="table table-sm table-hover align-middle">
+            <thead>
+                <tr>
+                    <th>Device</th>
+                    <th>Alias</th>
+                    <th>Platform</th>
+                    <th>Status</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var d in _devices)
+                {
+                    <tr @key="d.ID">
+                        <td>@d.DeviceName</td>
+                        <td>@d.Alias</td>
+                        <td>@d.Platform</td>
+                        <td>
+                            @if (d.IsOnline)
+                            {
+                                <span class="badge bg-success">Online</span>
+                            }
+                            else
+                            {
+                                <span class="badge bg-secondary">Offline</span>
+                            }
+                        </td>
+                        <td class="text-end">
+                            <a class="btn btn-sm btn-outline-primary"
+                               href="@($"packages/devices/{d.ID}")">
+                                Installed apps
+                            </a>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+}

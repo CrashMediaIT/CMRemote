@@ -259,14 +259,34 @@ public class PackageInstallJobService : IPackageInstallJobService
 
         job.Status = newStatus;
         job.CompletedAt = _systemTime.Now;
-        job.StartedAt ??= job.CompletedAt;
+        if (job.StartedAt is null)
+        {
+            // Reaching here means a result arrived for a job that was
+            // never marked Running (only legal entry: agent reconnects
+            // after a restart and reports a result for a previously
+            // dispatched job whose dispatch ack we never observed).
+            // We backfill StartedAt to CompletedAt so the row has valid
+            // timestamps; the resulting "0 ms duration" is intentional
+            // — the actual install time is in result.DurationMs.
+            _logger.LogWarning(
+                "Job result accepted without prior dispatch ack; backfilling StartedAt. " +
+                "JobId={jobId}", jobId);
+            job.StartedAt = job.CompletedAt;
+        }
         // Result is written exactly once — write-then-no-overwrite via
         // the legal-transition guard above (terminal ⇒ no further moves).
-        job.Result ??= new PackageInstallResult
+        // Add explicitly so EF tracks the navigation as a new entity
+        // rather than relying on dependent-detection through the
+        // navigation property (which trips up the InMemory provider).
+        if (job.Result is null)
         {
-            Id = Guid.NewGuid(),
-            PackageInstallJobId = job.Id,
-        };
+            job.Result = new PackageInstallResult
+            {
+                Id = Guid.NewGuid(),
+                PackageInstallJobId = job.Id,
+            };
+            db.PackageInstallResults.Add(job.Result);
+        }
         job.Result.Success = result.Success;
         job.Result.ExitCode = result.ExitCode;
         job.Result.DurationMs = result.DurationMs;

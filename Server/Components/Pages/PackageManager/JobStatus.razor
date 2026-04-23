@@ -1,0 +1,67 @@
+@page "/packages/jobs"
+@attribute [Authorize(Policy = PolicyNames.PackageManagerRequired)]
+@inherits AuthComponentBase
+
+@using Remotely.Server.Auth
+@using Remotely.Shared.Entities
+@using Remotely.Shared.Enums
+
+<PageTitle>Package Manager — Job Status</PageTitle>
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h2 class="mb-0">Job Status</h2>
+    <button class="btn btn-sm btn-outline-secondary" @onclick="ReloadAsync">Refresh</button>
+</div>
+
+@if (_jobs.Count == 0)
+{
+    <div class="text-muted">No jobs yet.</div>
+}
+else
+{
+    <div class="table-responsive">
+        <table class="table table-sm align-middle">
+            <thead>
+                <tr>
+                    <th>Created</th>
+                    <th>Package</th>
+                    <th>Device</th>
+                    <th>Action</th>
+                    <th>Status</th>
+                    <th>Exit</th>
+                    <th>Duration</th>
+                    <th>Detail</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var job in _jobs)
+                {
+                    <tr @key="job.Id">
+                        <td><span class="small">@job.CreatedAt.LocalDateTime.ToString("g")</span></td>
+                        <td>@(job.Package?.Name ?? "(deleted)")</td>
+                        <td><code class="small">@job.DeviceId</code></td>
+                        <td>@job.Action</td>
+                        <td>
+                            <span class="badge @StatusBadge(job.Status)">@job.Status</span>
+                        </td>
+                        <td>@(job.Result?.ExitCode.ToString() ?? "—")</td>
+                        <td>@(job.Result is null ? "—" : $"{job.Result.DurationMs} ms")</td>
+                        <td>
+                            @if (job.Result is not null && !string.IsNullOrEmpty(job.Result.ErrorMessage))
+                            {
+                                <div class="small text-danger">@job.Result.ErrorMessage</div>
+                            }
+                            @if (job.Result is not null && !string.IsNullOrEmpty(job.Result.StderrTail))
+                            {
+                                <details>
+                                    <summary class="small text-muted">stderr tail</summary>
+                                    <pre class="small mb-0" style="max-height:8rem;overflow:auto">@job.Result.StderrTail</pre>
+                                </details>
+                            }
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+}

@@ -1,0 +1,16 @@
+@page "/packages"
+@attribute [Authorize(Policy = PolicyNames.PackageManagerRequired)]
+@inherits AuthComponentBase
+@inject NavigationManager NavigationManager
+@using Remotely.Server.Auth
+
+@code {
+    protected override void OnInitialized()
+    {
+        // The Package Manager root has no UI of its own — operators
+        // always start at one of the sub-pages. Redirect at the
+        // boundary so URLs like /packages and /packages/ both land
+        // somewhere meaningful.
+        NavigationManager.NavigateTo("packages/install", replace: true);
+    }
+}
