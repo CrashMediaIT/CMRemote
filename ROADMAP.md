@@ -37,7 +37,7 @@ This roadmap is therefore organised in three bands:
 
 ## Band 1 — Rewrite & cut-over *(top priority)*
 
-### Current focus *(end of slice R1b / S4 / M1+M2 scaffolds, Apr 2026)*
+### Current focus *(end of slice R1b / S4 / M1+M2 scaffolds + M2 inspector, Apr 2026)*
 
 Module 0 (wire-protocol spec + JSON test-vector corpus), slice **R1a**
 (`cmremote-wire` JSON round-trip + redacting `Debug`), slice **R1b**
@@ -54,18 +54,30 @@ slice (empty `/setup` flow + `CMRemote.Setup.Completed` marker stored
 in `KeyValueRecords`, redirect middleware that routes uncompleted
 setups to `/setup`, and a startup heuristic that auto-marks any
 already-populated database so existing deployments are not hijacked
-into the wizard), and the **M2 scaffolding** slice (new
+into the wizard), the **M2 scaffolding** slice (new
 [`Migration.Legacy/`](Migration.Legacy/) library project — public
 `MigrationOptions` / `MigrationReport` / `LegacySchemaVersion` /
 `IRowConverter<TLegacy,TV2>` / `ILegacySchemaInspector` /
 `IMigrationRunner` contracts, a default `MigrationRunner` orchestrator
 that reflects converters by their `HandlesSchemaVersion`, and a
-reference `OrganizationRowConverter`) are merged. The slice R1b codec
-and the S1–S2 supply-chain gates were shipped in one PR by design so
-the gate caught the new `rmp-serde` dependency on the way in; S3
-followed in the next PR; S4 landed next, unblocking slice R2; the M1
-scaffolding landed alongside, unblocking M2; the M2 scaffolding
-followed in the next PR.
+reference `OrganizationRowConverter`), and the **M2 inspector**
+slice (concrete
+[`LegacySchemaInspector`](Migration.Legacy/LegacySchemaInspector.cs)
+that opens the source connection through a connection-string-shape
+provider detector
+[`LegacyDbProviderDetector`](Migration.Legacy/LegacyDbProviderDetector.cs)
+covering SQLite / SQL Server / PostgreSQL, probes for the canonical
+`__EFMigrationsHistory` + `Organizations` + `Devices` + `AspNetUsers`
+set, and classifies the result into `Empty` / `UpstreamLegacy_2026_04`
+/ `Unknown` — partial canonical sets are reported `Unknown` so the
+runner refuses to import rather than risk silent data loss) are
+merged. The slice R1b codec and the S1–S2 supply-chain gates were
+shipped in one PR by design so the gate caught the new `rmp-serde`
+dependency on the way in; S3 followed in the next PR; S4 landed
+next, unblocking slice R2; the M1 scaffolding landed alongside,
+unblocking M2; the M2 scaffolding followed in the next PR; the M2
+inspector followed after that, unblocking the M2 row-reader / writer
+/ CLI work and the wizard's import step (M1.3).
 
 The next milestones, ordered so security work continues to land
 alongside functional work rather than behind it, are:
@@ -74,16 +86,15 @@ alongside functional work rather than behind it, are:
    server over WebSocket and reconnects cleanly across restarts). Now
    unblocked — S4's fuzz + proptest coverage gates R2's new parser
    surfaces on the way in.
-2. **M2 — Legacy reader + CLI** (next M2 sub-slice). Concrete
-   `ILegacySchemaInspector` implementation that opens the source
-   connection (SQLite / SQL Server / Postgres) and probes for the
-   known `__EFMigrationsHistory` + `Organizations` + `Devices` +
-   `AspNetUsers` table set, the per-entity row readers that feed
-   `IRowConverter<TLegacy,TV2>` instances, the target writer, and the
-   `cmremote migrate --from <conn> --to <conn>` CLI wrapper. The
-   public surface (this scaffold's interfaces + `MigrationRunner`
-   composition) is fixed so the wizard's import step (M1.3) can bind
-   against the runner once the reader lands.
+2. **M2 — Row readers + target writer + CLI** (next M2 sub-slice).
+   Per-entity row readers that pull from the source connection in
+   batches and feed `IRowConverter<TLegacy,TV2>` instances, the
+   target writer that lands converted rows in the v2 Postgres schema
+   (idempotent / resumable, honouring `MigrationOptions.DryRun` and
+   `BatchSize`), and the `cmremote migrate --from <conn> --to <conn>`
+   CLI wrapper. The inspector that just landed pins the schema
+   detection so this slice only has to wire row movement; the
+   wizard's import step (M1.3) is a thin UI over the same runner.
 
 Both milestones are parallelizable.
 
@@ -310,8 +321,8 @@ The wizard is non-blocking past step 3: if the operator skips the import
 they can run it later from `/admin/migration`. **The operator is never
 forced to wait for agents to upgrade before reaching the main panel.**
 
-**M2 — Schema converter library.** *(🟡 in progress — scaffolding shipped.)*
-The skeleton landed in this slice: a new
+**M2 — Schema converter library.** *(🟡 in progress — scaffolding + inspector shipped.)*
+The skeleton landed in an earlier slice: a new
 [`Migration.Legacy/`](Migration.Legacy/) library project (assembly
 `Remotely.Migration.Legacy`, references `Shared`) with the public
 contracts the wizard's import step (M1.3) and the headless CLI both
@@ -325,21 +336,47 @@ that reflects converters by their `HandlesSchemaVersion` and emits a
 report even when detection fails or the inspector throws, and a
 reference `OrganizationRowConverter` that pins the conversion contract
 end-to-end (identity preservation, name truncation at the v2 25-char
-cap, skip-on-missing-name, fail-on-missing-id). Tests:
-`Tests/Migration.Legacy.Tests/` (13 tests) cover the converter happy /
-edge / failure paths, the runner's known / empty / unknown-schema
-branches, inspector exception handling, cancellation, and report JSON
-round-trip.
+cap, skip-on-missing-name, fail-on-missing-id).
+
+The **inspector slice** added the concrete
+[`LegacySchemaInspector`](Migration.Legacy/LegacySchemaInspector.cs):
+it picks the right ADO.NET driver from the connection-string shape
+via [`LegacyDbProviderDetector`](Migration.Legacy/LegacyDbProviderDetector.cs)
+(PostgreSQL on `Host=`, SQL Server on `Server=` / `Initial Catalog=`,
+SQLite on `Data Source=` / `Filename=`), opens the source connection,
+runs the per-provider table-list query
+(`sqlite_master` for SQLite, `INFORMATION_SCHEMA.TABLES` for SQL
+Server, `information_schema.tables` filtered to schema `public` for
+PostgreSQL), and feeds the result into a pure
+`Classify(IReadOnlyCollection<string>)` rule. Empty database →
+`Empty`; full canonical set (case-insensitive, so the PostgreSQL
+identifier-folding case still matches) → `UpstreamLegacy_2026_04`;
+partial canonical set or unrelated tables → `Unknown` (the runner
+already refuses to import on `Unknown` to avoid silent data loss).
+Connection / query failures bubble through the runner's existing
+fatal-error path so the wizard / CLI surface a clean message rather
+than a stack trace. Tests:
+[`Tests/Migration.Legacy.Tests/`](Tests/Migration.Legacy.Tests/) (42
+tests; +29 in this slice) cover the classification rule, provider
+detection across all three string shapes including a `HostName`
+substring false-match guard, real-DB end-to-end runs against an
+in-memory shared-cache SQLite database (empty / canonical / unrelated
+/ post-AUTOINCREMENT-residual `sqlite_sequence`), the inspector's
+argument-validation and cancellation paths, the unsupported
+connection-string-shape throw, and the `MigrationRunner` wired
+against the real inspector for both `Empty` and
+`UpstreamLegacy_2026_04` end-to-end.
 
 A new `CMRemote.Migration.Legacy`
 project owns the read-side schema reflection and the per-version row
 converters. It exposes a CLI (`cmremote migrate --from <conn> --to
 <conn>`) so headless / scripted migrations are possible and so the
 wizard's import step is a thin UI over the same code. The next M2
-sub-slice lands the concrete `ILegacySchemaInspector` (which opens
-the source connection and probes for the canonical
-`__EFMigrationsHistory` + `Organizations` + `Devices` + `AspNetUsers`
-table set), per-entity row readers, the target writer, and the CLI
+sub-slice lands the per-entity row readers (batched, paged off the
+already-detected provider connection) that feed
+`IRowConverter<TLegacy,TV2>` instances, the target writer that lands
+converted rows in the v2 Postgres schema (idempotent, resumable,
+honouring `MigrationOptions.DryRun` and `BatchSize`), and the CLI
 wrapper.
 
 **M3 — Background agent-upgrade pipeline.** Once the operator is in the

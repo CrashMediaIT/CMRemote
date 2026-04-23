@@ -11,10 +11,23 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="8.0.2" />
     <PackageReference Include="System.Text.Json" Version="8.0.5" />
+    <!--
+      ADO.NET drivers for the source side of the migration. The
+      inspector and (later-slice) row readers open the legacy database
+      with raw ADO.NET rather than EF Core because we are reading a
+      schema we do not own and never intend to map into our DbContext.
+    -->
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.10" />
+    <PackageReference Include="Microsoft.Data.SqlClient" Version="5.2.2" />
+    <PackageReference Include="Npgsql" Version="8.0.5" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\Shared\Shared.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Remotely.Migration.Legacy.Tests" />
   </ItemGroup>
 
 </Project>

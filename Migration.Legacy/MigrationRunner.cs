@@ -8,15 +8,18 @@ namespace Remotely.Migration.Legacy;
 /// inspector to the supplied converters and produces a
 /// <see cref="MigrationReport"/>.
 ///
-/// **Scope.** This is the M2-scaffolding slice: the runner does not
-/// yet open the source connection (no concrete
-/// <see cref="ILegacySchemaInspector"/> implementation ships in this
-/// slice — only the contract). It still produces a useful report:
-/// detection result, dry-run flag, and an empty entity list when no
-/// converters apply to the detected schema. The legacy-DB reader,
-/// per-entity SQL queries, and target writer land in the next M2
-/// slice and plug into this same orchestrator without touching the
-/// public surface.
+/// **Scope.** As of the M2 inspector slice, the runner does open
+/// the source connection through the supplied
+/// <see cref="ILegacySchemaInspector"/> (the default
+/// <see cref="LegacySchemaInspector"/> probes for the canonical
+/// upstream table set across SQLite / SQL Server / PostgreSQL).
+/// What still does **not** ship in this slice are the per-entity
+/// row readers and the target writer — so a "known schema" run
+/// produces one zero-row <see cref="EntityReport"/> entry per
+/// applicable converter today, and the actual row-level migration
+/// lands in the next M2 slice. The public surface of this
+/// orchestrator is fixed so the wizard's import step (M1.3) can
+/// already bind against it.
 /// </summary>
 public class MigrationRunner : IMigrationRunner
 {

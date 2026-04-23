@@ -5,10 +5,14 @@ namespace Remotely.Migration.Legacy;
 /// connection so the runner can pick the matching set of
 /// <see cref="IRowConverter{TLegacy, TV2}"/> implementations.
 ///
-/// The concrete reader (which actually opens the source connection
-/// and probes for known tables) lands in the next M2 slice. This
-/// scaffold ships only the contract so the runner can compose
-/// against it.
+/// The default implementation is
+/// <see cref="LegacySchemaInspector"/>, which opens the source
+/// connection (SQLite / SQL Server / PostgreSQL — picked from the
+/// connection-string shape) and probes for the canonical
+/// <c>__EFMigrationsHistory</c> + <c>Organizations</c> +
+/// <c>Devices</c> + <c>AspNetUsers</c> table set. Tests / scripted
+/// callers can substitute their own implementation against the same
+/// contract.
 /// </summary>
 public interface ILegacySchemaInspector
 {
