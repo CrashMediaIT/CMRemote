@@ -70,6 +70,40 @@ features ship to users first.
   items sequentially and returns per-item structured results.
 - WebUI: drag-and-drop ordering, per-item status badges, *retry-failed-only*.
 
+## 🔜 PR C3 — Device lifecycle management (manual + automatic cleanup)
+
+The current implementation does not allow operators to remove devices that are
+not actively connected to the server. When a computer is wiped and reprovisioned
+it returns with a new device ID, leaving the previous record behind. Over time
+this clutters the database with "dead" devices that will never reconnect.
+
+- **Manual delete**: add a *Delete device* action (org-admin scoped) on the
+  Devices grid and the per-device page. Deletion must:
+  - Tombstone (soft-delete) the device first, then hard-delete after any
+    in-flight jobs (`PackageInstallJob`, `BundleRunJob`, MSI uploads, scripts,
+    file transfers) referencing it have drained or been cancelled.
+  - Cascade-clean dependent rows: installed-applications snapshots, uninstall
+    tokens, alerts, scripts results, audit-log references (preserve audit rows
+    but null the FK).
+  - Refuse deletion while the device is `Online` unless the operator passes an
+    explicit *Force* confirmation; a forced delete also revokes the agent's
+    auth so it cannot silently re-register under the same record.
+  - Be recorded in the audit log added in PR D (actor, device id, reason).
+- **Automatic cleanup**: org-scoped setting
+  `InactiveDeviceRetentionDays` (default *disabled*; min 7, max 3650).
+  - Background `IHostedService` (e.g. `InactiveDeviceCleanupService`) sweeps
+    nightly and tombstones devices whose `LastOnline` is older than the
+    retention window, then hard-deletes after a grace period.
+  - Per-device opt-out flag (`ExcludeFromAutoCleanup`) for stationary kiosks
+    that are intentionally offline for long periods.
+  - Surface the policy and last sweep timestamp on the Org settings page; emit
+    an audit-log entry per automatic deletion.
+- **Bulk action**: multi-select on the Devices grid with a *Delete selected
+  offline devices* button, gated by the same authorization policy.
+- Tests: service-level tests for the state machine (online refusal, tombstone
+  → purge, FK cascade, audit emission) and a deterministic clock-driven test
+  for the cleanup sweeper.
+
 ## 🔜 PR D — Hardening pass *before* the agent rewrite
 
 - **Audit log**: every install / uninstall / upload / bundle-run gets an
