@@ -123,8 +123,8 @@ We do not currently run a paid bug bounty program.
   `cargo-audit`, `dependency-review`, or Dependabot and have no
   demonstrable impact on CMRemote. We still appreciate a heads-up.
 
-For an explicit list of trust boundaries, surfaces, and non-goals, see the
-threat model (`docs/threat-model.md`, roadmap item **S3**) once it lands.
+For an explicit list of trust boundaries, surfaces, and non-goals, see
+the [threat model](docs/threat-model.md) (roadmap item **S3**).
 
 ## Safe harbour
 

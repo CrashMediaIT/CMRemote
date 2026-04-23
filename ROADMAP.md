@@ -43,31 +43,29 @@ Module 0 (wire-protocol spec + JSON test-vector corpus), slice **R1a**
 (`cmremote-wire` JSON round-trip + redacting `Debug`), slice **R1b**
 (MessagePack codec + byte-stable corpus round-trip), and the first
 security-gate items **S1** (`SECURITY.md` + coordinated-disclosure
-policy) and **S2** (supply-chain CI via `cargo-deny`, `cargo-audit`,
-`dependency-review`, OSSF Scorecard, Dependabot) are merged. The slice
-R1b codec and the supply-chain gates were shipped in the same PR by
-design so the gate caught the new `rmp-serde` dependency on the way in.
+policy), **S2** (supply-chain CI via `cargo-deny`, `cargo-audit`,
+`dependency-review`, OSSF Scorecard, Dependabot), and **S3**
+([threat model document](docs/threat-model.md)) are merged. The slice
+R1b codec and the S1–S2 supply-chain gates were shipped in one PR by
+design so the gate caught the new `rmp-serde` dependency on the way in;
+S3 followed in the next PR.
 
 The next milestones, ordered so security work continues to land
 alongside functional work rather than behind it, are:
 
-1. **S3 — Threat model document** (`docs/threat-model.md`) expanding on
-   the normative *Security model* section already in
-   `docs/wire-protocol.md` to cover the server surface, migration path,
-   and agent-upgrade pipeline.
-2. **S4 — Fuzzing and parser hardening.** `cargo-fuzz` targets per wire
+1. **S4 — Fuzzing and parser hardening.** `cargo-fuzz` targets per wire
    parser (`ConnectionInfo`, hub envelopes in JSON and MessagePack),
    seeded from the corpus under `docs/wire-protocol-vectors/`, with a
    nightly scheduled run that opens an issue on crash. Blocks slice R2.
-3. **R2 — Connection / heartbeat loop** (Rust agent connects to a dev
+2. **R2 — Connection / heartbeat loop** (Rust agent connects to a dev
    server over WebSocket and reconnects cleanly across restarts).
-4. **M1 scaffolding — first-boot setup wizard skeleton** (empty `/setup`
+3. **M1 scaffolding — first-boot setup wizard skeleton** (empty `/setup`
    flow + `CMRemote.Setup.Completed` marker), so the migration path
    (PR M) has a place to land incrementally. Parallelizable with
    everything else.
 
-Items 1–2 are expected to land before any work on slice R2 begins. Item
-4 is parallelizable with slice R2 but must precede any work on the
+Item 1 is expected to land before any work on slice R2 begins. Item 3
+is parallelizable with slice R2 but must precede any work on the
 migration converter library (M2).
 
 ### 🟡 Track R — Rust agent + clean-room server *(now the lead track)*
@@ -87,7 +85,7 @@ below. Summary of the new tempo:
   is re-targeted at the clean-room codebase rather than added to the
   legacy one.
 
-### 🟡 Track S — Security & supply-chain baseline *(cross-cutting — S1 + S2 shipped)*
+### 🟡 Track S — Security & supply-chain baseline *(cross-cutting — S1 + S2 + S3 shipped)*
 
 Security is called out as a top-priority, standalone track rather than
 being left as scattered mentions inside the Rust slices. Items here gate
@@ -137,9 +135,9 @@ Still queued under S2 (not yet shipped): `cargo-vet` audit set,
 .NET `packages.lock.json` + `RestoreLockedMode=true` in CI, and
 `CODEOWNERS` gating on workflow / dependency manifests.
 
-**S3 — Threat model document *(🔜)*.** A new
-`docs/threat-model.md` that expands on the normative *Security model*
-section in `docs/wire-protocol.md` with:
+**S3 — Threat model document *(✅ shipped)*.**
+[`docs/threat-model.md`](docs/threat-model.md) expands on the normative
+*Security model* section in `docs/wire-protocol.md` with:
 
 - A STRIDE-per-surface table: **agent↔server hub**, **server↔DB**,
   **server↔browser (Razor / Blazor circuits + cookies)**,
