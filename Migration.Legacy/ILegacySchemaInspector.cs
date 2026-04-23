@@ -16,9 +16,11 @@ public interface ILegacySchemaInspector
     /// Inspects the database referenced by <paramref name="sourceConnectionString"/>
     /// and returns the matching <see cref="LegacySchemaVersion"/>.
     /// Returns <see cref="LegacySchemaVersion.Empty"/> for a connectable
-    /// but un-recognised database, or
-    /// <see cref="LegacySchemaVersion.Unknown"/> if the schema neither
-    /// matches a known upstream layout nor looks empty.
+    /// database that contains no recognised schema (no tables at all,
+    /// or none of the canonical upstream-Remotely tables), or
+    /// <see cref="LegacySchemaVersion.Unknown"/> if the database does
+    /// contain tables but their layout neither matches a known
+    /// upstream version nor looks empty enough to safely no-op.
     /// </summary>
     Task<LegacySchemaVersion> DetectAsync(
         string sourceConnectionString,
