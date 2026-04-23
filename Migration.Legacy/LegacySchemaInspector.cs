@@ -179,9 +179,12 @@ public class LegacySchemaInspector : ILegacySchemaInspector
             "SELECT name FROM sqlite_master " +
             "WHERE type = 'table' AND name NOT LIKE 'sqlite\\_%' ESCAPE '\\';",
 
-        // SQL Server: INFORMATION_SCHEMA.TABLES is portable but
-        // includes system schemas; restrict to user schema 'dbo' and
-        // the EF-Core history table that lives under it.
+        // SQL Server: INFORMATION_SCHEMA.TABLES, restricted to base
+        // tables only (excludes views and system-internal rowsets).
+        // Returns user tables across every schema — upstream Remotely
+        // lays the canonical tables down in 'dbo' but we deliberately
+        // do not pin the schema so an operator who restored under a
+        // different default schema is still recognised.
         LegacyDbProvider.SqlServer =>
             "SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES " +
             "WHERE TABLE_TYPE = 'BASE TABLE';",
