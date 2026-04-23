@@ -84,4 +84,20 @@ public interface IAgentHubClient
     Task TriggerHeartbeat();
 
     Task WakeDevice(string macAddress);
+
+    /// <summary>
+    /// Asks the agent to enumerate all installed applications (Win32 +
+    /// MSI + AppX) and return them via
+    /// <c>InstalledApplicationsResult</c>. Windows agents only — non-Windows
+    /// agents will return a result with <c>Success=false</c>.
+    /// </summary>
+    Task RequestInstalledApplications(string requestId);
+
+    /// <summary>
+    /// Asks the agent to uninstall the application identified by
+    /// <paramref name="applicationKey"/>. The agent re-enumerates its
+    /// inventory and uses the locally-resolved uninstall command — the
+    /// wire never carries an executable string the user controlled.
+    /// </summary>
+    Task UninstallApplication(string requestId, string applicationKey);
 }

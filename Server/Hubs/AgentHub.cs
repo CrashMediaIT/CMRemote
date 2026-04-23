@@ -9,6 +9,7 @@ using Remotely.Shared.Entities;
 using Remotely.Shared.Enums;
 using Remotely.Shared.Interfaces;
 using Remotely.Shared.Models;
+using Remotely.Shared.Services;
 using Remotely.Shared.Utilities;
 
 namespace Remotely.Server.Hubs;
@@ -16,12 +17,14 @@ namespace Remotely.Server.Hubs;
 public class AgentHub : Hub<IAgentHubClient>
 {
     private readonly IDataService _dataService;
+    private readonly IInstalledApplicationsService _installedApplicationsService;
     private readonly ICircuitManager _circuitManager;
     private readonly IExpiringTokenService _expiringTokenService;
     private readonly ILogger<AgentHub> _logger;
     private readonly IMessenger _messenger;
     private readonly IRemoteControlSessionCache _remoteControlSessions;
     private readonly IAgentHubSessionCache _serviceSessionCache;
+    private readonly ISystemTime _systemTime;
     private readonly IHubContext<ViewerHub> _viewerHubContext;
 
     public AgentHub(
@@ -32,6 +35,8 @@ public class AgentHub : Hub<IAgentHubClient>
         IExpiringTokenService expiringTokenService,
         IRemoteControlSessionCache remoteControlSessionCache,
         IMessenger messenger,
+        IInstalledApplicationsService installedApplicationsService,
+        ISystemTime systemTime,
         ILogger<AgentHub> logger)
     {
         _dataService = dataService;
@@ -41,6 +46,8 @@ public class AgentHub : Hub<IAgentHubClient>
         _expiringTokenService = expiringTokenService;
         _remoteControlSessions = remoteControlSessionCache;
         _messenger = messenger;
+        _installedApplicationsService = installedApplicationsService;
+        _systemTime = systemTime;
         _logger = logger;
     }
 
@@ -368,6 +375,61 @@ public class AgentHub : Hub<IAgentHubClient>
     {
         var message = new TransferCompleteMessage(transferId);
         return _messenger.Send(message, requesterId);
+    }
+
+    /// <summary>
+    /// Receives the installed-applications inventory pushed by the agent
+    /// in response to a <c>RequestInstalledApplications</c> call.
+    /// Persists the snapshot and broadcasts the result so the requesting
+    /// browser circuit can refresh.
+    /// </summary>
+    public async Task InstalledApplicationsResult(InstalledApplicationsResultDto result)
+    {
+        if (Device is null || result is null)
+        {
+            return;
+        }
+
+        if (result.Success)
+        {
+            await _installedApplicationsService.SaveSnapshotAsync(
+                Device.ID,
+                result.Applications,
+                _systemTime.Now);
+        }
+        else
+        {
+            _logger.LogWarning(
+                "InstalledApplicationsResult reported failure. Device={deviceId} Error={error}",
+                Device.ID,
+                result.ErrorMessage);
+        }
+
+        await _messenger.Send(new InstalledApplicationsResultMessage(Device.ID, result));
+    }
+
+    /// <summary>
+    /// Receives the result of an uninstall operation. Stored only as a
+    /// log line and broadcast to subscribers; the operation itself is
+    /// audit-logged on the agent.
+    /// </summary>
+    public async Task UninstallApplicationResult(UninstallApplicationResultDto result)
+    {
+        if (Device is null || result is null)
+        {
+            return;
+        }
+
+        _logger.LogInformation(
+            "UninstallApplicationResult. Device={deviceId} App={applicationKey} " +
+            "Success={success} ExitCode={exitCode} DurationMs={durationMs}",
+            Device.ID,
+            result.ApplicationKey,
+            result.Success,
+            result.ExitCode,
+            result.DurationMs);
+
+        await _messenger.Send(new UninstallApplicationResultMessage(Device.ID, result));
     }
 
     private async Task<bool> CheckForDeviceBan(params string[] deviceIdNameOrIPs)
