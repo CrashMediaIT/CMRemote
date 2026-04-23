@@ -37,7 +37,7 @@ This roadmap is therefore organised in three bands:
 
 ## Band 1 — Rewrite & cut-over *(top priority)*
 
-### Current focus *(end of slice R1b / S4 / M1+M2 scaffolds + M2 inspector + M2 reader, Apr 2026)*
+### Current focus *(end of slice R1b / S4 / M1+M2 scaffolds + M2 inspector + M2 reader + M2 writer-contract, Apr 2026)*
 
 Module 0 (wire-protocol spec + JSON test-vector corpus), slice **R1a**
 (`cmremote-wire` JSON round-trip + redacting `Debug`), slice **R1b**
@@ -70,7 +70,7 @@ covering SQLite / SQL Server / PostgreSQL, probes for the canonical
 `__EFMigrationsHistory` + `Organizations` + `Devices` + `AspNetUsers`
 set, and classifies the result into `Empty` / `UpstreamLegacy_2026_04`
 / `Unknown` — partial canonical sets are reported `Unknown` so the
-runner refuses to import rather than risk silent data loss), and the
+runner refuses to import rather than risk silent data loss), the
 **M2 reader** slice (new
 [`ILegacyRowReader<TLegacy>`](Migration.Legacy/ILegacyRowReader.cs)
 async-streaming contract + reference
@@ -84,15 +84,31 @@ pairs each applicable converter with the matching reader by
 / `RowsSkipped` / `RowsFailed` / per-row `Errors` (capped at
 `EntityReport.MaxErrorsPerEntity`) on the report; converters with no
 matching reader are surfaced with a warning rather than silently
-dropped) are merged. The slice R1b codec and the S1–S2 supply-chain
-gates were shipped in one PR by design so the gate caught the new
-`rmp-serde` dependency on the way in; S3 followed in the next PR;
-S4 landed next, unblocking slice R2; the M1 scaffolding landed
-alongside, unblocking M2; the M2 scaffolding followed in the next
-PR; the M2 inspector followed after that, unblocking the M2 reader;
-the M2 reader landed next, unblocking the **target writer** + the
-remaining per-entity readers (Devices, AspNetUsers, …) + the
-`cmremote migrate` CLI.
+dropped), and the **M2 writer-contract** slice (new
+[`ILegacyRowWriter<TV2>`](Migration.Legacy/ILegacyRowWriter.cs)
+async per-row write contract — implementations must be idempotent
+upserts by primary key so a resumed run does not duplicate; the
+runner now accepts a writers collection on a third constructor
+overload, pairs writer with converter by
+`EntityName + HandlesSchemaVersion`, invokes the writer on every
+`ConverterResult.Ok` when `MigrationOptions.DryRun=false`,
+accumulates a new `EntityReport.RowsWritten` counter, catches
+per-row writer exceptions into `RowsFailed` + capped `Errors`
+without aborting the run, and demotes a writer-less entity to
+"dry-run for this entity only" with a single warning when the
+operator asked for a real import — concrete Postgres
+`LegacyOrganizationWriter` follows in the next sub-slice once a
+live-Postgres test path is wired into CI) are merged. The slice
+R1b codec and the S1–S2 supply-chain gates were shipped in one PR
+by design so the gate caught the new `rmp-serde` dependency on the
+way in; S3 followed in the next PR; S4 landed next, unblocking
+slice R2; the M1 scaffolding landed alongside, unblocking M2; the
+M2 scaffolding followed in the next PR; the M2 inspector followed
+after that, unblocking the M2 reader; the M2 reader landed next,
+unblocking the M2 writer-contract; the M2 writer-contract landed
+next, unblocking the **concrete Postgres `LegacyOrganizationWriter`**
++ remaining per-entity readers / converters / writers
+(Devices, AspNetUsers, …) + the `cmremote migrate` CLI.
 
 The next milestones, ordered so security work continues to land
 alongside functional work rather than behind it, are:
@@ -101,16 +117,17 @@ alongside functional work rather than behind it, are:
    server over WebSocket and reconnects cleanly across restarts). Now
    unblocked — S4's fuzz + proptest coverage gates R2's new parser
    surfaces on the way in.
-2. **M2 — Target writer + remaining readers + CLI** (next M2 sub-slice).
-   The Postgres-only target writer that lands converted rows in the
-   v2 schema (idempotent so a resumed run upserts by id rather than
-   conflicting; transactional per batch; honours
-   `MigrationOptions.DryRun` so the existing reader-only counts stay
-   meaningful), the per-entity readers + converters for `Devices` and
-   `AspNetUsers` (the other two canonical upstream tables already
-   probed by the inspector), and the `cmremote migrate --from <conn>
-   --to <conn>` CLI wrapper that calls into the same `MigrationRunner`
-   the wizard's import step (M1.3) will use.
+2. **M2 — Concrete Postgres writer + remaining readers + CLI** (next M2 sub-slice).
+   The concrete `LegacyOrganizationWriter : ILegacyRowWriter<Organization>`
+   that lands rows in the v2 Postgres schema via an idempotent
+   `INSERT … ON CONFLICT (ID) DO UPDATE` keyset upsert (transactional
+   per batch; honours `MigrationOptions.DryRun` indirectly via the
+   runner that already gates the write). The per-entity readers +
+   converters + writers for `Devices` and `AspNetUsers` (the other
+   two canonical upstream tables already probed by the inspector).
+   The `cmremote migrate --from <conn> --to <conn>` CLI wrapper that
+   calls into the same `MigrationRunner` the wizard's import step
+   (M1.3) will use.
 
 Both milestones are parallelizable.
 
@@ -337,7 +354,7 @@ The wizard is non-blocking past step 3: if the operator skips the import
 they can run it later from `/admin/migration`. **The operator is never
 forced to wait for agents to upgrade before reaching the main panel.**
 
-**M2 — Schema converter library.** *(🟡 in progress — scaffolding + inspector + reader shipped.)*
+**M2 — Schema converter library.** *(🟡 in progress — scaffolding + inspector + reader + writer-contract shipped.)*
 The skeleton landed in an earlier slice: a new
 [`Migration.Legacy/`](Migration.Legacy/) library project (assembly
 `Remotely.Migration.Legacy`, references `Shared`) with the public
@@ -394,33 +411,56 @@ via a typed reflective inner loop, and accumulates `RowsRead` /
 Converters with no matching reader are reported with zero rows + a
 warning rather than silently dropped, so the wizard surfaces "this
 entity isn't importable yet" while remaining entities still flow.
-The target writer is **not yet wired** in this slice — converted
-rows are counted but not persisted, so every run today still
-behaves as a dry-run from the destination DB's point of view.
+
+The **writer-contract slice** added the
+[`ILegacyRowWriter<TV2>`](Migration.Legacy/ILegacyRowWriter.cs)
+async per-row write contract (one impl per
+`(LegacySchemaVersion, entity)` pair, must be **idempotent by primary
+key** — the identity-preservation rule from M1.3 means primary keys
+are byte-stable across reruns, so an upsert keyed off id is enough).
+The runner gained a third constructor overload
+`(inspector, converters, readers, writers, logger?)` (existing
+overloads still exist and forward empty writer / reader sets, so
+existing callers compile unchanged); it pairs writer with converter
+by `EntityName + HandlesSchemaVersion` and the v2 CLR generic
+argument, invokes the writer on every `ConverterResult.Ok` when
+`MigrationOptions.DryRun=false`, accumulates a new
+`EntityReport.RowsWritten` counter, catches per-row writer
+exceptions into `RowsFailed` + capped `Errors` (the run does not
+abort over a single bad row; `OperationCanceledException` is
+re-thrown so explicit cancellation is honoured), and demotes a
+writer-less entity to "dry-run for this entity only" with a single
+warning when the operator asked for a real import — converted rows
+are still counted but not persisted, rather than silently dropped.
+The concrete Postgres writer is **not yet wired** in this slice and
+follows once a live-Postgres test path is available in CI; the
+in-memory test double in
+[`MigrationRunnerWriterIntegrationTests`](Tests/Migration.Legacy.Tests/MigrationRunnerWriterIntegrationTests.cs)
+pins the contract end-to-end in the meantime.
 
 Tests: [`Tests/Migration.Legacy.Tests/`](Tests/Migration.Legacy.Tests/)
-(57 tests; +15 in this slice) cover the reader's contract surface
-(`EntityName` / `HandlesSchemaVersion`), argument validation, the
-unsupported-connection-string-shape throw, cancellation, and real
-end-to-end SQLite reads (empty table, single page, multi-page
-keyset pagination across 3 pages of 12 rows at batch size 5,
-NULL-name pass-through to the converter), plus runner-integration
-end-to-end coverage (happy path, mixed Convert/Skip/Fail counts,
-warning-on-missing-reader path, batched streaming without loss,
-mid-stream cancellation, and a constructor null-readers guard).
+(63 tests; +6 in this slice) cover the writer wiring end-to-end —
+DryRun honoured (writer never called), real-run happy path writes
+every converted row, no-writer-for-converter when `DryRun=false`
+demotes to dry-run-with-warning (one warning per entity, not per
+row), per-row writer exceptions become `RowsFailed` + capped
+`Errors` while sibling rows still flow, the writer is asserted
+idempotent across reruns (re-running against the same target ends
+with one row per id even though the test double's append log
+records both writes), and a constructor null-writers guard.
 
 A new `CMRemote.Migration.Legacy`
 project owns the read-side schema reflection and the per-version row
-converters. It exposes a CLI (`cmremote migrate --from <conn> --to
-<conn>`) so headless / scripted migrations are possible and so the
-wizard's import step is a thin UI over the same code. The next M2
-sub-slice lands the **target writer** (Postgres-only, idempotent
-upsert by id so a resumed run does not conflict; transactional per
-batch; honours `MigrationOptions.DryRun` so the existing
-reader-only counts stay meaningful), the per-entity readers +
-converters for `Devices` and `AspNetUsers` (the other two canonical
-upstream tables already probed by the inspector), and the CLI
-wrapper.
+converters / writers. It exposes a CLI (`cmremote migrate --from
+<conn> --to <conn>`) so headless / scripted migrations are possible
+and so the wizard's import step is a thin UI over the same code.
+The next M2 sub-slice lands the **concrete Postgres
+`LegacyOrganizationWriter`** (idempotent `INSERT … ON CONFLICT
+(ID) DO UPDATE` by primary key; transactional per batch; honours
+`MigrationOptions.DryRun` indirectly via the runner's existing
+gate), the per-entity readers + converters + writers for `Devices`
+and `AspNetUsers` (the other two canonical upstream tables already
+probed by the inspector), and the CLI wrapper.
 
 **M3 — Background agent-upgrade pipeline.** Once the operator is in the
 main panel, an `IHostedService`

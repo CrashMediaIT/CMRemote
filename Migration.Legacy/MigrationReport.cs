@@ -81,6 +81,14 @@ public class EntityReport
     public int RowsConverted { get; set; }
 
     /// <summary>
+    /// Rows that were actually persisted to the target by the matching
+    /// <see cref="ILegacyRowWriter{TV2}"/>. Always &lt;=
+    /// <see cref="RowsConverted"/>; equals zero on a dry-run or when no
+    /// writer is registered for the entity yet.
+    /// </summary>
+    public int RowsWritten { get; set; }
+
+    /// <summary>
     /// Rows the converter rejected with an
     /// <see cref="ConverterResult{T}.IsSkipped"/> verdict (e.g.
     /// orphaned FKs, soft-deleted rows). Counted but not written.
