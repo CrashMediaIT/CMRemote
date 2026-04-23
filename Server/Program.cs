@@ -281,6 +281,8 @@ services.AddScoped<Remotely.Server.Services.Setup.IDatabaseConnectionTester,
     Remotely.Server.Services.Setup.PostgresConnectionTester>();
 services.AddScoped<Remotely.Server.Services.Setup.ISetupImportService,
     Remotely.Server.Services.Setup.SetupImportService>();
+services.AddScoped<Remotely.Server.Services.Setup.IAdminBootstrapService,
+    Remotely.Server.Services.Setup.AdminBootstrapService>();
 services.AddHostedService<RemoteControlSessionCleaner>();
 services.AddHostedService<RemoteControlSessionReconnector>();
 

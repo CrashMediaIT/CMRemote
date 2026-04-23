@@ -37,7 +37,7 @@ This roadmap is therefore organised in three bands:
 
 ## Band 1 — Rewrite & cut-over *(top priority)*
 
-### Current focus *(end of slice R1b / S4 / **M1.1 + M1.2 + M1.3 shipped** + M2 complete — Apr 2026)*
+### Current focus *(end of slice R1b / S4 / **M1 milestone complete (M1.1 + M1.2 + M1.3 + M1.4 + M1.5)** + M2 complete — Apr 2026)*
 
 Module 0 (wire-protocol spec + JSON test-vector corpus), slice **R1a**
 (`cmremote-wire` JSON round-trip + redacting `Debug`), slice **R1b**
@@ -49,15 +49,14 @@ policy), **S2** (supply-chain CI via `cargo-deny`, `cargo-audit`,
 and parser hardening — `proptest` suite on stable + `cargo-fuzz`
 targets under `agent-rs/crates/cmremote-wire/fuzz/` seeded from the
 corpus + nightly scheduled workflow
-[`fuzz.yml`](.github/workflows/fuzz.yml)), the **M1 scaffolding**
-slice (empty `/setup` flow + `CMRemote.Setup.Completed` marker stored
-in `KeyValueRecords`, redirect middleware that routes uncompleted
-setups to `/setup`, and a startup heuristic that auto-marks any
-already-populated database so existing deployments are not hijacked
-into the wizard), the **complete M2 milestone**, and the
-**M1.1 + M1.2 + M1.3 wizard slice** (operator-facing Welcome /
-Preflight, Database connection with live `SELECT 1`, and Import
-existing database steps wired to the M2 `MigrationRunner`) are merged.
+[`fuzz.yml`](.github/workflows/fuzz.yml)), the **complete M2
+milestone**, and the **complete M1 milestone** (scaffolding +
+all five operator-facing wizard steps — Welcome / Preflight,
+Database connection with live `SELECT 1`, optional legacy import
+wired to the M2 `MigrationRunner`, first-organisation +
+server-admin bootstrap, and Done step that writes the
+`CMRemote.Setup.Completed` marker and routes the operator to
+sign-in) are merged.
 
 **M2 — Schema converter library + CLI** is shipped end-to-end across
 this PR's progressive slices:
@@ -150,12 +149,12 @@ The next milestones are now:
    server over WebSocket and reconnects cleanly across restarts). Now
    unblocked — S4's fuzz + proptest coverage gates R2's new parser
    surfaces on the way in.
-2. **M1.4 + M1.5 — Admin bootstrap and wizard finalisation.** With
-   M1.1 / M1.2 / M1.3 shipped in this slice the only remaining
-   wizard steps are creating the first organisation + server-admin
-   account when no users were imported (M1.4), and the "Done" step
-   that signs the operator into the main panel and queues the M3
-   agent-upgrade sweep (M1.5).
+2. **M3 — Background agent-upgrade pipeline.** With M1 now complete
+   end-to-end (the wizard's M1.5 step references M3 as the post-setup
+   hook to schedule), M3 is the logical next slice: the
+   `AgentUpgradeOrchestrator` `IHostedService`, the
+   `AgentUpgradeStatus` table, and the per-device upgrade state
+   machine described in the M3 section below.
 3. **Live-Postgres integration coverage** for the concrete writers'
    `INSERT … ON CONFLICT` paths (the wizard import step exercises
    them through the runner; the missing piece is a CI job with a
@@ -338,7 +337,7 @@ operator must be able to drop the new image in *on top of* the existing
 volume / database / agent fleet without losing data and without bricking
 agents that happen to be offline that day. PR M delivers that path.
 
-**M1 — First-boot setup wizard.** *(🟢 in progress — scaffolding + steps M1.1, M1.2, M1.3 shipped; M1.4 + M1.5 pending.)*
+**M1 — First-boot setup wizard.** *(✅ shipped — scaffolding + all five steps.)*
 The skeleton landed first: a `/setup` Razor page rendered through
 a minimal `EmptyLayout`, an `ISetupStateService` backed by a fixed-Guid row
 in `KeyValueRecords` for the `CMRemote.Setup.Completed` marker, a
@@ -418,6 +417,52 @@ declared with `<Aliases>MigrationLegacy</Aliases>` so its
 auto-generated EF migration classes under
 `Server/Migrations/**/*.cs`.
 
+**M1.4 (Admin bootstrap) — shipped.**
+[`AdminBootstrapService`](Server/Services/Setup/AdminBootstrapService.cs)
+gates the step behind an `IsRequiredAsync` probe — when an org or
+user already exists in the v2 schema (typically because M1.3
+imported a populated upstream database) the wizard skips straight
+to M1.5. When required, the service creates a first
+[`Organization`](Shared/Entities/Organization.cs) flagged
+`IsDefaultOrganization=true` and then hands a
+[`RemotelyUser`](Shared/Entities/RemotelyUser.cs) with
+`IsAdministrator=true`, `IsServerAdmin=true`, `EmailConfirmed=true`,
+and `LockoutEnabled=true` to ASP.NET Identity's
+`UserManager.CreateAsync(user, password)` so the configured
+`IPasswordHasher` hashes the password identically to the rest of
+the app and `SecurityStamp` / `ConcurrencyStamp` are stamped on
+creation. `IdentityResult.Errors` (password-policy violations,
+duplicate email, …) are propagated through
+[`AdminBootstrapResult`](Server/Services/Setup/IAdminBootstrapService.cs)
+so the wizard can render actionable copy. A failed `CreateAsync`
+rolls the org row back so a re-attempt with a stronger password
+does not leave a phantom org behind. A re-check of the
+"no-users-yet" precondition is performed inside the operation
+itself so a second wizard browser session cannot race in a parallel
+admin. Organisation names are pre-truncated to the 25-char storage
+cap so the operator gets a clean success rather than a thrown
+`DbUpdateException`. The
+[`/setup/admin`](Server/Components/Pages/Setup/SetupAdmin.razor)
+Razor page renders the form, a "Skip" affordance shown when the
+service reports the step is no longer required, and a confirm-password
+field that the page validates client-side before invoking the
+service.
+
+**M1.5 (Done) — shipped.** The
+[`/setup/done`](Server/Components/Pages/Setup/SetupDone.razor)
+Razor page is the *only* surface that calls
+`ISetupStateService.MarkSetupCompletedAsync`. Once the marker
+lands, `SetupRedirectMiddleware` stops forwarding requests to
+`/setup` and every `/setup/*` page renders the "Setup already
+complete" copy — the wizard cannot be re-run without operator
+intervention on the database. The page is idempotent (a refresh
+re-finalises against the existing marker without overwriting the
+original stamp, per the existing `MarkSetupCompletedAsync`
+contract), advances wizard progress to `SetupWizardStep.Done`, and
+links the operator to `/Account/Login?returnUrl=%2F` so they can
+sign in with the admin credentials they just configured in M1.4
+(or the imported credentials from M1.3, if they skipped M1.4).
+
 The five steps of the wizard are:
 
 1. **Welcome / preflight** *(✅ shipped — M1.1)* — checks writable
@@ -440,18 +485,22 @@ The five steps of the wizard are:
    so already-deployed agents reconnect under the same record. The
    resulting `MigrationReport` is written to disk as
    `migration-report.json` next to the wizard's settings file.
-4. **Admin bootstrap** *(🔜 M1.4, only if no users were imported)* —
+4. **Admin bootstrap** *(✅ shipped — M1.4, only if no users were imported)* —
    creates the first organisation + server-admin account.
-5. **Done** *(🔜 M1.5)* — writes the `CMRemote.Setup.Completed`
-   marker, signs the operator into the main panel, and queues the
-   agent-upgrade sweep defined in **M3**.
+5. **Done** *(✅ shipped — M1.5)* — writes the
+   `CMRemote.Setup.Completed` marker, advances wizard progress, and
+   routes the operator to `/Account/Login` (with `returnUrl=/`) so
+   they can sign in with the admin credentials they just configured
+   (or the imported credentials from M1.3, if they skipped M1.4).
+   The agent-upgrade sweep defined in **M3** will be queued from
+   this step once M3 lands.
 
 The wizard is non-blocking past step 3: if the operator skips the import
 they can run it later from `/admin/migration`. **The operator is never
 forced to wait for agents to upgrade before reaching the main panel.**
 
 **M1 wizard tests.** Six new MSTest classes under
-[`Tests/Server.Tests/`](Tests/Server.Tests/) — 37 tests in total —
+[`Tests/Server.Tests/`](Tests/Server.Tests/) — 44 tests in total —
 cover every wizard service end-to-end:
 [`SetupWizardProgressServiceTests`](Tests/Server.Tests/SetupWizardProgressServiceTests.cs)
 (round-trip persistence, refuses-to-move-backwards rule, malformed
@@ -467,13 +516,21 @@ configuration round-trip, empty-string guard, Unix `0600` mode),
 (empty / whitespace / malformed string distinguished from network
 failure, missing-Host detected, RFC 5737 TEST-NET-2 timeout
 exercising the network path with the password redacted from the
-returned message), and
+returned message),
 [`SetupImportServiceTests`](Tests/Server.Tests/SetupImportServiceTests.cs)
 (end-to-end dry-run against an in-memory SQLite source seeded with
 the canonical upstream schema — the same fixture the
 `Migration.Cli.Tests` smoke suite uses, so the wizard and CLI prove
 the same runner composition is wired the same way; plus persistence
-of `migration-report.json` and the empty-string argument guards).
+of `migration-report.json` and the empty-string argument guards),
+and
+[`AdminBootstrapServiceTests`](Tests/Server.Tests/AdminBootstrapServiceTests.cs)
+(IsRequired greenfield/imported-org cases, happy-path create
+asserting `IsAdministrator` + `IsServerAdmin` + hashed
+`PasswordHash` + stamped `SecurityStamp` + lower-cased email,
+weak-password rollback so a phantom org row is not left behind,
+refuse-second-call once an admin exists, blank-input validation
+errors, organisation-name truncation to the 25-char storage cap).
 
 **M2 — Schema converter library + CLI.** *(✅ shipped.)*
 A new [`Migration.Legacy/`](Migration.Legacy/) library project

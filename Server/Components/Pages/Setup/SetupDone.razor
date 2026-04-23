@@ -1,0 +1,98 @@
+@*
+    M1.5 — Done step. Writes the CMRemote.Setup.Completed marker,
+    advances wizard progress, and routes the operator to the sign-in
+    page (with a returnUrl to the main panel) so they can sign in
+    with the admin credentials they just configured in M1.4 — or with
+    the imported credentials from M1.3, if they skipped M1.4.
+
+    The page is the *only* surface that writes the completion marker.
+    Once written:
+      * SetupRedirectMiddleware stops forwarding requests to /setup
+      * SetupIndex.razor renders the "Setup already complete" copy
+        instead of the wizard
+      * Re-navigating to any /setup/* page renders the same
+        "already complete" copy
+
+    See ROADMAP.md "M1 — First-boot setup wizard" step 5.
+*@
+
+@page "/setup/done"
+@layout EmptyLayout
+@rendermode InteractiveServer
+
+@using Remotely.Server.Components.Layout
+@using Remotely.Server.Services
+@using Remotely.Server.Services.Setup
+@inject ISetupStateService SetupState
+@inject ISetupWizardProgressService Progress
+@inject NavigationManager Navigation
+
+<PageTitle>CMRemote — Setup: Done</PageTitle>
+
+<div class="container py-5">
+    @if (_finalising)
+    {
+        <h1 class="display-6">Finalising setup…</h1>
+        <p class="text-muted">Writing the completion marker.</p>
+    }
+    else if (!string.IsNullOrEmpty(_error))
+    {
+        <h1 class="display-6">Could not finalise setup</h1>
+        <div class="alert alert-danger" role="alert">@_error</div>
+        <button class="btn btn-primary" type="button" @onclick="Finalise">Try again</button>
+    }
+    else
+    {
+        <h1 class="display-5">Setup complete 🎉</h1>
+        <p class="lead">
+            CMRemote is ready to use. You can now sign in with the credentials you
+            just configured (or the credentials you imported in the previous step).
+        </p>
+        <p class="text-muted">
+            The agent-upgrade pipeline (M3 in <code>ROADMAP.md</code>) lands in a
+            follow-up slice; until then, agents continue to connect against their
+            existing record.
+        </p>
+
+        <div class="d-flex gap-2">
+            <a class="btn btn-primary" href="/Account/Login?returnUrl=%2F">
+                Continue to sign-in
+            </a>
+            <a class="btn btn-outline-secondary" href="/">
+                Open main panel
+            </a>
+        </div>
+    }
+</div>
+
+@code {
+    private bool _finalising = true;
+    private string? _error;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await Finalise();
+    }
+
+    private async Task Finalise()
+    {
+        _finalising = true;
+        _error = null;
+        try
+        {
+            // MarkSetupCompletedAsync is idempotent — it preserves the
+            // first stamp on every subsequent call — so a refresh of
+            // this page is safe.
+            await SetupState.MarkSetupCompletedAsync();
+            await Progress.SetCurrentStepAsync(SetupWizardStep.Done);
+        }
+        catch (Exception ex)
+        {
+            _error = $"Failed to write the completion marker: {ex.Message}";
+        }
+        finally
+        {
+            _finalising = false;
+        }
+    }
+}

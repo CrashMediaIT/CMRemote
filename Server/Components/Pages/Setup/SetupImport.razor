@@ -272,13 +272,13 @@ else
     {
         if (_busy) return;
         await Progress.SetCurrentStepAsync(SetupWizardStep.Import);
-        Navigation.NavigateTo("/setup");
+        Navigation.NavigateTo("/setup/admin");
     }
 
     private async Task ContinueAfterImport()
     {
         if (_busy) return;
         await Progress.SetCurrentStepAsync(SetupWizardStep.Import);
-        Navigation.NavigateTo("/setup");
+        Navigation.NavigateTo("/setup/admin");
     }
 }

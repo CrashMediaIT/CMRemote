@@ -114,11 +114,11 @@ else
         (SetupWizardStep.AdminBootstrap,
          "Admin bootstrap",
          "Create the first organisation and server-admin account when no users were imported.",
-         null),
+         "/setup/admin"),
         (SetupWizardStep.Done,
          "Done",
          "Write the CMRemote.Setup.Completed marker, sign the operator into the main panel, and queue the agent-upgrade sweep (M3).",
-         null),
+         "/setup/done"),
     };
 
     protected override async Task OnInitializedAsync()
@@ -148,9 +148,7 @@ else
         {
             return "Next";
         }
-        return step is SetupWizardStep.AdminBootstrap or SetupWizardStep.Done
-            ? "Pending (later slice)"
-            : "Pending";
+        return "Pending";
     }
 
     private string StatusBadgeClass(SetupWizardStep step)
@@ -182,9 +180,8 @@ else
             SetupWizardStep.Preflight => "/setup/preflight",
             SetupWizardStep.Database => "/setup/database",
             SetupWizardStep.Import => "/setup/import",
-            // Admin bootstrap (M1.4) and Done (M1.5) land in a
-            // follow-up slice; until then "continue" past Import lets
-            // the operator fall through to "Mark setup complete".
+            SetupWizardStep.AdminBootstrap => "/setup/admin",
+            SetupWizardStep.Done => "/setup/done",
             _ => "/setup",
         };
         Navigation.NavigateTo(href);
