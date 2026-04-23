@@ -6,7 +6,9 @@
 
 use std::path::{Path, PathBuf};
 
-use cmremote_wire::{ConnectionInfo, HubClose, HubCompletion, HubInvocation, HubPing};
+use cmremote_wire::{
+    from_msgpack, to_msgpack, ConnectionInfo, HubClose, HubCompletion, HubInvocation, HubPing,
+};
 
 /// Walk up from the crate's manifest directory until we find the
 /// `docs/wire-protocol-vectors` folder. The corpus has exactly one
@@ -178,4 +180,78 @@ fn close_vectors_round_trip_with_correct_reconnect_flag() {
         "quarantine vector must forbid reconnect"
     );
     assert_eq!(quarantine.error.as_deref(), Some("agent_quarantined"));
+}
+
+// -------------------------------------------------------------------------
+// Slice R1b — MessagePack codec conformance.
+//
+// Every JSON vector in the corpus must also round-trip through the
+// MessagePack codec: JSON → T → MessagePack bytes → T → MessagePack bytes
+// (byte-stable re-encode) → T (decoded from the re-encode equals the
+// original). Cross-encoding equivalence is the contract slice R2 relies
+// on when it negotiates either transport on the WebSocket.
+// -------------------------------------------------------------------------
+
+/// Generic JSON ↔ MessagePack round-trip for a single vector file.
+///
+/// Panics with the vector path on any divergence so a corpus regression
+/// is easy to attribute.
+fn assert_msgpack_round_trip<T>(path: &Path)
+where
+    T: serde::Serialize + serde::de::DeserializeOwned + PartialEq + std::fmt::Debug,
+{
+    let raw = read(path);
+    let from_json: T = serde_json::from_str(&raw)
+        .unwrap_or_else(|e| panic!("{}: json decode: {e}", path.display()));
+
+    let bytes = to_msgpack(&from_json)
+        .unwrap_or_else(|e| panic!("{}: msgpack encode: {e}", path.display()));
+    let from_mp: T =
+        from_msgpack(&bytes).unwrap_or_else(|e| panic!("{}: msgpack decode: {e}", path.display()));
+    assert_eq!(
+        from_json,
+        from_mp,
+        "{}: json and msgpack decodes diverge",
+        path.display()
+    );
+
+    // Byte-stable re-encode: encoding the decoded value produces the
+    // exact same bytes as the first encode. This pins the codec's
+    // determinism, which slice R2 relies on for replay tests.
+    let bytes2 = to_msgpack(&from_mp)
+        .unwrap_or_else(|e| panic!("{}: msgpack re-encode: {e}", path.display()));
+    assert_eq!(
+        bytes,
+        bytes2,
+        "{}: msgpack re-encode is not byte-stable",
+        path.display()
+    );
+}
+
+#[test]
+fn connection_info_valid_vectors_round_trip_through_msgpack() {
+    let dir = vectors_root().join("connection-info").join("valid");
+    let mut count = 0;
+    for entry in std::fs::read_dir(&dir).expect("valid dir") {
+        let path = entry.unwrap().path();
+        if path.extension().and_then(|s| s.to_str()) != Some("json") {
+            continue;
+        }
+        assert_msgpack_round_trip::<ConnectionInfo>(&path);
+        count += 1;
+    }
+    assert!(count >= 2, "expected ≥2 valid vectors, found {count}");
+}
+
+#[test]
+fn envelope_vectors_round_trip_through_msgpack() {
+    let dir = vectors_root().join("envelope");
+
+    assert_msgpack_round_trip::<HubInvocation>(&dir.join("invocation-heartbeat.json"));
+    assert_msgpack_round_trip::<HubInvocation>(&dir.join("invocation-fire-and-forget.json"));
+    assert_msgpack_round_trip::<HubCompletion>(&dir.join("completion-ok.json"));
+    assert_msgpack_round_trip::<HubCompletion>(&dir.join("completion-error.json"));
+    assert_msgpack_round_trip::<HubPing>(&dir.join("ping.json"));
+    assert_msgpack_round_trip::<HubClose>(&dir.join("close-shutdown.json"));
+    assert_msgpack_round_trip::<HubClose>(&dir.join("close-quarantine.json"));
 }

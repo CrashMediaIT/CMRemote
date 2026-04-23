@@ -14,12 +14,19 @@ This roadmap is therefore organised in three bands:
 1. **Band 1 — Rewrite & cut-over (now).** Rust agent, clean-room server,
    first-boot setup wizard, in-place migration of the legacy Docker
    database to PostgreSQL, and a background agent-upgrade pipeline that
-   honours device-online state and a 60-day inactivity cut-off.
+   honours device-online state and a 60-day inactivity cut-off. A
+   cross-cutting **Track S — Security & supply-chain baseline** runs
+   alongside Track R and gates every other slice: no functional work
+   lands before the security gate that would catch its class of issue is
+   already green.
 2. **Band 2 — Feature work to carry forward.** Package Manager (PRs A/B/C1
    already shipped, C2/C3/D queued) and the agent-deployment redesign
    (PR E). These are still on the roadmap but are now subordinate to
    Band 1 and will be re-implemented inside the clean-room codebase
-   rather than further extended on top of the legacy one.
+   rather than further extended on top of the legacy one. The hardening
+   items originally batched under **PR D** have been re-scoped into
+   Track S and individually pulled forward into the server-rewrite
+   modules in which they naturally belong.
 3. **Band 3 — UI / brand alignment.** During the Razor UI rebuild the
    application's colour scheme is realigned with **crashmedia.ca**.
 
@@ -29,6 +36,37 @@ This roadmap is therefore organised in three bands:
 ---
 
 ## Band 1 — Rewrite & cut-over *(top priority)*
+
+### Current focus *(end of slice R1b, Apr 2026)*
+
+Module 0 (wire-protocol spec + JSON test-vector corpus), slice **R1a**
+(`cmremote-wire` JSON round-trip + redacting `Debug`), slice **R1b**
+(MessagePack codec + byte-stable corpus round-trip), and the first
+security-gate items **S1** (`SECURITY.md` + coordinated-disclosure
+policy), **S2** (supply-chain CI via `cargo-deny`, `cargo-audit`,
+`dependency-review`, OSSF Scorecard, Dependabot), and **S3**
+([threat model document](docs/threat-model.md)) are merged. The slice
+R1b codec and the S1–S2 supply-chain gates were shipped in one PR by
+design so the gate caught the new `rmp-serde` dependency on the way in;
+S3 followed in the next PR.
+
+The next milestones, ordered so security work continues to land
+alongside functional work rather than behind it, are:
+
+1. **S4 — Fuzzing and parser hardening.** `cargo-fuzz` targets per wire
+   parser (`ConnectionInfo`, hub envelopes in JSON and MessagePack),
+   seeded from the corpus under `docs/wire-protocol-vectors/`, with a
+   nightly scheduled run that opens an issue on crash. Blocks slice R2.
+2. **R2 — Connection / heartbeat loop** (Rust agent connects to a dev
+   server over WebSocket and reconnects cleanly across restarts).
+3. **M1 scaffolding — first-boot setup wizard skeleton** (empty `/setup`
+   flow + `CMRemote.Setup.Completed` marker), so the migration path
+   (PR M) has a place to land incrementally. Parallelizable with
+   everything else.
+
+Item 1 is expected to land before any work on slice R2 begins. Item 3
+is parallelizable with slice R2 but must precede any work on the
+migration converter library (M2).
 
 ### 🟡 Track R — Rust agent + clean-room server *(now the lead track)*
 
@@ -46,6 +84,146 @@ below. Summary of the new tempo:
 - Any Package Manager work that has not already shipped (PRs C2, C3, D, E)
   is re-targeted at the clean-room codebase rather than added to the
   legacy one.
+
+### 🟡 Track S — Security & supply-chain baseline *(cross-cutting — S1 + S2 + S3 shipped)*
+
+Security is called out as a top-priority, standalone track rather than
+being left as scattered mentions inside the Rust slices. Items here gate
+every other track: a Track R slice does not ship until the Track S gate
+that would have caught the class of issue it might introduce is already
+green.
+
+**S1 — `SECURITY.md` + coordinated disclosure *(✅ shipped)*.** A
+top-level [`SECURITY.md`](SECURITY.md) ships with:
+
+- Names a single reporting channel (`security@crashmedia.ca`) and a
+  GPG-fingerprint-published PGP key for encrypted reports.
+- States the supported-versions matrix (currently: `v1-maintenance`
+  branch = security fixes only; `main` = pre-release, best-effort).
+- Pins a **90-day coordinated-disclosure window** with an explicit
+  fast-track for actively-exploited vulnerabilities.
+- Enables GitHub **private vulnerability reporting** on the repo so
+  outside reporters have a UI path in addition to email.
+- Points at the threat model (**S3**) for scope clarity: the Rust
+  agent, the .NET server, the wire protocol, and the migration
+  pipeline are all in scope; self-hosted deployments outside the
+  upstream-supported Docker image are best-effort.
+
+**S2 — Supply-chain CI gates *(✅ shipped — initial set)*.** Landed
+before the next functional Rust dependency so the gate caught
+`rmp-serde` (added for slice R1b) on the way in. Active gates:
+
+- **Rust:** [`agent-rs/deny.toml`](agent-rs/deny.toml) drives
+  `cargo-deny` with a licence allow-list, the RUSTSEC advisory DB,
+  a banned-crate list (`openssl-sys`, `ring` — we use rustls-based
+  TLS), and a crates.io-only source allow-list. `cargo-audit` runs
+  the same RUSTSEC DB as a second opinion.
+- **GitHub-native:** [`dependency-review`](.github/workflows/supply-chain.yml)
+  runs on every PR with the same licence allow-list and
+  `fail-on-severity: moderate`. The
+  [OSSF Scorecard](.github/workflows/scorecard.yml) workflow publishes
+  findings into the Security tab on push + weekly. Dependabot
+  ([`.github/dependabot.yml`](.github/dependabot.yml)) raises grouped
+  weekly version PRs and always-on security PRs for `cargo`
+  (`agent-rs/`), `nuget`, `github-actions`, and `docker`
+  (`docker-compose/`).
+- **Scheduled sweep:** the supply-chain workflow runs weekly against
+  `main` so an advisory published against an already-merged dependency
+  fails CI within 7 days.
+
+Still queued under S2 (not yet shipped): `cargo-vet` audit set,
+.NET `packages.lock.json` + `RestoreLockedMode=true` in CI, and
+`CODEOWNERS` gating on workflow / dependency manifests.
+
+**S3 — Threat model document *(✅ shipped)*.**
+[`docs/threat-model.md`](docs/threat-model.md) expands on the normative
+*Security model* section in `docs/wire-protocol.md` with:
+
+- A STRIDE-per-surface table: **agent↔server hub**, **server↔DB**,
+  **server↔browser (Razor / Blazor circuits + cookies)**,
+  **migration importer ↔ legacy SQLite/SqlServer/Postgres**,
+  **agent-upgrade pipeline (signed-build fetch)**,
+  **uploaded-MSI handling**, **WebRTC desktop transport**.
+- Explicit trust boundaries and where input validation is required on
+  each side of each boundary.
+- A short *Non-goals* section so reporters know what we explicitly do
+  not defend against (e.g. an operator who has root on the server
+  host, a local user already in the `Administrators` group on an
+  endpoint).
+- Owners and review cadence (reviewed at the start of every module
+  rewrite; re-reviewed when a trust boundary moves).
+
+**S4 — Fuzzing and parser hardening *(🔜, blocks slice R2)*.**
+
+- A `cargo-fuzz` target per wire parser: `ConnectionInfo` JSON, hub
+  envelopes (JSON and, once **R1b** lands, MessagePack). The corpus
+  seeds from `docs/wire-protocol-vectors/` and any crash found is
+  triaged into a `tests/vectors.rs` regression case before the fix
+  ships.
+- Nightly scheduled `cargo-fuzz` runs (15 min per target) via a
+  separate workflow that does not block PRs but opens an issue on
+  crash.
+- A `proptest` suite on the same surfaces for fast-feedback property
+  coverage during local development.
+- On the .NET side, the conformance runner queued for slice **R2a**
+  replays the same vector corpus against the server dispatch layer
+  so divergence is caught on both sides of the wire.
+
+**S5 — Release integrity: SBOM + signed builds *(🔜)*.**
+
+- Generate a **CycloneDX** SBOM for both the Rust agent
+  (`cargo-cyclonedx`) and the .NET server (`dotnet-CycloneDX`) on
+  every tagged release and attach it to the GitHub release assets.
+- Sign release binaries with **Sigstore cosign** in keyless mode from
+  the release workflow; publish both the signature and the
+  Rekor log entry as release assets.
+- Generate **SLSA v1.0** build provenance via the
+  `slsa-framework/slsa-github-generator` reusable workflow.
+- The agent installer (PR E / slice R8) refuses to install a build
+  whose cosign signature does not verify against the published
+  certificate identity, closing the loop between the release process
+  and the agent-upgrade pipeline (M3) which already requires a
+  SHA-256 match against the publisher manifest.
+
+**S6 — Secret-hygiene enforcement *(🔜, gated into CI)*.**
+
+- Add **gitleaks** as a PR gate (pre-commit hook + CI job) so
+  accidentally-committed tokens fail the build, not the audit log.
+- Add a unit test under `cmremote-platform` that asserts
+  `ConnectionInfo.json` is written with file-mode `0600` on Unix (the
+  spec already requires this; the test pins it) and an equivalent
+  ACL check on Windows.
+- Extend `ConnectionInfo`'s redacting `Debug` (shipped in slice R1a)
+  with a compile-time test (`trybuild` or a straight unit test) that
+  formatting the struct never contains the verification-token bytes.
+- Periodic **CodeQL** (already in the build workflow for .NET; extend
+  to Rust via the official action) scheduled weekly on `main` in
+  addition to per-PR runs.
+
+**S7 — Runtime security posture *(🔜, lands with server rewrite)*.**
+
+- Default strict **CSP**, **HSTS** (`includeSubDomains; preload`),
+  `X-Content-Type-Options: nosniff`, `Referrer-Policy:
+  strict-origin-when-cross-origin`, and a `Permissions-Policy` that
+  denies camera/microphone/geolocation by default on every response
+  from the Razor server. The WebRTC viewer opts back in on the
+  specific routes that need it.
+- Per-org **rate limits** on install-job dispatch (was PR D); pulled
+  forward to land with Module 4 (`Server.Hubs`) rather than waiting
+  until after the agent rewrite.
+- **Uploaded-MSI download URLs** signed with a short TTL + device-scoped
+  HMAC (was PR D); pulled forward to land with slice R6 so the Rust
+  agent never sees an unsigned variant.
+- An **immutable audit log** (was PR D) is re-scoped as a Track S
+  deliverable and lands with Module 3 (`Server.Services`) so every
+  subsequent module inherits it.
+
+**Sequencing.** S1 and S2 land before any further functional work on
+Track R. S4 lands before slice R2. S3 lands before Module 3. S5 lands
+before slice R8. S6 is staged across slice R1b (redacting-Debug test)
+and the server rewrite (gitleaks, CodeQL schedule). S7's items move
+from PR D into the module in which they naturally belong and are no
+longer deferred until after the rewrite.
 
 ### 🔜 PR M — Migration & cut-over from the legacy Docker image
 
@@ -257,7 +435,18 @@ this clutters the database with "dead" devices that will never reconnect.
   → purge, FK cascade, audit emission) and a deterministic clock-driven test
   for the cleanup sweeper.
 
-## 🔜 PR D — Hardening pass *before* the agent rewrite
+## 🔜 PR D — Hardening pass *before* the agent rewrite *(re-scoped — see Track S)*
+
+> **Note (Apr 2026):** the items originally batched under PR D have been
+> promoted into the cross-cutting **Track S — Security & supply-chain
+> baseline** in Band 1 and individually pulled forward into the modules
+> where they naturally belong:
+> audit log → Module 3 (`Server.Services`); per-org install-job rate
+> limits → Module 4 (`Server.Hubs`); signed uploaded-MSI download URLs
+> → slice R6; full-surface CodeQL re-run → Track S / S6 (weekly
+> scheduled run on `main`); CSP review → Track S / S7 (ships with the
+> server rewrite). PR D remains in the roadmap as a historical pointer;
+> it is no longer a single PR.
 
 - **Audit log**: every install / uninstall / upload / bundle-run gets an
   immutable row recording actor, target device, package, result, and the tail
@@ -367,7 +556,8 @@ agent and the Rust agent can run side-by-side until parity.
 | Slice | Scope | Exit criteria |
 |---|---|---|
 | **R0 — Workspace scaffold** ✅ | `agent-rs/Cargo.toml` workspace; crates `cmremote-wire`, `cmremote-platform`, `cmremote-agent`; structured logging (`tracing`); config loader for `ConnectionInfo.json` + CLI args; signal handling; CI (`cargo fmt`, `cargo clippy -D warnings`, `cargo test`). No network I/O yet. | Workspace builds clean on stable Rust. CI green. Provenance header on every file. |
-| **R1 — Wire types + test vectors** 🟡 *(in progress; this PR ships the JSON half)* | `cmremote-wire`: `ConnectionInfo`, hub envelopes (`HubInvocation` / `HubCompletion` / `HubPing` / `HubClose`), JSON round-trip, and a hand-written redacting `Debug` for `ConnectionInfo` so the verification token cannot leak via logs or panics. **Done so far:** corpus consumption via `tests/vectors.rs` (positive + negative connection-info, handshake, envelope). **Still pending:** `DeviceClientDto` and the rest of the method-surface DTOs (deferred to slice R2a's contract freeze) and the MessagePack codec (`rmp-serde`) — to land before R2's connection loop. | All vectors round-trip byte-for-byte across both encodings. |
+| **R1a — Wire types + JSON test vectors** ✅ *(shipped in PR #5)* | `cmremote-wire`: `ConnectionInfo`, hub envelopes (`HubInvocation` / `HubCompletion` / `HubPing` / `HubClose`), JSON round-trip, and a hand-written redacting `Debug` for `ConnectionInfo` so the verification token cannot leak via logs or panics. Corpus consumption via `tests/vectors.rs` (positive + negative connection-info, handshake, envelope). | All JSON vectors round-trip byte-for-byte; `cargo test` green on all three OSes. |
+| **R1b — MessagePack codec** ✅ | `rmp-serde` added to `cmremote-wire` with public `to_msgpack` / `from_msgpack` helpers funnelled through `WireError`. Every JSON vector in the corpus also round-trips byte-stably through MessagePack (`connection_info_valid_vectors_round_trip_through_msgpack`, `envelope_vectors_round_trip_through_msgpack`). Shipped alongside the Track S / S1–S2 security gates so the `cargo-deny` / `cargo-audit` / `dependency-review` stack caught the new dependency on the way in. **Still pending for slice R1 closeout:** the `cargo-fuzz` fuzz targets and `proptest` suite called for in Track S / S4 (tracked separately under S4; does not block R2 freeze but does block slice R2 merge). | All vectors round-trip byte-for-byte across both encodings; `cargo deny check` green on the new dep. |
 | **R2 — Connection / heartbeat loop** | WebSocket transport (`tokio-tungstenite`) speaking the SignalR JSON/MessagePack hub protocol re-derived from spec; reconnect with jittered backoff; heartbeat; graceful shutdown. | Agent stays connected to a CMRemote dev server for ≥ 24 h; reconnects across forced server restarts. |
 | **R3 — Device information** | Cross-platform device-info collector behind `cmremote-platform::DeviceInfoProvider`. Windows uses `windows-rs`; Linux reads `/proc` + `/etc/os-release`; macOS uses `sysctl`. Reports back over the hub. | Server displays a Rust-agent device with parity fields vs. .NET agent. |
 | **R4 — Process / script execution** | `argv`-only command execution (no shell). Per-OS shells: `pwsh`, `cmd`, `bash`, `zsh`. Output streamed back as chunked hub messages. **In-process PowerShell SDK is removed.** | All existing script tests pass against the Rust agent. |

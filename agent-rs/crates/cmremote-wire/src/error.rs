@@ -14,4 +14,12 @@ pub enum WireError {
     /// Underlying JSON (de)serialization failure.
     #[error(transparent)]
     Json(#[from] serde_json::Error),
+
+    /// MessagePack encode failure.
+    #[error("messagepack encode error: {0}")]
+    MsgPackEncode(#[from] rmp_serde::encode::Error),
+
+    /// MessagePack decode failure.
+    #[error("messagepack decode error: {0}")]
+    MsgPackDecode(#[from] rmp_serde::decode::Error),
 }
