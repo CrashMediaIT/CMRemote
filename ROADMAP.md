@@ -37,35 +37,36 @@ This roadmap is therefore organised in three bands:
 
 ## Band 1 — Rewrite & cut-over *(top priority)*
 
-### Current focus *(end of slice R1b, Apr 2026)*
+### Current focus *(end of slice R1b / S4, Apr 2026)*
 
 Module 0 (wire-protocol spec + JSON test-vector corpus), slice **R1a**
 (`cmremote-wire` JSON round-trip + redacting `Debug`), slice **R1b**
-(MessagePack codec + byte-stable corpus round-trip), and the first
+(MessagePack codec + byte-stable corpus round-trip), the first
 security-gate items **S1** (`SECURITY.md` + coordinated-disclosure
 policy), **S2** (supply-chain CI via `cargo-deny`, `cargo-audit`,
-`dependency-review`, OSSF Scorecard, Dependabot), and **S3**
-([threat model document](docs/threat-model.md)) are merged. The slice
-R1b codec and the S1–S2 supply-chain gates were shipped in one PR by
-design so the gate caught the new `rmp-serde` dependency on the way in;
-S3 followed in the next PR.
+`dependency-review`, OSSF Scorecard, Dependabot), **S3**
+([threat model document](docs/threat-model.md)), and **S4** (fuzzing
+and parser hardening — `proptest` suite on stable + `cargo-fuzz`
+targets under `agent-rs/crates/cmremote-wire/fuzz/` seeded from the
+corpus + nightly scheduled workflow
+[`fuzz.yml`](.github/workflows/fuzz.yml)) are merged. The slice R1b
+codec and the S1–S2 supply-chain gates were shipped in one PR by
+design so the gate caught the new `rmp-serde` dependency on the way
+in; S3 followed in the next PR; S4 landed next, unblocking slice R2.
 
 The next milestones, ordered so security work continues to land
 alongside functional work rather than behind it, are:
 
-1. **S4 — Fuzzing and parser hardening.** `cargo-fuzz` targets per wire
-   parser (`ConnectionInfo`, hub envelopes in JSON and MessagePack),
-   seeded from the corpus under `docs/wire-protocol-vectors/`, with a
-   nightly scheduled run that opens an issue on crash. Blocks slice R2.
-2. **R2 — Connection / heartbeat loop** (Rust agent connects to a dev
-   server over WebSocket and reconnects cleanly across restarts).
-3. **M1 scaffolding — first-boot setup wizard skeleton** (empty `/setup`
+1. **R2 — Connection / heartbeat loop** (Rust agent connects to a dev
+   server over WebSocket and reconnects cleanly across restarts). Now
+   unblocked — S4's fuzz + proptest coverage gates R2's new parser
+   surfaces on the way in.
+2. **M1 scaffolding — first-boot setup wizard skeleton** (empty `/setup`
    flow + `CMRemote.Setup.Completed` marker), so the migration path
    (PR M) has a place to land incrementally. Parallelizable with
    everything else.
 
-Item 1 is expected to land before any work on slice R2 begins. Item 3
-is parallelizable with slice R2 but must precede any work on the
+Item 2 is parallelizable with slice R2 but must precede any work on the
 migration converter library (M2).
 
 ### 🟡 Track R — Rust agent + clean-room server *(now the lead track)*
@@ -85,7 +86,7 @@ below. Summary of the new tempo:
   is re-targeted at the clean-room codebase rather than added to the
   legacy one.
 
-### 🟡 Track S — Security & supply-chain baseline *(cross-cutting — S1 + S2 + S3 shipped)*
+### 🟡 Track S — Security & supply-chain baseline *(cross-cutting — S1 + S2 + S3 + S4 shipped)*
 
 Security is called out as a top-priority, standalone track rather than
 being left as scattered mentions inside the Rust slices. Items here gate
@@ -153,18 +154,29 @@ Still queued under S2 (not yet shipped): `cargo-vet` audit set,
 - Owners and review cadence (reviewed at the start of every module
   rewrite; re-reviewed when a trust boundary moves).
 
-**S4 — Fuzzing and parser hardening *(🔜, blocks slice R2)*.**
+**S4 — Fuzzing and parser hardening *(✅ shipped)*.**
 
 - A `cargo-fuzz` target per wire parser: `ConnectionInfo` JSON, hub
-  envelopes (JSON and, once **R1b** lands, MessagePack). The corpus
-  seeds from `docs/wire-protocol-vectors/` and any crash found is
+  envelopes (JSON and MessagePack). The
+  targets live in a dedicated out-of-workspace crate at
+  [`agent-rs/crates/cmremote-wire/fuzz/`](agent-rs/crates/cmremote-wire/fuzz/)
+  so the nightly-only `libfuzzer-sys` dependency does not leak into
+  the stable workspace. The corpus seeds from
+  `docs/wire-protocol-vectors/` at workflow time; any crash found is
   triaged into a `tests/vectors.rs` regression case before the fix
   ships.
-- Nightly scheduled `cargo-fuzz` runs (15 min per target) via a
-  separate workflow that does not block PRs but opens an issue on
-  crash.
-- A `proptest` suite on the same surfaces for fast-feedback property
-  coverage during local development.
+- Nightly scheduled `cargo-fuzz` runs (15 min per target) via
+  [`.github/workflows/fuzz.yml`](.github/workflows/fuzz.yml). The
+  workflow does not block PRs, uploads the minimised reproducer as a
+  workflow artifact, and opens a deduplicated GitHub issue labelled
+  `fuzz,security` on crash.
+- A `proptest` suite on the same surfaces
+  ([`crates/cmremote-wire/tests/proptest_parsers.rs`](agent-rs/crates/cmremote-wire/tests/proptest_parsers.rs))
+  for fast-feedback property coverage on stable. The suite pins three
+  invariants per type: JSON round-trip, MessagePack round-trip with
+  byte-stable re-encode, and "arbitrary bytes never panic the
+  decoder". It runs on every PR alongside the existing vector
+  conformance tests.
 - On the .NET side, the conformance runner queued for slice **R2a**
   replays the same vector corpus against the server dispatch layer
   so divergence is caught on both sides of the wire.
@@ -219,11 +231,11 @@ Still queued under S2 (not yet shipped): `cargo-vet` audit set,
   subsequent module inherits it.
 
 **Sequencing.** S1 and S2 land before any further functional work on
-Track R. S4 lands before slice R2. S3 lands before Module 3. S5 lands
-before slice R8. S6 is staged across slice R1b (redacting-Debug test)
-and the server rewrite (gitleaks, CodeQL schedule). S7's items move
-from PR D into the module in which they naturally belong and are no
-longer deferred until after the rewrite.
+Track R. S4 lands before slice R2 *(shipped)*. S3 lands before Module 3.
+S5 lands before slice R8. S6 is staged across slice R1b
+(redacting-Debug test) and the server rewrite (gitleaks, CodeQL
+schedule). S7's items move from PR D into the module in which they
+naturally belong and are no longer deferred until after the rewrite.
 
 ### 🔜 PR M — Migration & cut-over from the legacy Docker image
 
@@ -557,7 +569,7 @@ agent and the Rust agent can run side-by-side until parity.
 |---|---|---|
 | **R0 — Workspace scaffold** ✅ | `agent-rs/Cargo.toml` workspace; crates `cmremote-wire`, `cmremote-platform`, `cmremote-agent`; structured logging (`tracing`); config loader for `ConnectionInfo.json` + CLI args; signal handling; CI (`cargo fmt`, `cargo clippy -D warnings`, `cargo test`). No network I/O yet. | Workspace builds clean on stable Rust. CI green. Provenance header on every file. |
 | **R1a — Wire types + JSON test vectors** ✅ *(shipped in PR #5)* | `cmremote-wire`: `ConnectionInfo`, hub envelopes (`HubInvocation` / `HubCompletion` / `HubPing` / `HubClose`), JSON round-trip, and a hand-written redacting `Debug` for `ConnectionInfo` so the verification token cannot leak via logs or panics. Corpus consumption via `tests/vectors.rs` (positive + negative connection-info, handshake, envelope). | All JSON vectors round-trip byte-for-byte; `cargo test` green on all three OSes. |
-| **R1b — MessagePack codec** ✅ | `rmp-serde` added to `cmremote-wire` with public `to_msgpack` / `from_msgpack` helpers funnelled through `WireError`. Every JSON vector in the corpus also round-trips byte-stably through MessagePack (`connection_info_valid_vectors_round_trip_through_msgpack`, `envelope_vectors_round_trip_through_msgpack`). Shipped alongside the Track S / S1–S2 security gates so the `cargo-deny` / `cargo-audit` / `dependency-review` stack caught the new dependency on the way in. **Still pending for slice R1 closeout:** the `cargo-fuzz` fuzz targets and `proptest` suite called for in Track S / S4 (tracked separately under S4; does not block R2 freeze but does block slice R2 merge). | All vectors round-trip byte-for-byte across both encodings; `cargo deny check` green on the new dep. |
+| **R1b — MessagePack codec** ✅ | `rmp-serde` added to `cmremote-wire` with public `to_msgpack` / `from_msgpack` helpers funnelled through `WireError`. Every JSON vector in the corpus also round-trips byte-stably through MessagePack (`connection_info_valid_vectors_round_trip_through_msgpack`, `envelope_vectors_round_trip_through_msgpack`). Shipped alongside the Track S / S1–S2 security gates so the `cargo-deny` / `cargo-audit` / `dependency-review` stack caught the new dependency on the way in. Track S / S4 (fuzz targets + `proptest` suite + nightly workflow) followed in a separate PR and closed the slice R1 parser-hardening work. | All vectors round-trip byte-for-byte across both encodings; `cargo deny check` green on the new dep. |
 | **R2 — Connection / heartbeat loop** | WebSocket transport (`tokio-tungstenite`) speaking the SignalR JSON/MessagePack hub protocol re-derived from spec; reconnect with jittered backoff; heartbeat; graceful shutdown. | Agent stays connected to a CMRemote dev server for ≥ 24 h; reconnects across forced server restarts. |
 | **R3 — Device information** | Cross-platform device-info collector behind `cmremote-platform::DeviceInfoProvider`. Windows uses `windows-rs`; Linux reads `/proc` + `/etc/os-release`; macOS uses `sysctl`. Reports back over the hub. | Server displays a Rust-agent device with parity fields vs. .NET agent. |
 | **R4 — Process / script execution** | `argv`-only command execution (no shell). Per-OS shells: `pwsh`, `cmd`, `bash`, `zsh`. Output streamed back as chunked hub messages. **In-process PowerShell SDK is removed.** | All existing script tests pass against the Rust agent. |
