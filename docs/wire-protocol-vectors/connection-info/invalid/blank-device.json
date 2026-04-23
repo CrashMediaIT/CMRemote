@@ -1,0 +1,6 @@
+{
+  "_reject_reason": "DeviceID must be a non-blank UUID; whitespace-only is rejected.",
+  "DeviceID": "   ",
+  "Host": "https://cmremote.example.com",
+  "OrganizationID": "org-4"
+}

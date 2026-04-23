@@ -6,6 +6,8 @@
 //! agent so that an upgrade-in-place from the .NET agent to the Rust
 //! agent does not require operators to rewrite their config.
 
+use std::fmt;
+
 use serde::{Deserialize, Serialize};
 
 use crate::error::WireError;
@@ -15,7 +17,13 @@ use crate::error::WireError;
 /// Field names match the legacy on-disk format intentionally (note the
 /// all-caps `ID` suffix) — see the "Bootstrap configuration" section of
 /// `docs/wire-protocol.md`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// **Security note:** the `Debug` implementation is hand-written and
+/// **redacts** `server_verification_token`. The spec mandates that the
+/// token never appears in logs, panic output, or diagnostics bundles.
+/// Deriving `Debug` would silently leak it; do not change this back to
+/// a derive without revisiting the spec.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConnectionInfo {
     /// Stable per-device identifier. Generated on first run if absent.
     #[serde(rename = "DeviceID", default = "ConnectionInfo::new_device_id")]
@@ -89,6 +97,27 @@ impl Default for ConnectionInfo {
     }
 }
 
+impl fmt::Debug for ConnectionInfo {
+    /// Hand-written `Debug` that **redacts** `server_verification_token`
+    /// so the token never reaches a log, panic, or diagnostics bundle.
+    /// See `docs/wire-protocol.md` ➜ *Security model* ➜ *On-disk secret
+    /// hygiene*.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ConnectionInfo")
+            .field("device_id", &self.device_id)
+            .field("host", &self.host)
+            .field("organization_id", &self.organization_id)
+            .field(
+                "server_verification_token",
+                &self
+                    .server_verification_token
+                    .as_ref()
+                    .map(|_| "<redacted>"),
+            )
+            .finish()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -151,5 +180,38 @@ mod tests {
         let re = serde_json::to_string(&info).unwrap();
         assert!(re.contains("\"DeviceID\""));
         assert!(re.contains("\"OrganizationID\""));
+    }
+
+    #[test]
+    fn debug_redacts_server_verification_token() {
+        // Pinned by `docs/wire-protocol.md` ➜ Security model: the
+        // verification token must never appear in logs or panics.
+        let info = ConnectionInfo {
+            device_id: "dev-1".into(),
+            host: Some("https://cmremote.example.com".into()),
+            organization_id: Some("org-1".into()),
+            server_verification_token: Some("svt_super_secret_value".into()),
+        };
+        let rendered = format!("{info:?}");
+        assert!(
+            !rendered.contains("svt_super_secret_value"),
+            "Debug output leaked the verification token: {rendered}"
+        );
+        assert!(
+            rendered.contains("<redacted>"),
+            "Debug output should mark the token as redacted: {rendered}"
+        );
+    }
+
+    #[test]
+    fn debug_omits_token_marker_when_absent() {
+        let info = ConnectionInfo {
+            device_id: "dev-2".into(),
+            host: Some("https://cmremote.example.com".into()),
+            organization_id: Some("org-1".into()),
+            server_verification_token: None,
+        };
+        let rendered = format!("{info:?}");
+        assert!(rendered.contains("server_verification_token: None"));
     }
 }
