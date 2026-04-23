@@ -44,4 +44,10 @@ public class Organization
 
     public ICollection<RemotelyUser> RemotelyUsers { get; set; } = [];
     public ICollection<SharedFile> SharedFiles { get; set; } = [];
+
+    public ICollection<Package> Packages { get; set; } = [];
+
+    public ICollection<DeploymentBundle> DeploymentBundles { get; set; } = [];
+
+    public ICollection<PackageInstallJob> PackageInstallJobs { get; set; } = [];
 }

@@ -32,6 +32,11 @@ public class AppDb : IdentityDbContext
     public DbSet<DeviceGroup> DeviceGroups { get; set; }
     public DbSet<Device> Devices { get; set; }
     public DbSet<DeviceInstalledApplicationsSnapshot> DeviceInstalledApplicationsSnapshots { get; set; }
+    public DbSet<Package> Packages { get; set; }
+    public DbSet<DeploymentBundle> DeploymentBundles { get; set; }
+    public DbSet<BundleItem> BundleItems { get; set; }
+    public DbSet<PackageInstallJob> PackageInstallJobs { get; set; }
+    public DbSet<PackageInstallResult> PackageInstallResults { get; set; }
     public DbSet<InviteLink> InviteLinks { get; set; }
     public DbSet<KeyValueRecord> KeyValueRecords { get; set; }
     public DbSet<Organization> Organizations { get; set; }
@@ -180,6 +185,61 @@ public class AppDb : IdentityDbContext
             .HasOne(x => x.Device)
             .WithOne()
             .HasForeignKey<DeviceInstalledApplicationsSnapshot>(x => x.DeviceId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        builder.Entity<Organization>()
+            .HasMany(x => x.Packages)
+            .WithOne(x => x.Organization!)
+            .HasForeignKey(x => x.OrganizationID)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        builder.Entity<Organization>()
+            .HasMany(x => x.DeploymentBundles)
+            .WithOne(x => x.Organization!)
+            .HasForeignKey(x => x.OrganizationID)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        builder.Entity<Organization>()
+            .HasMany(x => x.PackageInstallJobs)
+            .WithOne(x => x.Organization!)
+            .HasForeignKey(x => x.OrganizationID)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        builder.Entity<DeploymentBundle>()
+            .HasMany(x => x.Items)
+            .WithOne(x => x.DeploymentBundle!)
+            .HasForeignKey(x => x.DeploymentBundleId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        builder.Entity<BundleItem>()
+            .HasOne(x => x.Package)
+            .WithMany()
+            .HasForeignKey(x => x.PackageId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        builder.Entity<PackageInstallJob>()
+            .HasOne(x => x.Package)
+            .WithMany()
+            .HasForeignKey(x => x.PackageId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        builder.Entity<PackageInstallJob>()
+            .HasOne(x => x.DeploymentBundle)
+            .WithMany()
+            .HasForeignKey(x => x.DeploymentBundleId)
+            .IsRequired(false)
+            .OnDelete(DeleteBehavior.SetNull);
+
+        builder.Entity<PackageInstallJob>()
+            .HasIndex(x => new { x.OrganizationID, x.Status });
+
+        builder.Entity<PackageInstallJob>()
+            .HasIndex(x => x.DeviceId);
+
+        builder.Entity<PackageInstallResult>()
+            .HasOne(x => x.PackageInstallJob)
+            .WithOne(x => x.Result!)
+            .HasForeignKey<PackageInstallResult>(x => x.PackageInstallJobId)
             .OnDelete(DeleteBehavior.Cascade);
 
         builder.Entity<DeviceGroup>()

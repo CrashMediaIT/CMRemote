@@ -47,6 +47,7 @@ public class AgentHubTests
             remoteControlSessions.Object,
             messenger.Object,
             new Mock<IInstalledApplicationsService>().Object,
+            new Mock<IPackageInstallJobService>().Object,
             new SystemTime(),
             logger.Object);
 
@@ -92,6 +93,7 @@ public class AgentHubTests
             remoteControlSessions.Object,
             messenger.Object,
             new Mock<IInstalledApplicationsService>().Object,
+            new Mock<IPackageInstallJobService>().Object,
             new SystemTime(),
             logger.Object);
 
