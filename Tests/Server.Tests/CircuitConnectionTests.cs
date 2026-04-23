@@ -64,6 +64,7 @@ public class CircuitConnectionTests
             new Mock<IInstalledApplicationsService>().Object,
             new Mock<IPackageService>().Object,
             new Mock<IPackageInstallJobService>().Object,
+            new Mock<IUploadedMsiService>().Object,
             _messenger.Object,
             _logger.Object);
     }

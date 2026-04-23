@@ -103,6 +103,7 @@ public class CircuitConnection : CircuitHandler, ICircuitConnection
     private readonly IInstalledApplicationsService _installedApplicationsService;
     private readonly IPackageService _packageService;
     private readonly IPackageInstallJobService _packageInstallJobService;
+    private readonly IUploadedMsiService _uploadedMsiService;
     private readonly ISelectedCardsStore _cardStore;
     private readonly IAuthService _authService;
     private readonly ICircuitManager _circuitManager;
@@ -127,6 +128,7 @@ public class CircuitConnection : CircuitHandler, ICircuitConnection
         IInstalledApplicationsService installedApplicationsService,
         IPackageService packageService,
         IPackageInstallJobService packageInstallJobService,
+        IUploadedMsiService uploadedMsiService,
         IMessenger messenger,
         ILogger<CircuitConnection> logger)
     {
@@ -142,6 +144,7 @@ public class CircuitConnection : CircuitHandler, ICircuitConnection
         _installedApplicationsService = installedApplicationsService;
         _packageService = packageService;
         _packageInstallJobService = packageInstallJobService;
+        _uploadedMsiService = uploadedMsiService;
         _messenger = messenger;
         _logger = logger;
     }
@@ -767,6 +770,40 @@ public class CircuitConnection : CircuitHandler, ICircuitConnection
             Version = package.Version,
             InstallArguments = package.InstallArguments,
         };
+
+        // For UploadedMsi packages we hand the agent the SharedFile id +
+        // SHA-256 + a short-lived expiring token. The agent fetches
+        // /api/filesharing/{id} with X-Expiring-Token, re-hashes the
+        // bytes, and refuses to install on mismatch.
+        if (package.Provider == PackageProvider.UploadedMsi &&
+            Guid.TryParse(package.PackageIdentifier, out var msiId))
+        {
+            var msi = await _uploadedMsiService.GetAsync(User.OrganizationID, msiId);
+            if (msi is null || msi.IsTombstoned)
+            {
+                _logger.LogWarning(
+                    "Refusing to dispatch MSI job — the referenced UploadedMsi is missing " +
+                    "or tombstoned. JobId={jobId} MsiId={msiId}",
+                    jobId, msiId);
+                await _packageInstallJobService.CompleteJobAsync(jobId, new PackageInstallResultDto
+                {
+                    JobId = jobId.ToString("D"),
+                    Success = false,
+                    ExitCode = -1,
+                    ErrorMessage = "Uploaded MSI is no longer available.",
+                });
+                return;
+            }
+
+            // 5-minute window matches the existing TransferFileFromBrowserToAgent
+            // path — long enough for a slow link to start the download
+            // but too short for a leaked token to be useful.
+            var authToken = _expiringTokenService.GetToken(Time.Now.AddMinutes(5));
+            request.MsiSharedFileId = msi.SharedFileId;
+            request.MsiAuthToken = authToken;
+            request.MsiSha256 = msi.Sha256;
+            request.MsiFileName = msi.FileName;
+        }
 
         await _agentHubContext.Clients.Client(connectionId).InstallPackage(request);
     }

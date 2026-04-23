@@ -115,6 +115,25 @@ public class PackageService : IPackageService
             return Result.Fail<Package>(
                 "Invalid Chocolatey package id. Use lowercase letters, digits, '.', '-' or '_'.");
         }
+        if (package.Provider == PackageProvider.UploadedMsi)
+        {
+            if (!Guid.TryParse(package.PackageIdentifier, out var msiId))
+            {
+                return Result.Fail<Package>(
+                    "Invalid Uploaded MSI reference. Expected the GUID of an UploadedMsi row.");
+            }
+            using var probeDb = _dbFactory.GetContext();
+            var msiExists = await probeDb.UploadedMsis
+                .AsNoTracking()
+                .AnyAsync(m => m.Id == msiId &&
+                               m.OrganizationID == organizationId &&
+                               !m.IsTombstoned);
+            if (!msiExists)
+            {
+                return Result.Fail<Package>(
+                    "Uploaded MSI not found in this organization (or it has been deleted).");
+            }
+        }
 
         using var db = _dbFactory.GetContext();
 

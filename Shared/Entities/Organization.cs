@@ -50,4 +50,6 @@ public class Organization
     public ICollection<DeploymentBundle> DeploymentBundles { get; set; } = [];
 
     public ICollection<PackageInstallJob> PackageInstallJobs { get; set; } = [];
+
+    public ICollection<UploadedMsi> UploadedMsis { get; set; } = [];
 }

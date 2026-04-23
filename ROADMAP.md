@@ -43,21 +43,31 @@ features ship to users first.
 
 ---
 
-## 🔜 PR C1 — Silent MSI upload + install
+## ✅ PR C1 — Silent MSI upload + install *(this PR)*
 
-- **`UploadedMsi`** entity (org-scoped). Upload via Razor form → stored under
-  `SharedFiles` with **SHA-256** + magic-byte validation
-  (`D0 CF 11 E0 A1 B1 1A E1` MSI / OLE2 header), max-size cap, antivirus-friendly
-  streaming.
-- **Agent: `MsiPackageInstaller`** — downloads via signed short-lived URL,
-  verifies SHA-256, runs:
+- **`UploadedMsi`** entity (org-scoped, FK to `SharedFile`). Upload via Razor form
+  with **SHA-256** + magic-byte validation (`D0 CF 11 E0 A1 B1 1A E1` MSI / OLE2
+  header), max-size cap (2 GiB), org-scoped dedupe by SHA-256.
+- **`IUploadedMsiService`**: CRUD + tombstone-then-purge workflow so deletes
+  cannot orphan in-flight `PackageInstallJob`s.
+- **`MsiFileValidator`** in `Shared` — magic-byte + SHA-256 + filename
+  sanitisation helpers shared by server (on upload) and agent (on download).
+- **Agent: `MsiPackageInstaller`** — fetches via short-lived `X-Expiring-Token`,
+  re-checks magic bytes, re-hashes SHA-256, runs:
   ```
   msiexec /i <file> /qn /norestart /L*v <log>
   ```
-  and uploads the verbose log on failure.
-- WebUI under **Uploaded MSIs**: list, upload, delete, *Send to device* button
-  (Windows-only, online devices).
+  Returns the verbose log tail on failure. Recognises `0`, `3010`, `1641` as
+  success exit codes.
+- **`CompositePackageProvider`** routes by `PackageProvider` so the hub keeps a
+  single `IPackageProvider` dependency.
+- **`CircuitConnection.DispatchJobAsync`** mints a 5-minute expiring token and
+  populates `MsiSharedFileId` / `MsiAuthToken` / `MsiSha256` / `MsiFileName`
+  on the wire when `Provider == UploadedMsi`.
+- WebUI under **Uploaded MSIs**: list, upload, delete, register-as-Package, and
+  *Send to device* (Windows-only, online devices).
 - Deletes are **tombstoned** — only purged after no in-flight jobs reference them.
+- EF migrations for SQLite, SQL Server, and PostgreSQL.
 
 ## 🔜 PR C2 — Executable Package Builder + Deployment Bundles
 
