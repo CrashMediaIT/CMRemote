@@ -37,7 +37,7 @@ This roadmap is therefore organised in three bands:
 
 ## Band 1 — Rewrite & cut-over *(top priority)*
 
-### Current focus *(end of slice R1b / S4, Apr 2026)*
+### Current focus *(end of slice R1b / S4 / M1 scaffold, Apr 2026)*
 
 Module 0 (wire-protocol spec + JSON test-vector corpus), slice **R1a**
 (`cmremote-wire` JSON round-trip + redacting `Debug`), slice **R1b**
@@ -45,14 +45,20 @@ Module 0 (wire-protocol spec + JSON test-vector corpus), slice **R1a**
 security-gate items **S1** (`SECURITY.md` + coordinated-disclosure
 policy), **S2** (supply-chain CI via `cargo-deny`, `cargo-audit`,
 `dependency-review`, OSSF Scorecard, Dependabot), **S3**
-([threat model document](docs/threat-model.md)), and **S4** (fuzzing
+([threat model document](docs/threat-model.md)), **S4** (fuzzing
 and parser hardening — `proptest` suite on stable + `cargo-fuzz`
 targets under `agent-rs/crates/cmremote-wire/fuzz/` seeded from the
 corpus + nightly scheduled workflow
-[`fuzz.yml`](.github/workflows/fuzz.yml)) are merged. The slice R1b
-codec and the S1–S2 supply-chain gates were shipped in one PR by
-design so the gate caught the new `rmp-serde` dependency on the way
-in; S3 followed in the next PR; S4 landed next, unblocking slice R2.
+[`fuzz.yml`](.github/workflows/fuzz.yml)), and the **M1 scaffolding**
+slice (empty `/setup` flow + `CMRemote.Setup.Completed` marker stored
+in `KeyValueRecords`, redirect middleware that routes uncompleted
+setups to `/setup`, and a startup heuristic that auto-marks any
+already-populated database so existing deployments are not hijacked
+into the wizard) are merged. The slice R1b codec and the S1–S2
+supply-chain gates were shipped in one PR by design so the gate caught
+the new `rmp-serde` dependency on the way in; S3 followed in the next
+PR; S4 landed next, unblocking slice R2; the M1 scaffolding landed
+alongside, unblocking M2.
 
 The next milestones, ordered so security work continues to land
 alongside functional work rather than behind it, are:
@@ -61,13 +67,13 @@ alongside functional work rather than behind it, are:
    server over WebSocket and reconnects cleanly across restarts). Now
    unblocked — S4's fuzz + proptest coverage gates R2's new parser
    surfaces on the way in.
-2. **M1 scaffolding — first-boot setup wizard skeleton** (empty `/setup`
-   flow + `CMRemote.Setup.Completed` marker), so the migration path
-   (PR M) has a place to land incrementally. Parallelizable with
-   everything else.
+2. **M2 — Schema converter library** (`CMRemote.Migration.Legacy`
+   project + `cmremote migrate` CLI). Now unblocked by the M1
+   scaffold; lands the per-version row-converter functions that the
+   wizard's import step (M1.3) and headless / scripted migrations
+   both consume.
 
-Item 2 is parallelizable with slice R2 but must precede any work on the
-migration converter library (M2).
+Both milestones are parallelizable.
 
 ### 🟡 Track R — Rust agent + clean-room server *(now the lead track)*
 
@@ -244,8 +250,23 @@ operator must be able to drop the new image in *on top of* the existing
 volume / database / agent fleet without losing data and without bricking
 agents that happen to be offline that day. PR M delivers that path.
 
-**M1 — First-boot setup wizard.** On first start, if no `appsettings`
-database connection string is configured **and** no
+**M1 — First-boot setup wizard.** *(🟡 in progress — scaffolding shipped.)*
+The skeleton landed in this slice: a `/setup` Razor page rendered through
+a minimal `EmptyLayout`, an `ISetupStateService` backed by a fixed-Guid row
+in `KeyValueRecords` for the `CMRemote.Setup.Completed` marker, a
+`SetupRedirectMiddleware` that forwards uncompleted setups to `/setup`
+(with framework / static / `.well-known` paths allowlisted and non-GET
+requests answered with `503 + Retry-After: 30` so partially-upgraded
+clients don't silently drop state), and a startup heuristic that
+auto-writes the marker when the database already contains an
+organisation, user, or device — so existing deployments are never
+hijacked into the wizard on upgrade. The placeholder page lays out the
+five steps below so subsequent slices can land incrementally; the steps
+themselves are not yet implemented and the page exposes a
+*"Mark setup complete"* action so an operator can dismiss the wizard
+while the real wizard logic is still being built.
+
+On first start, if no `appsettings` database connection string is configured **and** no
 `CMRemote.Setup.Completed` marker row exists, every request is redirected
 to `/setup`. The wizard is a small server-rendered flow (no auth — it is
 only reachable while the marker is unset; the wizard refuses to load once

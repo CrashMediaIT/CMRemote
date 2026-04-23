@@ -14,6 +14,7 @@ using Remotely.Server.Auth;
 using Remotely.Server.Components.Account;
 using Remotely.Server.Data;
 using Remotely.Server.Hubs;
+using Remotely.Server.Middleware;
 using Remotely.Server.Models;
 using Remotely.Server.Options;
 using Remotely.Server.Services;
@@ -265,6 +266,8 @@ services.AddScoped<IInstalledApplicationsService, InstalledApplicationsService>(
 services.AddScoped<IPackageService, PackageService>();
 services.AddScoped<IPackageInstallJobService, PackageInstallJobService>();
 services.AddScoped<IUploadedMsiService, UploadedMsiService>();
+// First-boot setup wizard skeleton (ROADMAP.md "M1 — First-boot setup wizard").
+services.AddScoped<ISetupStateService, SetupStateService>();
 services.AddHostedService<RemoteControlSessionCleaner>();
 services.AddHostedService<RemoteControlSessionReconnector>();
 
@@ -307,6 +310,11 @@ ConfigureStaticFiles();
 
 app.UseRouting();
 
+// Redirect uncompleted first-boot setups to /setup. Must come after
+// UseRouting (so PathString segment matches work as expected) but before
+// auth so the wizard is reachable without a signed-in user.
+app.UseMiddleware<SetupRedirectMiddleware>();
+
 app.UseAuthentication();
 app.UseAuthorization();
 app.UseCors("TrustedOriginPolicy");
@@ -331,6 +339,13 @@ using (var scope = app.Services.CreateScope())
 
     await dataService.SetAllDevicesNotOnline();
     await dataService.CleanupOldRecords();
+
+    // First-boot setup wizard (ROADMAP.md "M1 — First-boot setup wizard"):
+    // if the database already contains operator-visible state, write the
+    // CMRemote.Setup.Completed marker so existing deployments are not
+    // hijacked into the wizard on upgrade.
+    var setupState = scope.ServiceProvider.GetRequiredService<ISetupStateService>();
+    await setupState.EnsureMarkerForExistingDeploymentAsync();
 }
 
 await app.RunAsync();
