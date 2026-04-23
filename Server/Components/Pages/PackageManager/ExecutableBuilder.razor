@@ -1,0 +1,15 @@
+@page "/packages/executables"
+@attribute [Authorize(Policy = PolicyNames.PackageManagerRequired)]
+@inherits AuthComponentBase
+@using Remotely.Server.Auth
+
+<PageTitle>Package Manager — Executable Builder</PageTitle>
+
+<h2>Executable Package Builder</h2>
+
+<div class="alert alert-info">
+    <strong>Coming soon.</strong>
+    Operator-defined executable packages (download URL or uploaded blob, silent-install switches,
+    success exit codes <code>0,3010,1641</code>, optional SHA-256 pin) ship in PR&nbsp;C2 alongside the
+    bundle runner. See <a href="https://github.com/CrashMediaIT/CMRemote/blob/main/ROADMAP.md">ROADMAP.md</a>.
+</div>

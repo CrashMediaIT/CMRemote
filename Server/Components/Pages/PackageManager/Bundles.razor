@@ -1,0 +1,146 @@
+@page "/packages/bundles"
+@attribute [Authorize(Policy = PolicyNames.PackageManagerRequired)]
+@inherits AuthComponentBase
+
+@using Remotely.Server.Auth
+@using Remotely.Shared.Entities
+
+<PageTitle>Package Manager — Deployment Bundles</PageTitle>
+
+<div class="d-flex flex-column gap-3">
+    <h2 class="mb-0">Deployment Bundles</h2>
+    <p class="text-muted small mb-0">
+        Group multiple packages together and dispatch them to a set of devices in declared order.
+        Phase 2 only ships Chocolatey items — MSI and Executable items will be addable in a later release.
+    </p>
+
+    <div class="card">
+        <div class="card-header">Create bundle</div>
+        <div class="card-body">
+            <div class="row g-2 align-items-end">
+                <div class="col-md-4">
+                    <label class="form-label">Name</label>
+                    <input class="form-control" @bind="_newName" />
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label">Description (optional)</label>
+                    <input class="form-control" @bind="_newDescription" />
+                </div>
+                <div class="col-md-2">
+                    <button type="button" class="btn btn-primary w-100"
+                            @onclick="HandleCreateBundle"
+                            disabled="@(_isWorking || string.IsNullOrWhiteSpace(_newName))">
+                        Create
+                    </button>
+                </div>
+            </div>
+            @if (!string.IsNullOrEmpty(_createError))
+            {
+                <div class="alert alert-danger py-1 px-2 small mt-2 mb-0">@_createError</div>
+            }
+        </div>
+    </div>
+
+    @foreach (var bundle in _bundles)
+    {
+        <div class="card" @key="bundle.Id">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <div>
+                    <strong>@bundle.Name</strong>
+                    @if (!string.IsNullOrWhiteSpace(bundle.Description))
+                    {
+                        <span class="text-muted small ms-2">— @bundle.Description</span>
+                    }
+                </div>
+                <div class="d-flex gap-2">
+                    <button class="btn btn-sm btn-outline-danger"
+                            @onclick="() => HandleDeleteBundle(bundle.Id)"
+                            disabled="@_isWorking">
+                        Delete bundle
+                    </button>
+                </div>
+            </div>
+            <div class="card-body">
+                <table class="table table-sm align-middle mb-3">
+                    <thead>
+                        <tr>
+                            <th style="width:5em">Order</th>
+                            <th>Package</th>
+                            <th>Provider</th>
+                            <th>Continue on failure</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @if (bundle.Items.Count == 0)
+                        {
+                            <tr>
+                                <td colspan="5" class="text-center text-muted small py-2">
+                                    No items yet.
+                                </td>
+                            </tr>
+                        }
+                        else
+                        {
+                            @foreach (var item in bundle.Items.OrderBy(i => i.Order))
+                            {
+                                <tr @key="item.Id">
+                                    <td>@item.Order</td>
+                                    <td>@(item.Package?.Name ?? "(missing)")</td>
+                                    <td>@(item.Package?.Provider.ToString() ?? "?")</td>
+                                    <td>@(item.ContinueOnFailure ? "Yes" : "No")</td>
+                                    <td class="text-end">
+                                        <button class="btn btn-sm btn-outline-secondary"
+                                                @onclick="() => HandleRemoveItem(bundle.Id, item.Id)"
+                                                disabled="@_isWorking">
+                                            Remove
+                                        </button>
+                                    </td>
+                                </tr>
+                            }
+                        }
+                    </tbody>
+                </table>
+
+                <div class="row g-2 align-items-end">
+                    <div class="col-md-5">
+                        <label class="form-label small">Add package</label>
+                        <select class="form-select form-select-sm" @bind="_addItemSelections[bundle.Id]">
+                            <option value="">— pick a package —</option>
+                            @foreach (var p in _availablePackages)
+                            {
+                                <option value="@p.Id">@p.Name (@p.PackageIdentifier)</option>
+                            }
+                        </select>
+                    </div>
+                    <div class="col-md-2">
+                        <label class="form-label small">Order</label>
+                        <input type="number" class="form-control form-control-sm"
+                               @bind="_addItemOrders[bundle.Id]" />
+                    </div>
+                    <div class="col-md-3 form-check ms-3 mt-3">
+                        <input class="form-check-input"
+                               type="checkbox"
+                               id="@($"cof-{bundle.Id}")"
+                               @bind="_addItemContinue[bundle.Id]" />
+                        <label class="form-check-label small" for="@($"cof-{bundle.Id}")">
+                            Continue on failure
+                        </label>
+                    </div>
+                    <div class="col-md-2">
+                        <button class="btn btn-sm btn-outline-primary w-100"
+                                @onclick="() => HandleAddItem(bundle.Id)"
+                                disabled="@_isWorking">
+                            Add item
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    }
+
+    @if (_bundles.Count == 0)
+    {
+        <div class="text-muted">No bundles yet.</div>
+    }
+</div>

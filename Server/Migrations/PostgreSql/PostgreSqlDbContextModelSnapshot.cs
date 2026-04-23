@@ -378,6 +378,65 @@ namespace Remotely.Server.Migrations.PostgreSql
                     b.ToTable("BrandingInfos");
                 });
 
+            modelBuilder.Entity("Remotely.Shared.Entities.BundleItem", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<bool>("ContinueOnFailure")
+                        .HasColumnType("boolean");
+
+                    b.Property<Guid>("DeploymentBundleId")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("Order")
+                        .HasColumnType("integer");
+
+                    b.Property<Guid>("PackageId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("DeploymentBundleId");
+
+                    b.HasIndex("PackageId");
+
+                    b.ToTable("BundleItems");
+                });
+
+            modelBuilder.Entity("Remotely.Shared.Entities.DeploymentBundle", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("CreatedByUserId")
+                        .HasColumnType("text");
+
+                    b.Property<string>("Description")
+                        .HasMaxLength(1024)
+                        .HasColumnType("character varying(1024)");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(120)
+                        .HasColumnType("character varying(120)");
+
+                    b.Property<string>("OrganizationID")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("OrganizationID");
+
+                    b.ToTable("DeploymentBundles");
+                });
+
             modelBuilder.Entity("Remotely.Shared.Entities.Device", b =>
                 {
                     b.Property<string>("ID")
@@ -576,6 +635,145 @@ namespace Remotely.Server.Migrations.PostgreSql
                     b.HasKey("ID");
 
                     b.ToTable("Organizations");
+                });
+
+            modelBuilder.Entity("Remotely.Shared.Entities.Package", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("CreatedByUserId")
+                        .HasColumnType("text");
+
+                    b.Property<string>("Description")
+                        .HasMaxLength(1024)
+                        .HasColumnType("character varying(1024)");
+
+                    b.Property<string>("InstallArguments")
+                        .HasMaxLength(1024)
+                        .HasColumnType("character varying(1024)");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(120)
+                        .HasColumnType("character varying(120)");
+
+                    b.Property<string>("OrganizationID")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("PackageIdentifier")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)");
+
+                    b.Property<int>("Provider")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Version")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("OrganizationID");
+
+                    b.ToTable("Packages");
+                });
+
+            modelBuilder.Entity("Remotely.Shared.Entities.PackageInstallJob", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("Action")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTimeOffset?>("CompletedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("DeploymentBundleId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("DeviceId")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)");
+
+                    b.Property<string>("OrganizationID")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<Guid>("PackageId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("RequestedByUserId")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<DateTimeOffset?>("StartedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("integer");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("DeploymentBundleId");
+
+                    b.HasIndex("DeviceId");
+
+                    b.HasIndex("PackageId");
+
+                    b.HasIndex("OrganizationID", "Status");
+
+                    b.ToTable("PackageInstallJobs");
+                });
+
+            modelBuilder.Entity("Remotely.Shared.Entities.PackageInstallResult", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<long>("DurationMs")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("ErrorMessage")
+                        .HasMaxLength(1024)
+                        .HasColumnType("character varying(1024)");
+
+                    b.Property<int>("ExitCode")
+                        .HasColumnType("integer");
+
+                    b.Property<Guid>("PackageInstallJobId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("StderrTail")
+                        .HasMaxLength(16384)
+                        .HasColumnType("character varying(16384)");
+
+                    b.Property<string>("StdoutTail")
+                        .HasMaxLength(16384)
+                        .HasColumnType("character varying(16384)");
+
+                    b.Property<bool>("Success")
+                        .HasColumnType("boolean");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("PackageInstallJobId")
+                        .IsUnique();
+
+                    b.ToTable("PackageInstallResults");
                 });
 
             modelBuilder.Entity("Remotely.Shared.Entities.SavedScript", b =>
@@ -1006,6 +1204,36 @@ namespace Remotely.Server.Migrations.PostgreSql
                     b.Navigation("Organization");
                 });
 
+            modelBuilder.Entity("Remotely.Shared.Entities.BundleItem", b =>
+                {
+                    b.HasOne("Remotely.Shared.Entities.DeploymentBundle", "DeploymentBundle")
+                        .WithMany("Items")
+                        .HasForeignKey("DeploymentBundleId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("Remotely.Shared.Entities.Package", "Package")
+                        .WithMany()
+                        .HasForeignKey("PackageId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("DeploymentBundle");
+
+                    b.Navigation("Package");
+                });
+
+            modelBuilder.Entity("Remotely.Shared.Entities.DeploymentBundle", b =>
+                {
+                    b.HasOne("Remotely.Shared.Entities.Organization", "Organization")
+                        .WithMany("DeploymentBundles")
+                        .HasForeignKey("OrganizationID")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Organization");
+                });
+
             modelBuilder.Entity("Remotely.Shared.Entities.Device", b =>
                 {
                     b.HasOne("Remotely.Shared.Entities.DeviceGroup", "DeviceGroup")
@@ -1054,6 +1282,54 @@ namespace Remotely.Server.Migrations.PostgreSql
                         .IsRequired();
 
                     b.Navigation("Organization");
+                });
+
+            modelBuilder.Entity("Remotely.Shared.Entities.Package", b =>
+                {
+                    b.HasOne("Remotely.Shared.Entities.Organization", "Organization")
+                        .WithMany("Packages")
+                        .HasForeignKey("OrganizationID")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Organization");
+                });
+
+            modelBuilder.Entity("Remotely.Shared.Entities.PackageInstallJob", b =>
+                {
+                    b.HasOne("Remotely.Shared.Entities.DeploymentBundle", "DeploymentBundle")
+                        .WithMany()
+                        .HasForeignKey("DeploymentBundleId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.HasOne("Remotely.Shared.Entities.Organization", "Organization")
+                        .WithMany("PackageInstallJobs")
+                        .HasForeignKey("OrganizationID")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("Remotely.Shared.Entities.Package", "Package")
+                        .WithMany()
+                        .HasForeignKey("PackageId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("DeploymentBundle");
+
+                    b.Navigation("Organization");
+
+                    b.Navigation("Package");
+                });
+
+            modelBuilder.Entity("Remotely.Shared.Entities.PackageInstallResult", b =>
+                {
+                    b.HasOne("Remotely.Shared.Entities.PackageInstallJob", "PackageInstallJob")
+                        .WithOne("Result")
+                        .HasForeignKey("Remotely.Shared.Entities.PackageInstallResult", "PackageInstallJobId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("PackageInstallJob");
                 });
 
             modelBuilder.Entity("Remotely.Shared.Entities.SavedScript", b =>
@@ -1174,6 +1450,11 @@ namespace Remotely.Server.Migrations.PostgreSql
                     b.Navigation("Organization");
                 });
 
+            modelBuilder.Entity("Remotely.Shared.Entities.DeploymentBundle", b =>
+                {
+                    b.Navigation("Items");
+                });
+
             modelBuilder.Entity("Remotely.Shared.Entities.Device", b =>
                 {
                     b.Navigation("Alerts");
@@ -1194,11 +1475,17 @@ namespace Remotely.Server.Migrations.PostgreSql
 
                     b.Navigation("BrandingInfo");
 
+                    b.Navigation("DeploymentBundles");
+
                     b.Navigation("DeviceGroups");
 
                     b.Navigation("Devices");
 
                     b.Navigation("InviteLinks");
+
+                    b.Navigation("PackageInstallJobs");
+
+                    b.Navigation("Packages");
 
                     b.Navigation("RemotelyUsers");
 
@@ -1211,6 +1498,11 @@ namespace Remotely.Server.Migrations.PostgreSql
                     b.Navigation("ScriptSchedules");
 
                     b.Navigation("SharedFiles");
+                });
+
+            modelBuilder.Entity("Remotely.Shared.Entities.PackageInstallJob", b =>
+                {
+                    b.Navigation("Result");
                 });
 
             modelBuilder.Entity("Remotely.Shared.Entities.SavedScript", b =>

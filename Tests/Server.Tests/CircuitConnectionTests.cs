@@ -62,6 +62,8 @@ public class CircuitConnectionTests
             _remoteControlSessionCache.Object,
             _agentSessionCache.Object,
             new Mock<IInstalledApplicationsService>().Object,
+            new Mock<IPackageService>().Object,
+            new Mock<IPackageInstallJobService>().Object,
             _messenger.Object,
             _logger.Object);
     }

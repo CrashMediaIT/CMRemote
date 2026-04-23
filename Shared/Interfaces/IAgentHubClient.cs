@@ -1,4 +1,5 @@
-﻿using Remotely.Shared.Enums;
+﻿using Remotely.Shared.Dtos;
+using Remotely.Shared.Enums;
 
 namespace Remotely.Shared.Interfaces;
 public interface IAgentHubClient
@@ -100,4 +101,13 @@ public interface IAgentHubClient
     /// wire never carries an executable string the user controlled.
     /// </summary>
     Task UninstallApplication(string requestId, string applicationKey);
+
+    /// <summary>
+    /// Asks the agent to install (or uninstall, per
+    /// <c>PackageInstallRequestDto.Action</c>) a package via its local
+    /// provider (Chocolatey today; UploadedMsi / Executable in PR C1).
+    /// The agent reports its terminal outcome via
+    /// <c>PackageInstallResult</c>.
+    /// </summary>
+    Task InstallPackage(PackageInstallRequestDto request);
 }

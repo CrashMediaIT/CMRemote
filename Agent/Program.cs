@@ -108,6 +108,7 @@ public class Program
             services.AddSingleton<IDeviceInformationService, DeviceInfoGeneratorWin>();
             services.AddSingleton<IElevationDetector, ElevationDetectorWin>();
             services.AddSingleton<IInstalledApplicationsProvider, WindowsInstalledApplicationsProvider>();
+            services.AddSingleton<IPackageProvider, ChocolateyPackageProvider>();
         }
         else if (OperatingSystem.IsLinux())
         {
@@ -116,6 +117,7 @@ public class Program
             services.AddSingleton<IDeviceInformationService, DeviceInfoGeneratorLinux>();
             services.AddSingleton<IElevationDetector, ElevationDetectorLinux>();
             services.AddSingleton<IInstalledApplicationsProvider, NotSupportedInstalledApplicationsProvider>();
+            services.AddSingleton<IPackageProvider, NotSupportedPackageProvider>();
         }
         else if (OperatingSystem.IsMacOS())
         {
@@ -124,6 +126,7 @@ public class Program
             services.AddSingleton<IDeviceInformationService, DeviceInfoGeneratorMac>();
             services.AddSingleton<IElevationDetector, ElevationDetectorMac>();
             services.AddSingleton<IInstalledApplicationsProvider, NotSupportedInstalledApplicationsProvider>();
+            services.AddSingleton<IPackageProvider, NotSupportedPackageProvider>();
         }
         else
         {

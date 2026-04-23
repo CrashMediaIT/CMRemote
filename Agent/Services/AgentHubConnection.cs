@@ -41,6 +41,7 @@ public class AgentHubConnection : IAgentHubConnection, IDisposable
     private readonly IFileLogsManager _fileLogsManager;
     private readonly IHttpClientFactory _httpFactory;
     private readonly IInstalledApplicationsProvider _installedAppsProvider;
+    private readonly IPackageProvider _packageProvider;
     private readonly ILogger<AgentHubConnection> _logger;
     private readonly IScriptExecutor _scriptExecutor;
     private readonly IScriptingShellFactory _scriptingShellFactory;
@@ -66,6 +67,7 @@ public class AgentHubConnection : IAgentHubConnection, IDisposable
         IHostApplicationLifetime appLifetime,
         IScriptingShellFactory scriptingShellFactory,
         IInstalledApplicationsProvider installedAppsProvider,
+        IPackageProvider packageProvider,
         ILogger<AgentHubConnection> logger)
     {
         _configService = configService;
@@ -82,6 +84,7 @@ public class AgentHubConnection : IAgentHubConnection, IDisposable
         _appLifetime = appLifetime;
         _scriptingShellFactory = scriptingShellFactory;
         _installedAppsProvider = installedAppsProvider;
+        _packageProvider = packageProvider;
     }
 
     public bool IsConnected => _hubConnection?.State == HubConnectionState.Connected;
@@ -656,6 +659,85 @@ public class AgentHubConnection : IAgentHubConnection, IDisposable
         }
     }
 
+    public async Task InstallPackage(PackageInstallRequestDto request)
+    {
+        try
+        {
+            EnsureHubConnection();
+
+            if (!_isServerVerified)
+            {
+                _logger.LogWarning("InstallPackage attempted before server was verified.");
+                return;
+            }
+            if (request is null || string.IsNullOrWhiteSpace(request.JobId))
+            {
+                _logger.LogWarning("InstallPackage received with missing request or JobId.");
+                return;
+            }
+
+            _logger.LogInformation(
+                "Package operation received. JobId={jobId} Provider={provider} " +
+                "Action={action} PackageId={packageId}",
+                request.JobId, request.Provider, request.Action, request.PackageIdentifier);
+
+            PackageInstallResultDto result;
+            if (_packageProvider.CanHandle(request))
+            {
+                result = await _packageProvider
+                    .ExecuteAsync(request, _appLifetime.ApplicationStopping)
+                    .ConfigureAwait(false);
+            }
+            else
+            {
+                result = new PackageInstallResultDto
+                {
+                    JobId = request.JobId,
+                    Success = false,
+                    ExitCode = -1,
+                    ErrorMessage = $"No provider on this device can handle '{request.Provider}'.",
+                };
+            }
+            // Defensive: providers SHOULD echo the JobId, but make sure
+            // the wire payload is always tied to the originating job.
+            result.JobId = request.JobId;
+
+            _logger.LogInformation(
+                "Package operation completed. JobId={jobId} Success={success} " +
+                "ExitCode={exitCode} DurationMs={duration}",
+                result.JobId, result.Success, result.ExitCode, result.DurationMs);
+
+            await _hubConnection!
+                .SendAsync("PackageInstallResult", result, _appLifetime.ApplicationStopping)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            // Service shutting down — best-effort.
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error while handling InstallPackage. JobId={jobId}", request?.JobId);
+            try
+            {
+                if (request is not null && _hubConnection is not null)
+                {
+                    await _hubConnection.SendAsync("PackageInstallResult", new PackageInstallResultDto
+                    {
+                        JobId = request.JobId,
+                        Success = false,
+                        ExitCode = -1,
+                        ErrorMessage = ex.Message,
+                    }).ConfigureAwait(false);
+                }
+            }
+            catch
+            {
+                // Best-effort; original exception already logged.
+            }
+        }
+    }
+
     private async Task TrySendInstalledApplicationsFailure(string requestId, string error)
     {
         try
@@ -788,6 +870,8 @@ public class AgentHubConnection : IAgentHubConnection, IDisposable
         _hubConnection.On<string>(nameof(RequestInstalledApplications), RequestInstalledApplications);
 
         _hubConnection.On<string, string>(nameof(UninstallApplication), UninstallApplication);
+
+        _hubConnection.On<PackageInstallRequestDto>(nameof(InstallPackage), InstallPackage);
     }
 
     private async Task<bool> VerifyServer()

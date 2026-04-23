@@ -7,6 +7,7 @@ using Remotely.Server.Models;
 using Remotely.Server.Models.Messages;
 using Remotely.Server.Services.Stores;
 using Remotely.Shared;
+using Remotely.Shared.Dtos;
 using Remotely.Shared.Entities;
 using Remotely.Shared.Enums;
 using Remotely.Shared.Interfaces;
@@ -63,6 +64,24 @@ public interface ICircuitConnection
     Task<Result<string>> UninstallApplication(string deviceId, string applicationKey);
 
     /// <summary>
+    /// Queues a package install (or uninstall) for a single device,
+    /// then dispatches it immediately if the agent is online. Returns
+    /// the persisted job ID on success. Org-scoped: the package and
+    /// device must both belong to the caller's organization, and the
+    /// caller must have access to the device.
+    /// </summary>
+    Task<Result<Guid>> QueueInstallPackage(string deviceId, Guid packageId, PackageInstallAction action);
+
+    /// <summary>
+    /// Queues a deployment bundle (every item × every device) and
+    /// dispatches the resulting jobs to any agents that are online.
+    /// Offline agents will not receive a dispatch — Phase 2 leaves the
+    /// jobs in <c>Queued</c> for an operator to retry; future phases
+    /// will pick them up on agent reconnect.
+    /// </summary>
+    Task<Result<int>> QueueDeploymentBundle(Guid bundleId, IReadOnlyList<string> deviceIds);
+
+    /// <summary>
     /// Sends a Wake-On-LAN request for the specified device to its peer devices.
     /// Peer devices are those in the same group or the same public IP.
     /// </summary>
@@ -82,6 +101,8 @@ public class CircuitConnection : CircuitHandler, ICircuitConnection
     private readonly IHubContext<AgentHub, IAgentHubClient> _agentHubContext;
     private readonly IDataService _dataService;
     private readonly IInstalledApplicationsService _installedApplicationsService;
+    private readonly IPackageService _packageService;
+    private readonly IPackageInstallJobService _packageInstallJobService;
     private readonly ISelectedCardsStore _cardStore;
     private readonly IAuthService _authService;
     private readonly ICircuitManager _circuitManager;
@@ -104,6 +125,8 @@ public class CircuitConnection : CircuitHandler, ICircuitConnection
         IRemoteControlSessionCache remoteControlSessionCache,
         IAgentHubSessionCache agentSessionCache,
         IInstalledApplicationsService installedApplicationsService,
+        IPackageService packageService,
+        IPackageInstallJobService packageInstallJobService,
         IMessenger messenger,
         ILogger<CircuitConnection> logger)
     {
@@ -117,6 +140,8 @@ public class CircuitConnection : CircuitHandler, ICircuitConnection
         _remoteControlSessionCache = remoteControlSessionCache;
         _agentSessionCache = agentSessionCache;
         _installedApplicationsService = installedApplicationsService;
+        _packageService = packageService;
+        _packageInstallJobService = packageInstallJobService;
         _messenger = messenger;
         _logger = logger;
     }
@@ -610,6 +635,140 @@ public class CircuitConnection : CircuitHandler, ICircuitConnection
 
         await _agentHubContext.Clients.Client(connectionId).UninstallApplication(requestId, resolved);
         return Result.Ok(requestId);
+    }
+
+    public async Task<Result<Guid>> QueueInstallPackage(string deviceId, Guid packageId, PackageInstallAction action)
+    {
+        var (canAccess, connectionId) = CanAccessDevice(deviceId);
+        if (!canAccess)
+        {
+            return Result.Fail<Guid>("Access denied or device offline.");
+        }
+
+        var package = await _packageService.GetPackage(User.OrganizationID, packageId);
+        if (package is null)
+        {
+            return Result.Fail<Guid>("Package not found in this organization.");
+        }
+
+        var job = await _packageInstallJobService.QueueJobAsync(
+            User.OrganizationID,
+            packageId,
+            deviceId,
+            action,
+            bundleId: null,
+            requestedByUserId: User.Id);
+
+        await DispatchJobAsync(connectionId, job.Id, package, action);
+        return Result.Ok(job.Id);
+    }
+
+    public async Task<Result<int>> QueueDeploymentBundle(Guid bundleId, IReadOnlyList<string> deviceIds)
+    {
+        if (deviceIds is null || deviceIds.Count == 0)
+        {
+            return Result.Fail<int>("At least one target device is required.");
+        }
+
+        var bundle = await _packageService.GetBundle(User.OrganizationID, bundleId);
+        if (bundle is null)
+        {
+            return Result.Fail<int>("Bundle not found in this organization.");
+        }
+        if (bundle.Items.Count == 0)
+        {
+            return Result.Fail<int>("Bundle has no items.");
+        }
+
+        // Restrict the device list to those the caller can actually
+        // access — silently dropping any forbidden / unknown devices.
+        var allowedDevices = new List<string>(deviceIds.Count);
+        var dispatchable = new List<(string DeviceId, string ConnectionId)>(deviceIds.Count);
+        var droppedDevices = new List<string>();
+        foreach (var deviceId in deviceIds)
+        {
+            var (canAccess, connectionId) = CanAccessDevice(deviceId);
+            if (!canAccess)
+            {
+                droppedDevices.Add(deviceId);
+                continue;
+            }
+            allowedDevices.Add(deviceId);
+            dispatchable.Add((deviceId, connectionId));
+        }
+
+        if (droppedDevices.Count > 0)
+        {
+            // Make the filtering visible in the audit trail so an
+            // operator-reported "the bundle didn't reach machine X"
+            // turns up in the logs as a deliberate access drop, not a
+            // silent agent failure.
+            _logger.LogInformation(
+                "Bundle dispatch dropped {droppedCount} target(s) the caller cannot access. " +
+                "BundleId={bundleId} Actor={username} DroppedDeviceIds={droppedDeviceIds}",
+                droppedDevices.Count, bundleId, User.UserName, droppedDevices);
+        }
+
+        if (allowedDevices.Count == 0)
+        {
+            return Result.Fail<int>("None of the selected devices are online or accessible.");
+        }
+
+        var jobs = await _packageInstallJobService.QueueBundleAsync(
+            User.OrganizationID,
+            bundleId,
+            allowedDevices,
+            requestedByUserId: User.Id);
+
+        // Group jobs by device and dispatch them in declared order so
+        // the agent receives the bundle's intended install sequence.
+        foreach (var (deviceId, connectionId) in dispatchable)
+        {
+            var deviceJobs = jobs
+                .Where(j => string.Equals(j.DeviceId, deviceId, StringComparison.OrdinalIgnoreCase))
+                .OrderBy(j => j.CreatedAt)
+                .ToList();
+
+            foreach (var job in deviceJobs)
+            {
+                var package = bundle.Items
+                    .Select(i => i.Package)
+                    .FirstOrDefault(p => p is not null && p.Id == job.PackageId);
+                if (package is null)
+                {
+                    continue;
+                }
+                await DispatchJobAsync(connectionId, job.Id, package, PackageInstallAction.Install);
+            }
+        }
+
+        return Result.Ok(jobs.Count);
+    }
+
+    private async Task DispatchJobAsync(string connectionId, Guid jobId, Package package, PackageInstallAction action)
+    {
+        var dispatched = await _packageInstallJobService.MarkDispatchedAsync(jobId);
+        if (!dispatched)
+        {
+            return;
+        }
+
+        _logger.LogInformation(
+            "Package job dispatched. JobId={jobId} Provider={provider} " +
+            "PackageIdentifier={packageIdentifier} Action={action} Actor={username}",
+            jobId, package.Provider, package.PackageIdentifier, action, User.UserName);
+
+        var request = new PackageInstallRequestDto
+        {
+            JobId = jobId.ToString("D"),
+            Provider = package.Provider,
+            Action = action,
+            PackageIdentifier = package.PackageIdentifier,
+            Version = package.Version,
+            InstallArguments = package.InstallArguments,
+        };
+
+        await _agentHubContext.Clients.Client(connectionId).InstallPackage(request);
     }
 
     private (bool canAccess, string connectionId) CanAccessDevice(string deviceId)

@@ -103,6 +103,48 @@
                 </NavLink>
             </li>
 
+            @if (_organization?.PackageManagerEnabled == true)
+            {
+                <li class="nav-item px-3">
+                    <NavLink class="nav-link" href="packages" Match="NavLinkMatch.Prefix">
+                        <span class="oi oi-box" aria-hidden="true"></span> Package Manager
+                    </NavLink>
+                </li>
+                @if (IsPackageManagerActive)
+                {
+                    <li class="nav-item ps-5 pe-3">
+                        <NavLink class="nav-link" href="packages/install" Match="NavLinkMatch.Prefix">
+                            <span class="oi oi-data-transfer-upload" aria-hidden="true"></span> Install Packages
+                        </NavLink>
+                    </li>
+                    <li class="nav-item ps-5 pe-3">
+                        <NavLink class="nav-link" href="packages/bundles" Match="NavLinkMatch.Prefix">
+                            <span class="oi oi-layers" aria-hidden="true"></span> Deployment Bundles
+                        </NavLink>
+                    </li>
+                    <li class="nav-item ps-5 pe-3">
+                        <NavLink class="nav-link" href="packages/executables" Match="NavLinkMatch.Prefix">
+                            <span class="oi oi-cog" aria-hidden="true"></span> Executable Builder
+                        </NavLink>
+                    </li>
+                    <li class="nav-item ps-5 pe-3">
+                        <NavLink class="nav-link" href="packages/msis" Match="NavLinkMatch.Prefix">
+                            <span class="oi oi-document" aria-hidden="true"></span> Uploaded MSIs
+                        </NavLink>
+                    </li>
+                    <li class="nav-item ps-5 pe-3">
+                        <NavLink class="nav-link" href="packages/devices" Match="NavLinkMatch.Prefix">
+                            <span class="oi oi-laptop" aria-hidden="true"></span> Devices
+                        </NavLink>
+                    </li>
+                    <li class="nav-item ps-5 pe-3">
+                        <NavLink class="nav-link" href="packages/jobs" Match="NavLinkMatch.Prefix">
+                            <span class="oi oi-pulse" aria-hidden="true"></span> Job Status
+                        </NavLink>
+                    </li>
+                }
+            }
+
             @if (_user?.IsServerAdmin == true)
             {
                 <li class="nav-item px-3">
@@ -161,6 +203,11 @@
     private Organization? _organization;
     private string? _currentUrl;
     private string? _logoDataUri;
+
+    private bool IsPackageManagerActive =>
+        _currentUrl is not null &&
+        (_currentUrl.Equals("packages", StringComparison.OrdinalIgnoreCase) ||
+         _currentUrl.StartsWith("packages/", StringComparison.OrdinalIgnoreCase));
 
     public void Dispose()
     {

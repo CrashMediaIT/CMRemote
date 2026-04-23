@@ -18,6 +18,7 @@ public class AgentHub : Hub<IAgentHubClient>
 {
     private readonly IDataService _dataService;
     private readonly IInstalledApplicationsService _installedApplicationsService;
+    private readonly IPackageInstallJobService _packageInstallJobService;
     private readonly ICircuitManager _circuitManager;
     private readonly IExpiringTokenService _expiringTokenService;
     private readonly ILogger<AgentHub> _logger;
@@ -36,6 +37,7 @@ public class AgentHub : Hub<IAgentHubClient>
         IRemoteControlSessionCache remoteControlSessionCache,
         IMessenger messenger,
         IInstalledApplicationsService installedApplicationsService,
+        IPackageInstallJobService packageInstallJobService,
         ISystemTime systemTime,
         ILogger<AgentHub> logger)
     {
@@ -47,6 +49,7 @@ public class AgentHub : Hub<IAgentHubClient>
         _remoteControlSessions = remoteControlSessionCache;
         _messenger = messenger;
         _installedApplicationsService = installedApplicationsService;
+        _packageInstallJobService = packageInstallJobService;
         _systemTime = systemTime;
         _logger = logger;
     }
@@ -430,6 +433,61 @@ public class AgentHub : Hub<IAgentHubClient>
             result.DurationMs);
 
         await _messenger.Send(new UninstallApplicationResultMessage(Device.ID, result));
+    }
+
+    /// <summary>
+    /// Receives the terminal result of a package install/uninstall job
+    /// from the agent. Persists the outcome via
+    /// <see cref="IPackageInstallJobService"/> (which enforces the legal
+    /// state-machine transition) and broadcasts a refresh message to
+    /// any subscribed circuits.
+    /// </summary>
+    public async Task PackageInstallResult(PackageInstallResultDto result)
+    {
+        if (Device is null || result is null)
+        {
+            return;
+        }
+
+        if (!Guid.TryParse(result.JobId, out var jobId))
+        {
+            _logger.LogWarning(
+                "PackageInstallResult received with invalid JobId. Device={deviceId} JobId={jobId}",
+                Device.ID, result.JobId);
+            return;
+        }
+
+        // Cross-org safety: confirm the job belongs to the same org as
+        // the reporting device before accepting the result. A
+        // misbehaving agent must not be able to terminate a job it
+        // doesn't own.
+        var job = await _packageInstallJobService.GetJobAsync(Device.OrganizationID, jobId);
+        if (job is null)
+        {
+            _logger.LogWarning(
+                "PackageInstallResult ignored — job not found in device's organization. " +
+                "Device={deviceId} OrgId={orgId} JobId={jobId}",
+                Device.ID, Device.OrganizationID, jobId);
+            return;
+        }
+
+        if (!string.Equals(job.DeviceId, Device.ID, StringComparison.OrdinalIgnoreCase))
+        {
+            _logger.LogWarning(
+                "PackageInstallResult ignored — device mismatch. " +
+                "ReportingDevice={deviceId} JobDevice={jobDevice} JobId={jobId}",
+                Device.ID, job.DeviceId, jobId);
+            return;
+        }
+
+        await _packageInstallJobService.CompleteJobAsync(jobId, result);
+
+        _logger.LogInformation(
+            "PackageInstallResult. Device={deviceId} JobId={jobId} " +
+            "Success={success} ExitCode={exitCode} DurationMs={durationMs}",
+            Device.ID, jobId, result.Success, result.ExitCode, result.DurationMs);
+
+        await _messenger.Send(new PackageInstallResultMessage(Device.ID, result));
     }
 
     private async Task<bool> CheckForDeviceBan(params string[] deviceIdNameOrIPs)

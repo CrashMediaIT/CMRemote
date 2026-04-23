@@ -1,0 +1,15 @@
+@page "/packages/msis"
+@attribute [Authorize(Policy = PolicyNames.PackageManagerRequired)]
+@inherits AuthComponentBase
+@using Remotely.Server.Auth
+
+<PageTitle>Package Manager — Uploaded MSIs</PageTitle>
+
+<h2>Uploaded MSIs</h2>
+
+<div class="alert alert-info">
+    <strong>Coming soon.</strong>
+    Org-scoped MSI uploads (with SHA-256 + magic-byte validation, signed short-lived download URLs,
+    and silent <code>msiexec /i &lt;file&gt; /qn /norestart</code> install) ship in PR&nbsp;C1.
+    See <a href="https://github.com/CrashMediaIT/CMRemote/blob/main/ROADMAP.md">ROADMAP.md</a>.
+</div>
