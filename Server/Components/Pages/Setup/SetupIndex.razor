@@ -1,0 +1,136 @@
+@*
+    First-boot setup wizard skeleton — see ROADMAP.md "M1 — First-boot
+    setup wizard" / "M1 scaffolding". This page is intentionally a
+    placeholder: it lays out the eventual five steps (welcome /
+    preflight, database connection, legacy import, admin bootstrap,
+    done) so subsequent slices have somewhere to land, and exposes a
+    single "Mark setup complete" action so an operator can dismiss the
+    wizard while the real wizard logic is still being built.
+
+    No authorization: the wizard is only reachable while the
+    CMRemote.Setup.Completed marker is unset. Once the marker is
+    written, both the redirect middleware and this page treat the
+    wizard as closed.
+*@
+
+@page "/setup"
+@layout EmptyLayout
+@rendermode InteractiveServer
+
+@using Microsoft.AspNetCore.Components
+@using Remotely.Server.Components.Layout
+@using Remotely.Server.Services
+@inject ISetupStateService SetupState
+@inject NavigationManager Navigation
+
+<PageTitle>CMRemote — First-boot setup</PageTitle>
+
+@if (_alreadyCompleted)
+{
+    <div class="container py-5">
+        <h1 class="display-5">Setup already complete</h1>
+        <p class="lead">
+            This CMRemote deployment has already been initialized. Return to the
+            <a href="/">main panel</a> to sign in.
+        </p>
+    </div>
+}
+else
+{
+    <div class="container py-5">
+        <h1 class="display-5">Welcome to CMRemote</h1>
+        <p class="lead">
+            This is the first-boot setup wizard. Each step below will guide you through
+            getting CMRemote ready for production use.
+        </p>
+
+        <div class="alert alert-info" role="alert">
+            <strong>Skeleton build.</strong> The interactive steps below are not yet
+            implemented — this PR ships only the routing skeleton and the
+            <code>CMRemote.Setup.Completed</code> marker so subsequent migration and
+            agent-upgrade slices have a place to land. Click <em>Mark setup complete</em>
+            to dismiss this wizard if you have already configured the deployment by
+            other means.
+        </div>
+
+        <ol class="list-group list-group-numbered mb-4">
+            @foreach (var step in _steps)
+            {
+                <li class="list-group-item d-flex justify-content-between align-items-start">
+                    <div class="ms-2 me-auto">
+                        <div class="fw-bold">@step.Title</div>
+                        @step.Description
+                    </div>
+                    <span class="badge bg-secondary rounded-pill">@step.Status</span>
+                </li>
+            }
+        </ol>
+
+        <button class="btn btn-primary"
+                type="button"
+                disabled="@_marking"
+                @onclick="MarkComplete">
+            @(_marking ? "Marking…" : "Mark setup complete")
+        </button>
+
+        @if (!string.IsNullOrEmpty(_error))
+        {
+            <div class="alert alert-danger mt-3" role="alert">@_error</div>
+        }
+    </div>
+}
+
+@code {
+    private bool _alreadyCompleted;
+    private bool _marking;
+    private string? _error;
+
+    private readonly (string Title, string Description, string Status)[] _steps =
+    {
+        ("Welcome / preflight",
+         "Verify writable data directory, TLS certificates, and bind ports.",
+         "Pending (M1.1)"),
+        ("Database connection",
+         "Postgres host / port / db / user / password / SSL-mode form with a live SELECT 1 round trip.",
+         "Pending (M1.2)"),
+        ("Import existing database",
+         "Optional. Reads the legacy upstream schema (SQLite / SQL Server / Postgres) and maps rows into the v2 schema.",
+         "Pending (M1.3 / M2)"),
+        ("Admin bootstrap",
+         "Create the first organisation and server-admin account when no users were imported.",
+         "Pending (M1.4)"),
+        ("Done",
+         "Write the CMRemote.Setup.Completed marker, sign the operator into the main panel, and queue the agent-upgrade sweep (M3).",
+         "Pending (M1.5)"),
+    };
+
+    protected override async Task OnInitializedAsync()
+    {
+        _alreadyCompleted = await SetupState.IsSetupCompletedAsync();
+    }
+
+    private async Task MarkComplete()
+    {
+        if (_marking)
+        {
+            return;
+        }
+
+        _marking = true;
+        _error = null;
+
+        try
+        {
+            await SetupState.MarkSetupCompletedAsync();
+            Navigation.NavigateTo("/", forceLoad: true);
+        }
+        catch (Exception ex)
+        {
+            _error = $"Failed to mark setup complete: {ex.Message}";
+        }
+        finally
+        {
+            _marking = false;
+        }
+    }
+}
