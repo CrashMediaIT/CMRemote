@@ -1,0 +1,19 @@
+# Source: CMRemote, clean-room implementation.
+[package]
+name = "cmremote-wire"
+description = "Wire types and DTOs shared between the CMRemote agent and server. Clean-room, derived from docs/wire-protocol.md."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

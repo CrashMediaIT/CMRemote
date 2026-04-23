@@ -1,0 +1,29 @@
+# Source: CMRemote, clean-room implementation.
+[package]
+name = "cmremote-agent"
+description = "CMRemote agent — clean-room Rust implementation (Module 2b)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "cmremote-agent"
+path = "src/main.rs"
+
+[dependencies]
+cmremote-wire = { path = "../cmremote-wire" }
+cmremote-platform = { path = "../cmremote-platform" }
+
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3.13"
