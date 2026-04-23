@@ -1,0 +1,114 @@
+# Source: CMRemote, clean-room implementation.
+#
+# Supply-chain CI gates. Roadmap reference: Track S / S2.
+#
+# Runs on every PR touching dependency manifests or this workflow, and on
+# a weekly schedule against `main` so that a newly-disclosed advisory
+# against an already-merged dependency fails CI within 7 days.
+
+name: Supply chain
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - "agent-rs/**/Cargo.toml"
+      - "agent-rs/Cargo.lock"
+      - "agent-rs/deny.toml"
+      - "**/*.csproj"
+      - "**/packages.lock.json"
+      - "Directory.Build.props"
+      - ".github/workflows/supply-chain.yml"
+      - ".github/dependabot.yml"
+  pull_request:
+    paths:
+      - "agent-rs/**/Cargo.toml"
+      - "agent-rs/Cargo.lock"
+      - "agent-rs/deny.toml"
+      - "**/*.csproj"
+      - "**/packages.lock.json"
+      - "Directory.Build.props"
+      - ".github/workflows/supply-chain.yml"
+      - ".github/dependabot.yml"
+  schedule:
+    # Weekly sweep against `main` so newly-published advisories against
+    # already-merged dependencies surface within 7 days.
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cargo-deny:
+    name: cargo-deny (${{ matrix.checks }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Run each check class independently so a single failure produces
+        # an obvious, individually re-runnable red square in the UI.
+        checks:
+          - advisories
+          - bans
+          - licenses
+          - sources
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: cargo-deny
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          manifest-path: agent-rs/Cargo.toml
+          command: check ${{ matrix.checks }}
+          arguments: --all-features
+
+  cargo-audit:
+    name: cargo-audit
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Run cargo-audit
+        uses: rustsec/audit-check@v2.0.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          working-directory: agent-rs
+
+  dependency-review:
+    # GitHub's dependency-review action only runs on pull_request events.
+    name: dependency-review
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Dependency review
+        uses: actions/dependency-review-action@v4
+        with:
+          # Mirror the Rust licence allow-list from deny.toml for the
+          # benefit of non-Rust ecosystems (nuget, docker, actions)
+          # which cargo-deny does not see.
+          allow-licenses: >-
+            MIT,
+            Apache-2.0,
+            Apache-2.0 WITH LLVM-exception,
+            BSD-2-Clause,
+            BSD-3-Clause,
+            ISC,
+            Unicode-3.0,
+            Unicode-DFS-2016,
+            Zlib,
+            CC0-1.0,
+            MPL-2.0
+          fail-on-severity: moderate
+          comment-summary-in-pr: on-failure

@@ -1,0 +1,76 @@
+# Source: CMRemote, clean-room implementation.
+#
+# Dependabot configuration for CMRemote.
+# Roadmap reference: Track S / S2 — supply-chain CI gates.
+#
+# Strategy: weekly grouped updates per ecosystem for noise reduction,
+# plus Dependabot's always-on security updates (which ignore the
+# schedule/grouping and land as soon as they are ready).
+
+version: 2
+updates:
+  # Rust agent workspace.
+  - package-ecosystem: "cargo"
+    directory: "/agent-rs"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps(rust)"
+    labels:
+      - "dependencies"
+      - "rust"
+    groups:
+      rust-minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
+
+  # .NET solution — Dependabot walks every *.csproj found.
+  - package-ecosystem: "nuget"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps(nuget)"
+    labels:
+      - "dependencies"
+      - "dotnet"
+    groups:
+      nuget-minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
+
+  # GitHub Actions pinned in .github/workflows/**.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps(actions)"
+    labels:
+      - "dependencies"
+      - "github-actions"
+    groups:
+      actions-all:
+        patterns:
+          - "*"
+
+  # Docker Compose stack shipped alongside the product.
+  - package-ecosystem: "docker"
+    directory: "/docker-compose"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "deps(docker)"
+    labels:
+      - "dependencies"
+      - "docker"
