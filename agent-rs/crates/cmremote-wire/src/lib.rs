@@ -20,5 +20,5 @@ pub mod envelope;
 pub mod error;
 
 pub use connection_info::ConnectionInfo;
-pub use envelope::{HubInvocation, HubMessageKind};
+pub use envelope::{HubClose, HubCompletion, HubInvocation, HubMessageKind, HubPing};
 pub use error::WireError;

@@ -1,0 +1,5 @@
+{
+  "type": 7,
+  "error": "agent_quarantined",
+  "allowReconnect": false
+}

@@ -1,0 +1,5 @@
+{
+  "_reject_reason": "OrganizationID is required and must be present and non-empty.",
+  "DeviceID": "2c3b4a5d-6e7f-8091-a2b3-c4d5e6f70819",
+  "Host": "https://cmremote.example.com"
+}
