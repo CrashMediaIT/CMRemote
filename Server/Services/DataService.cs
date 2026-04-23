@@ -192,6 +192,13 @@ public interface IDataService
 
     Task SetIsDefaultOrganization(string orgId, bool isDefault);
 
+    /// <summary>
+    /// Toggles the per-org Package Manager opt-in. Disabling clears all
+    /// existing inventory snapshots for the org so previously-cached app
+    /// lists aren't visible after the feature is turned off.
+    /// </summary>
+    Task SetOrganizationPackageManagerEnabled(string orgId, bool isEnabled);
+
     Task SetIsServerAdmin(string targetUserId, bool isServerAdmin, string callerUserId);
 
     void SetServerVerificationToken(string deviceId, string verificationToken);
@@ -2035,6 +2042,34 @@ public class DataService : IDataService
         }
 
         organization.IsDefaultOrganization = isDefault;
+        await dbContext.SaveChangesAsync();
+    }
+
+    public async Task SetOrganizationPackageManagerEnabled(string orgId, bool isEnabled)
+    {
+        using var dbContext = _appDbFactory.GetContext();
+
+        var organization = await dbContext.Organizations.FindAsync(orgId);
+        if (organization is null)
+        {
+            return;
+        }
+
+        organization.PackageManagerEnabled = isEnabled;
+
+        if (!isEnabled)
+        {
+            // Drop any cached inventory so disabling the feature also
+            // hides previously-collected app lists from the UI.
+            var deviceIds = dbContext.Devices
+                .Where(d => d.OrganizationID == orgId)
+                .Select(d => d.ID);
+
+            var snapshots = dbContext.DeviceInstalledApplicationsSnapshots
+                .Where(s => deviceIds.Contains(s.DeviceId));
+            dbContext.DeviceInstalledApplicationsSnapshots.RemoveRange(snapshots);
+        }
+
         await dbContext.SaveChangesAsync();
     }
 

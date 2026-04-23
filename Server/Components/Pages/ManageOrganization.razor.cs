@@ -108,6 +108,34 @@ public partial class ManageOrganization : AuthComponentBase
         ToastService.ShowToast("Default organization set.");
     }
 
+    private async Task ShowPackageManagerHelp()
+    {
+        await JsInterop.Alert(
+            "When enabled, organization admins can view installed applications on managed Windows devices " +
+            "and uninstall software via the Package Manager. Every action is audit-logged. " +
+            "Off by default — installing or removing software is a high-impact action and must be " +
+            "explicitly opted in to per organization.");
+    }
+
+    private async Task PackageManagerEnabledChanged(ChangeEventArgs args)
+    {
+        EnsureUserSet();
+
+        if (!User.IsAdministrator || _organization is null)
+        {
+            return;
+        }
+
+        if (args.Value is not bool isEnabled)
+        {
+            return;
+        }
+
+        await DataService.SetOrganizationPackageManagerEnabled(_organization.ID, isEnabled);
+        _organization.PackageManagerEnabled = isEnabled;
+        ToastService.ShowToast(isEnabled ? "Package Manager enabled." : "Package Manager disabled.");
+    }
+
     private async Task DeleteInvite(InviteLink invite)
     {
         EnsureUserSet();

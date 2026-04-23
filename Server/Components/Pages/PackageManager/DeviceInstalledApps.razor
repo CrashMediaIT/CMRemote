@@ -1,0 +1,185 @@
+@page "/packages/devices/{deviceId}"
+
+@attribute [Authorize(Policy = PolicyNames.PackageManagerRequired)]
+@inherits AuthComponentBase
+
+@using Remotely.Server.Auth
+@using Remotely.Shared.Enums
+
+<PageTitle>Package Manager — Installed Applications</PageTitle>
+
+<div class="d-flex flex-column gap-3">
+
+    <nav aria-label="breadcrumb">
+        <ol class="breadcrumb mb-0">
+            <li class="breadcrumb-item"><a href="/">Devices</a></li>
+            <li class="breadcrumb-item">Package Manager</li>
+            <li class="breadcrumb-item active" aria-current="page">@DeviceId</li>
+        </ol>
+    </nav>
+
+    @if (_isLoading)
+    {
+        <div class="text-muted"><em>Loading device…</em></div>
+    }
+    else if (_device is null)
+    {
+        <div class="alert alert-danger" role="alert">
+            Device not found, or you do not have access to it.
+        </div>
+    }
+    else if (!_isWindows)
+    {
+        <div class="alert alert-warning" role="alert">
+            <strong>Package Manager is Windows-only.</strong>
+            This device reports its platform as <code>@_device.Platform</code>, which is not currently
+            supported. Linux and macOS support will arrive in a future release.
+        </div>
+    }
+    else
+    {
+        <div class="card bg-dark text-light shadow-sm">
+            <div class="card-body">
+                <div class="d-flex flex-wrap justify-content-between align-items-start gap-2">
+                    <div>
+                        <h3 class="card-title mb-1">@_device.DeviceName</h3>
+                        <div class="text-muted small">
+                            @(_device.Platform) · @(_device.OSDescription) ·
+                            @(_isOnline ? "Online" : "Offline")
+                        </div>
+                    </div>
+                    <div class="d-flex gap-2">
+                        <button class="btn btn-outline-light btn-sm" @onclick="RefreshAsync"
+                                disabled="@(!_isOnline || _isRefreshing)">
+                            @if (_isRefreshing)
+                            {
+                                <span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>
+                                <span>Refreshing…</span>
+                            }
+                            else
+                            {
+                                <i class="fas fa-sync-alt me-1"></i>
+                                <span>Refresh inventory</span>
+                            }
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <ul class="nav nav-tabs" role="tablist">
+            <li class="nav-item" role="presentation">
+                <button class="nav-link active" type="button" role="tab" aria-selected="true">
+                    Installed (@_visibleApps.Count)
+                </button>
+            </li>
+        </ul>
+
+        <div class="card border-0 shadow-sm">
+            <div class="card-body">
+                <div class="d-flex flex-wrap gap-2 align-items-center mb-3">
+                    <div class="input-group" style="max-width: 320px;">
+                        <span class="input-group-text"><i class="fas fa-search"></i></span>
+                        <input type="search" class="form-control" placeholder="Filter by name or publisher…"
+                               @bind="_searchTerm" @bind:event="oninput" />
+                    </div>
+
+                    <div class="btn-group" role="group" aria-label="Source filter">
+                        @foreach (var src in _availableSources)
+                        {
+                            var isActive = _activeSource == src;
+                            <button type="button"
+                                    class="btn btn-sm @(isActive ? "btn-primary" : "btn-outline-secondary")"
+                                    @onclick="() => _activeSource = src">
+                                @SourceLabel(src)
+                            </button>
+                        }
+                    </div>
+
+                    <div class="form-check ms-auto">
+                        <input class="form-check-input" type="checkbox" id="show-system" @bind="_showSystemComponents" />
+                        <label class="form-check-label" for="show-system">
+                            Show system components
+                        </label>
+                    </div>
+                </div>
+
+                @if (_lastFetchedAt is null)
+                {
+                    <div class="alert alert-info" role="alert">
+                        No inventory has been collected for this device yet.
+                        Click <strong>Refresh inventory</strong> to ask the agent to enumerate installed applications.
+                    </div>
+                }
+                else if (_visibleApps.Count == 0)
+                {
+                    <div class="text-muted"><em>No applications match the current filter.</em></div>
+                }
+                else
+                {
+                    <div class="table-responsive">
+                        <table class="table table-hover align-middle">
+                            <thead>
+                                <tr>
+                                    <th scope="col">Name</th>
+                                    <th scope="col">Version</th>
+                                    <th scope="col">Publisher</th>
+                                    <th scope="col">Source</th>
+                                    <th scope="col" class="text-end">Size</th>
+                                    <th scope="col" class="text-end">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var app in _visibleApps)
+                                {
+                                    var pendingKey = _pendingUninstallKey;
+                                    var isPending = string.Equals(pendingKey, app.ApplicationKey, StringComparison.OrdinalIgnoreCase);
+                                    <tr>
+                                        <td>
+                                            <div class="fw-semibold">@app.Name</div>
+                                            @if (app.IsSystemComponent)
+                                            {
+                                                <span class="badge bg-secondary">system</span>
+                                            }
+                                            @if (!app.CanUninstallSilently)
+                                            {
+                                                <span class="badge bg-warning text-dark" title="No silent uninstall command advertised">non-silent</span>
+                                            }
+                                        </td>
+                                        <td>@app.Version</td>
+                                        <td>@app.Publisher</td>
+                                        <td><span class="badge bg-info text-dark">@SourceLabel(app.Source)</span></td>
+                                        <td class="text-end">@FormatSize(app.SizeBytes)</td>
+                                        <td class="text-end">
+                                            <button type="button"
+                                                    class="btn btn-sm btn-outline-danger"
+                                                    title="@(app.CanUninstallSilently ? "Uninstall silently" : "Silent uninstall not supported for this app")"
+                                                    disabled="@(!app.CanUninstallSilently || isPending || _isRefreshing || !_isOnline)"
+                                                    @onclick="() => UninstallAsync(app)">
+                                                @if (isPending)
+                                                {
+                                                    <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+                                                }
+                                                else
+                                                {
+                                                    <i class="fas fa-trash-alt me-1"></i>
+                                                    <span>Uninstall</span>
+                                                }
+                                            </button>
+                                        </td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <div class="text-muted small">
+                        Last refreshed @_lastFetchedAt?.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss").
+                        Showing @_visibleApps.Count of @_allApps.Count applications.
+                    </div>
+                }
+            </div>
+        </div>
+    }
+
+</div>

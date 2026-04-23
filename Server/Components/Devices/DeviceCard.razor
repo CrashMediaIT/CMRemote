@@ -104,6 +104,15 @@
                                 <span class="ms-2">Wake</span>
                             </button>
                         </li>
+                        @if (_packageManagerEnabled && string.Equals(Device.Platform, "Windows", StringComparison.OrdinalIgnoreCase))
+                        {
+                            <li>
+                                <a class="dropdown-item" href="@($"/packages/devices/{Device.ID}")" target="_blank" rel="noopener">
+                                    <i class="oi oi-box" title="Package Manager"></i>
+                                    <span class="ms-2">Packages</span>
+                                </a>
+                            </li>
+                        }
                         <li>
                             <FileInputButton ClassNames="dropdown-item btn btn-primary"
                                              OnChanged="OnFileInputChanged">
