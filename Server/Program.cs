@@ -264,6 +264,7 @@ services.AddSingleton<IAgentHubSessionCache, AgentHubSessionCache>();
 services.AddScoped<IInstalledApplicationsService, InstalledApplicationsService>();
 services.AddScoped<IPackageService, PackageService>();
 services.AddScoped<IPackageInstallJobService, PackageInstallJobService>();
+services.AddScoped<IUploadedMsiService, UploadedMsiService>();
 services.AddHostedService<RemoteControlSessionCleaner>();
 services.AddHostedService<RemoteControlSessionReconnector>();
 

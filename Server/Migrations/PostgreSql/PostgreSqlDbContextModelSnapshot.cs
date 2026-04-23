@@ -1019,6 +1019,66 @@ namespace Remotely.Server.Migrations.PostgreSql
                     b.ToTable("SharedFiles");
                 });
 
+            modelBuilder.Entity("Remotely.Shared.Entities.UploadedMsi", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Description")
+                        .HasMaxLength(1024)
+                        .HasColumnType("character varying(1024)");
+
+                    b.Property<string>("FileName")
+                        .IsRequired()
+                        .HasMaxLength(255)
+                        .HasColumnType("character varying(255)");
+
+                    b.Property<bool>("IsTombstoned")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(120)
+                        .HasColumnType("character varying(120)");
+
+                    b.Property<string>("OrganizationID")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("Sha256")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<string>("SharedFileId")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<long>("SizeBytes")
+                        .HasColumnType("bigint");
+
+                    b.Property<DateTimeOffset?>("TombstonedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset>("UploadedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("UploadedByUserId")
+                        .HasColumnType("text");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Sha256");
+
+                    b.HasIndex("SharedFileId");
+
+                    b.HasIndex("OrganizationID", "IsTombstoned");
+
+                    b.ToTable("UploadedMsis");
+                });
+
             modelBuilder.Entity("Remotely.Shared.Entities.RemotelyUser", b =>
                 {
                     b.HasBaseType("Microsoft.AspNetCore.Identity.IdentityUser");
@@ -1439,6 +1499,25 @@ namespace Remotely.Server.Migrations.PostgreSql
                     b.Navigation("Organization");
                 });
 
+            modelBuilder.Entity("Remotely.Shared.Entities.UploadedMsi", b =>
+                {
+                    b.HasOne("Remotely.Shared.Entities.Organization", "Organization")
+                        .WithMany("UploadedMsis")
+                        .HasForeignKey("OrganizationID")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("Remotely.Shared.Entities.SharedFile", "SharedFile")
+                        .WithMany()
+                        .HasForeignKey("SharedFileId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Organization");
+
+                    b.Navigation("SharedFile");
+                });
+
             modelBuilder.Entity("Remotely.Shared.Entities.RemotelyUser", b =>
                 {
                     b.HasOne("Remotely.Shared.Entities.Organization", "Organization")
@@ -1498,6 +1577,8 @@ namespace Remotely.Server.Migrations.PostgreSql
                     b.Navigation("ScriptSchedules");
 
                     b.Navigation("SharedFiles");
+
+                    b.Navigation("UploadedMsis");
                 });
 
             modelBuilder.Entity("Remotely.Shared.Entities.PackageInstallJob", b =>

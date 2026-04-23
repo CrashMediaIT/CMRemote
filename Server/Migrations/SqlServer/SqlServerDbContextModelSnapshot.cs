@@ -1022,6 +1022,66 @@ namespace Remotely.Server.Migrations.SqlServer
                     b.ToTable("SharedFiles");
                 });
 
+            modelBuilder.Entity("Remotely.Shared.Entities.UploadedMsi", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("Description")
+                        .HasMaxLength(1024)
+                        .HasColumnType("nvarchar(1024)");
+
+                    b.Property<string>("FileName")
+                        .IsRequired()
+                        .HasMaxLength(255)
+                        .HasColumnType("nvarchar(255)");
+
+                    b.Property<bool>("IsTombstoned")
+                        .HasColumnType("bit");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(120)
+                        .HasColumnType("nvarchar(120)");
+
+                    b.Property<string>("OrganizationID")
+                        .IsRequired()
+                        .HasColumnType("nvarchar(450)");
+
+                    b.Property<string>("Sha256")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.Property<string>("SharedFileId")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.Property<long>("SizeBytes")
+                        .HasColumnType("bigint");
+
+                    b.Property<DateTimeOffset?>("TombstonedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<DateTimeOffset>("UploadedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<string>("UploadedByUserId")
+                        .HasColumnType("nvarchar(max)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Sha256");
+
+                    b.HasIndex("SharedFileId");
+
+                    b.HasIndex("OrganizationID", "IsTombstoned");
+
+                    b.ToTable("UploadedMsis");
+                });
+
             modelBuilder.Entity("Remotely.Shared.Entities.RemotelyUser", b =>
                 {
                     b.HasBaseType("Microsoft.AspNetCore.Identity.IdentityUser");
@@ -1442,6 +1502,25 @@ namespace Remotely.Server.Migrations.SqlServer
                     b.Navigation("Organization");
                 });
 
+            modelBuilder.Entity("Remotely.Shared.Entities.UploadedMsi", b =>
+                {
+                    b.HasOne("Remotely.Shared.Entities.Organization", "Organization")
+                        .WithMany("UploadedMsis")
+                        .HasForeignKey("OrganizationID")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("Remotely.Shared.Entities.SharedFile", "SharedFile")
+                        .WithMany()
+                        .HasForeignKey("SharedFileId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Organization");
+
+                    b.Navigation("SharedFile");
+                });
+
             modelBuilder.Entity("Remotely.Shared.Entities.RemotelyUser", b =>
                 {
                     b.HasOne("Remotely.Shared.Entities.Organization", "Organization")
@@ -1501,6 +1580,8 @@ namespace Remotely.Server.Migrations.SqlServer
                     b.Navigation("ScriptSchedules");
 
                     b.Navigation("SharedFiles");
+
+                    b.Navigation("UploadedMsis");
                 });
 
             modelBuilder.Entity("Remotely.Shared.Entities.PackageInstallJob", b =>

@@ -1,15 +1,156 @@
 @page "/packages/msis"
 @attribute [Authorize(Policy = PolicyNames.PackageManagerRequired)]
 @inherits AuthComponentBase
+
+@using Microsoft.AspNetCore.Components.Forms
 @using Remotely.Server.Auth
+@using Remotely.Shared.Entities
+@using Remotely.Shared.Enums
 
 <PageTitle>Package Manager — Uploaded MSIs</PageTitle>
 
-<h2>Uploaded MSIs</h2>
+<div class="d-flex flex-column gap-3">
+    <h2 class="mb-0">Uploaded MSIs</h2>
+    <p class="text-muted small mb-0">
+        Org-scoped library of Windows Installer (MSI) bundles. Uploads are SHA-256 hashed and validated by
+        magic bytes; deletes are soft (tombstoned) until any in-flight install jobs finish.
+        The agent fetches via a short-lived signed URL and re-verifies the hash before running
+        <code>msiexec /i &lt;file&gt; /qn /norestart /L*v &lt;log&gt;</code>.
+    </p>
 
-<div class="alert alert-info">
-    <strong>Coming soon.</strong>
-    Org-scoped MSI uploads (with SHA-256 + magic-byte validation, signed short-lived download URLs,
-    and silent <code>msiexec /i &lt;file&gt; /qn /norestart</code> install) ship in PR&nbsp;C1.
-    See <a href="https://github.com/CrashMediaIT/CMRemote/blob/main/ROADMAP.md">ROADMAP.md</a>.
+    <div class="row g-3">
+        <div class="col-lg-5">
+            <div class="card">
+                <div class="card-header">Upload MSI</div>
+                <div class="card-body">
+                    <div class="mb-2">
+                        <label class="form-label">Display name</label>
+                        <input class="form-control" @bind="_uploadName" maxlength="120" />
+                    </div>
+                    <div class="mb-2">
+                        <label class="form-label">Description (optional)</label>
+                        <textarea class="form-control" rows="2" maxlength="1024" @bind="_uploadDescription"></textarea>
+                    </div>
+                    <div class="mb-2">
+                        <label class="form-label">MSI file</label>
+                        <InputFile OnChange="HandleFileSelected" accept=".msi" class="form-control" />
+                        <div class="form-text small">
+                            Max @MaxSizeMb MiB. Only OLE2 / Windows Installer files are accepted.
+                        </div>
+                    </div>
+                    @if (_uploadProgress is not null)
+                    {
+                        <div class="alert alert-info py-1 px-2 small mb-2">@_uploadProgress</div>
+                    }
+                    @if (!string.IsNullOrEmpty(_uploadError))
+                    {
+                        <div class="alert alert-danger py-1 px-2 small mb-0">@_uploadError</div>
+                    }
+                </div>
+            </div>
+        </div>
+
+        <div class="col-lg-7">
+            <div class="card">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <span>Library</span>
+                    <span class="small text-muted">@_msis.Count uploaded</span>
+                </div>
+                <div class="table-responsive">
+                    <table class="table table-sm table-hover mb-0 align-middle">
+                        <thead>
+                            <tr>
+                                <th>Name</th>
+                                <th>Filename</th>
+                                <th>Size</th>
+                                <th>SHA-256</th>
+                                <th></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @if (_msis.Count == 0)
+                            {
+                                <tr>
+                                    <td colspan="5" class="text-center text-muted small py-3">No MSIs uploaded yet.</td>
+                                </tr>
+                            }
+                            else
+                            {
+                                @foreach (var msi in _msis)
+                                {
+                                    <tr @key="msi.Id">
+                                        <td>
+                                            <div>@msi.Name</div>
+                                            @if (!string.IsNullOrWhiteSpace(msi.Description))
+                                            {
+                                                <div class="text-muted small">@msi.Description</div>
+                                            }
+                                        </td>
+                                        <td><code>@msi.FileName</code></td>
+                                        <td>@FormatBytes(msi.SizeBytes)</td>
+                                        <td>
+                                            <code class="small" title="@msi.Sha256">@msi.Sha256.Substring(0, 12)…</code>
+                                        </td>
+                                        <td class="text-end">
+                                            <div class="btn-group btn-group-sm">
+                                                <button type="button"
+                                                        class="btn btn-outline-primary"
+                                                        @onclick="() => HandleRegisterAsPackage(msi)"
+                                                        disabled="@_isWorking"
+                                                        title="Create a Package row pointing at this MSI">
+                                                    Register
+                                                </button>
+                                                <button type="button"
+                                                        class="btn btn-outline-secondary"
+                                                        @onclick="() => HandleSendToDevice(msi)"
+                                                        disabled="@(_isWorking || string.IsNullOrEmpty(_dispatchDeviceId))"
+                                                        title="Install on the device selected below">
+                                                    Send
+                                                </button>
+                                                <button type="button"
+                                                        class="btn btn-outline-danger"
+                                                        @onclick="() => HandleDelete(msi.Id)"
+                                                        disabled="@_isWorking">
+                                                    Delete
+                                                </button>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                }
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-header">Install target</div>
+        <div class="card-body">
+            <p class="text-muted small mb-3">
+                Pick a Windows device. <strong>Register</strong> creates an org Package pointing at the MSI;
+                <strong>Send</strong> registers (if needed) and dispatches the install in one click.
+            </p>
+            <div class="row g-2 align-items-end">
+                <div class="col-md-9">
+                    <label class="form-label">Target device</label>
+                    <select class="form-select" @bind="_dispatchDeviceId">
+                        <option value="">— pick a device —</option>
+                        @foreach (var d in _devices)
+                        {
+                            <option value="@d.ID">
+                                @d.DeviceName @(string.IsNullOrEmpty(d.Alias) ? string.Empty : "(" + d.Alias + ")")
+                                @(d.IsOnline ? "" : " — offline")
+                            </option>
+                        }
+                    </select>
+                </div>
+            </div>
+            @if (!string.IsNullOrEmpty(_dispatchMessage))
+            {
+                <div class="alert alert-@_dispatchMessageClass mt-3 py-1 px-2 small mb-0">@_dispatchMessage</div>
+            }
+        </div>
+    </div>
 </div>

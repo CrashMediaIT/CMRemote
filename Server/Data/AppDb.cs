@@ -45,6 +45,7 @@ public class AppDb : IdentityDbContext
     public DbSet<ScriptRun> ScriptRuns { get; set; }
     public DbSet<ScriptSchedule> ScriptSchedules { get; set; }
     public DbSet<SharedFile> SharedFiles { get; set; }
+    public DbSet<UploadedMsi> UploadedMsis { get; set; }
     public new DbSet<RemotelyUser> Users { get; set; }
 
     protected override void OnConfiguring(DbContextOptionsBuilder options)
@@ -241,6 +242,27 @@ public class AppDb : IdentityDbContext
             .WithOne(x => x.Result!)
             .HasForeignKey<PackageInstallResult>(x => x.PackageInstallJobId)
             .OnDelete(DeleteBehavior.Cascade);
+
+        builder.Entity<Organization>()
+            .HasMany(x => x.UploadedMsis)
+            .WithOne(x => x.Organization!)
+            .HasForeignKey(x => x.OrganizationID)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        builder.Entity<UploadedMsi>()
+            .HasOne(x => x.SharedFile)
+            .WithMany()
+            .HasForeignKey(x => x.SharedFileId)
+            // Restrict so the SharedFile cleanup sweep cannot accidentally
+            // orphan an UploadedMsi row — deletion has to go through the
+            // tombstone-then-purge flow in IUploadedMsiService.
+            .OnDelete(DeleteBehavior.Restrict);
+
+        builder.Entity<UploadedMsi>()
+            .HasIndex(x => new { x.OrganizationID, x.IsTombstoned });
+
+        builder.Entity<UploadedMsi>()
+            .HasIndex(x => x.Sha256);
 
         builder.Entity<DeviceGroup>()
             .HasMany(x => x.Devices)

@@ -108,7 +108,17 @@ public class Program
             services.AddSingleton<IDeviceInformationService, DeviceInfoGeneratorWin>();
             services.AddSingleton<IElevationDetector, ElevationDetectorWin>();
             services.AddSingleton<IInstalledApplicationsProvider, WindowsInstalledApplicationsProvider>();
+            // Per-provider implementations register as IPackageProvider so
+            // the composite picks them up via IEnumerable<IPackageProvider>.
+            // The composite itself is registered under ICompositePackageProvider
+            // and re-exported as the *single* IPackageProvider the hub resolves
+            // (last AddSingleton wins for a single-resolve), so the hub keeps
+            // its single dependency and adding new providers is a one-line
+            // change here.
             services.AddSingleton<IPackageProvider, ChocolateyPackageProvider>();
+            services.AddSingleton<IPackageProvider, MsiPackageInstaller>();
+            services.AddSingleton<ICompositePackageProvider, CompositePackageProvider>();
+            services.AddSingleton<IPackageProvider>(sp => sp.GetRequiredService<ICompositePackageProvider>());
         }
         else if (OperatingSystem.IsLinux())
         {
