@@ -12,6 +12,7 @@ members = [
     "crates/cmremote-wire",
     "crates/cmremote-platform",
     "crates/cmremote-agent",
+    "crates/cmremote-webrtc-crypto-spike",
 ]
 
 [workspace.package]

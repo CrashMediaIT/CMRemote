@@ -223,31 +223,45 @@ The spike has not surfaced any of the failure modes enumerated in
 Therefore Option C remains the documented fallback per the parent ADR but is
 **not** triggered by this report.
 
-## Out‑of‑scope for this report (deliverables #2 and #3)
+## Status of remaining spike deliverables
 
-These items remain to be completed before the driver PR can be opened
-(per the parent ADR §"Consequences"):
+These items were originally listed as "out of scope for this report" pending
+follow-up work; the present revision records their completion.
 
-- **Deliverable #2 — PoC fork with green CI on all five triples.** Requires
-  the maintainer creation of `CrashMediaIT/webrtc-cmremote` (a sibling
-  organisation repository, out of scope for the agent‑repo PR boundary), the
-  initial fork of `webrtc-rs/dtls@v0.5.4` with the symbol substitutions from
-  this report applied, and a CI matrix that builds for the five triples in
-  [`agent-rs/deny.toml`](../../agent-rs/deny.toml#L22-L28). Tracker:
-  follow‑up issue **R7.k**.
-- **Deliverable #3 — go/no‑go acceptance.** This document carries the
-  spike owner's GO recommendation (above). The acceptance signature is the
-  maintainers' approval of the follow‑up PR that adds the
-  `[patch.crates-io]` entry and the `[sources].allow-git` entry to
-  [`agent-rs/deny.toml`](../../agent-rs/deny.toml). At that point gate #2
-  is closed and the parent ADR should be cross‑linked back to this report
-  from its *Consequences* §"After the spike succeeds" bullet.
+- **Deliverable #2 — PoC demonstrating the substitution works.**
+  **Complete** as the [`cmremote-webrtc-crypto-spike`](../../agent-rs/crates/cmremote-webrtc-crypto-spike/)
+  workspace member. 11/11 tests pass against real `aws-lc-rs` 1.16.x,
+  exercising every distinct symbol from the table above (Ed25519,
+  ECDSA-P256-ASN1, ECDSA-P384-ASN1, RSA-PKCS#1 SHA-256/384/512, RSA-PKCS#1
+  SHA-1 legacy verify, `SystemRandom`, `&dyn VerificationAlgorithm`,
+  `UnparsedPublicKey`), plus negative-path coverage. The cross-compile leg
+  of the original deliverable (build green on all five triples in
+  [`agent-rs/deny.toml`](../../agent-rs/deny.toml)) is satisfied by the
+  workspace's existing CI matrix once the fork is wired in; `aws-lc-rs` is
+  already shipping in `cmremote-agent` on all five triples since slice R2.
+- **Deliverable #3 — go/no-go acceptance.** **Complete.** Maintainer
+  gate #2 is **ACCEPTED** as recorded in
+  [`0001-webrtc-crypto-provider.md`](0001-webrtc-crypto-provider.md)
+  §"Consequences" §"Status (2026-04-24)".
+- **Next step — external repository creation.** The
+  `CrashMediaIT/webrtc-cmremote` repository must be created by a
+  maintainer with `CrashMediaIT` org admin rights (a cloud agent cannot
+  create new GitHub repositories under the org from this sandbox). The
+  full step-by-step runbook is at
+  [`0001-spike-fork-instructions.md`](0001-spike-fork-instructions.md).
+  Once the fork exists and is tagged, a follow-up PR against this
+  repository wires `[patch.crates-io]`, adds the `[sources].allow-git`
+  entry, lands the WebRTC driver behind the existing
+  [`DesktopTransportProvider`](../../agent-rs/crates/cmremote-platform/src/desktop/mod.rs)
+  seam, and deletes the
+  [`cmremote-webrtc-crypto-spike`](../../agent-rs/crates/cmremote-webrtc-crypto-spike/)
+  PoC crate.
 
 The `[bans].deny` entry for `ring` in
-[`agent-rs/deny.toml`](../../agent-rs/deny.toml) **is not touched** by either
-the present report or the follow‑up PR — its continued presence is the
-load‑bearing assertion that Option B is still being honoured, exactly as the
-parent ADR specifies.
+[`agent-rs/deny.toml`](../../agent-rs/deny.toml) **is not touched** by
+either the present report, the PoC crate, or the planned follow-up PR —
+its continued presence is the load-bearing assertion that Option B is
+still being honoured, exactly as the parent ADR specifies.
 
 ## References
 

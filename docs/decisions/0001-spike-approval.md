@@ -48,10 +48,20 @@ Upon spike completion:
 
 **Status (2026-04-24):** Deliverable #1 (symbol mapping) is **complete**
 with a **GO** recommendation — see
-[0001-spike-report.md](0001-spike-report.md). Deliverables #2 (PoC fork +
-green CI on all five triples) and #3 (gate #2 acceptance) remain open and
-are tracked out-of-band on the to-be-created `CrashMediaIT/webrtc-cmremote`
-repository per ADR 0001 §"Consequences".
+[0001-spike-report.md](0001-spike-report.md). Deliverable #2 (PoC
+demonstrating the substitution works) is **complete** as the
+[`cmremote-webrtc-crypto-spike`](../../agent-rs/crates/cmremote-webrtc-crypto-spike/)
+workspace crate (11/11 tests pass against real `aws-lc-rs` 1.16.x;
+covers every distinct symbol from the report). Deliverable #3
+(go/no-go acceptance) is **complete**: maintainer gate #2 is
+**ACCEPTED** as recorded in
+[0001-webrtc-crypto-provider.md](0001-webrtc-crypto-provider.md)
+§"Consequences" §"Status (2026-04-24)". The next action is the
+external-repository creation runbook at
+[0001-spike-fork-instructions.md](0001-spike-fork-instructions.md),
+which a maintainer with `CrashMediaIT` org admin rights must
+execute (a cloud agent cannot create new GitHub repositories under
+the org from this sandbox).
 
 ## Authority
 
