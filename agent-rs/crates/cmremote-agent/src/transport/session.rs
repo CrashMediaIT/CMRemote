@@ -18,12 +18,14 @@ use cmremote_wire::{
 };
 use futures_util::{SinkExt, StreamExt};
 use tokio::select;
-use tokio::sync::watch;
+use tokio::sync::{mpsc, watch};
 use tokio::time::{timeout, Instant};
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 use tokio_tungstenite::tungstenite::protocol::CloseFrame;
 use tokio_tungstenite::tungstenite::Message;
 use tracing::{debug, info, trace, warn};
+
+use crate::dispatch::DispatchOutcome;
 
 /// Period between outbound `Ping` frames when the connection is idle.
 ///
@@ -204,15 +206,18 @@ pub fn build_ping_frame(encoding: HubProtocol) -> Result<Message, SessionError> 
 /// Drive the session until one of: server close, idle timeout,
 /// shutdown signal, transport error.
 ///
-/// `on_record` is invoked once per inbound hub record; in slice R2
-/// the runtime ignores those (the dispatch layer arrives in slice
-/// R2a). The hook exists so integration tests can assert on what
-/// actually came through.
+/// `outbound` receives messages (hub completions, etc.) from the
+/// dispatch layer that should be sent to the server.
+///
+/// `on_record` is invoked once per inbound hub record and returns a
+/// [`DispatchOutcome`]: `Continue` to keep running, or `Quarantine`
+/// to send a close and return [`SessionExit::Quarantined`].
 pub async fn run_session<S>(
     ws: S,
     encoding: HubProtocol,
     shutdown: &mut watch::Receiver<bool>,
-    mut on_record: impl FnMut(Vec<u8>),
+    outbound: &mut mpsc::Receiver<Message>,
+    mut on_record: impl FnMut(Vec<u8>) -> DispatchOutcome,
 ) -> Result<SessionExit, SessionError>
 where
     S: SinkExt<Message, Error = tokio_tungstenite::tungstenite::Error>
@@ -245,6 +250,14 @@ where
                         reason: "shutdown".into(),
                     }))).await;
                     return Ok(SessionExit::LocalShutdown);
+                }
+            }
+
+            outbound_msg = outbound.recv() => {
+                if let Some(msg) = outbound_msg {
+                    if let Err(e) = sink.send(msg).await {
+                        return Err(SessionError::from(e));
+                    }
                 }
             }
 
@@ -282,7 +295,16 @@ where
                             json.push(text.as_bytes())?;
                             while let Some(rec) = json.next_record() {
                                 trace!(bytes = rec.len(), "inbound json record");
-                                on_record(rec);
+                                match on_record(rec) {
+                                    DispatchOutcome::Continue => {}
+                                    DispatchOutcome::Quarantine { reason } => {
+                                        let _ = sink.send(Message::Close(Some(CloseFrame {
+                                            code: CloseCode::Normal,
+                                            reason: reason.as_deref().unwrap_or("quarantined").to_owned().into(),
+                                        }))).await;
+                                        return Ok(SessionExit::Quarantined { reason });
+                                    }
+                                }
                             }
                         } else {
                             // Wrong-encoding frame on a messagepack
@@ -302,7 +324,16 @@ where
                             msgpack.push(&bytes)?;
                             while let Some(rec) = msgpack.next_record() {
                                 trace!(bytes = rec.len(), "inbound msgpack record");
-                                on_record(rec);
+                                match on_record(rec) {
+                                    DispatchOutcome::Continue => {}
+                                    DispatchOutcome::Quarantine { reason } => {
+                                        let _ = sink.send(Message::Close(Some(CloseFrame {
+                                            code: CloseCode::Normal,
+                                            reason: reason.as_deref().unwrap_or("quarantined").to_owned().into(),
+                                        }))).await;
+                                        return Ok(SessionExit::Quarantined { reason });
+                                    }
+                                }
                             }
                         } else {
                             let _ = sink.send(Message::Close(Some(CloseFrame {

@@ -13,16 +13,20 @@
 //! handshake, drive the session, on disconnect either back off and
 //! reconnect or honour a quarantine close, and on local shutdown tear
 //! down cleanly.
+//!
+//! Slice R2a wires in the dispatch layer: the `on_record` closure now
+//! routes inbound hub invocations to the appropriate handler.
 
 pub mod backoff;
 pub mod connect;
 pub mod session;
 
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use cmremote_wire::{ConnectionInfo, HubProtocol};
 use tokio::select;
-use tokio::sync::watch;
+use tokio::sync::{mpsc, watch};
 use tokio_tungstenite::tungstenite::http::header::SEC_WEBSOCKET_PROTOCOL;
 use tracing::{error, info, warn};
 
@@ -34,6 +38,9 @@ pub use session::{
     build_ping_frame, perform_handshake, run_session, SessionError, SessionExit, HANDSHAKE_TIMEOUT,
     IDLE_TIMEOUT, PING_INTERVAL,
 };
+
+use crate::dispatch::{make_on_record, InvocationTracker};
+use crate::handlers::AgentHandlers;
 
 /// Errors surfaced from the transport layer to the runtime.
 #[derive(Debug, thiserror::Error)]
@@ -54,6 +61,7 @@ pub enum TransportError {
 /// from the runtime) or the server quarantines the agent.
 pub async fn run_until_shutdown(
     info: ConnectionInfo,
+    handlers: Arc<AgentHandlers>,
     mut shutdown: watch::Receiver<bool>,
 ) -> Result<(), TransportError> {
     let mut backoff = Backoff::new();
@@ -132,13 +140,19 @@ pub async fn run_until_shutdown(
             }
         }
 
-        // Steady state: read loop + ping ticker, both racing the
-        // shutdown signal. The session driver consumes `ws`; we get
-        // back the exit reason but no longer have the socket.
-        let exit = run_session(ws, encoding, &mut shutdown, |_record| {
-            // Slice R2a will install the dispatch layer here.
-        })
-        .await;
+        // Per-connection outbound channel: dispatch tasks inject
+        // HubCompletion messages that the session loop flushes to the sink.
+        let (outbound_tx, mut outbound_rx) =
+            mpsc::channel::<tokio_tungstenite::tungstenite::Message>(64);
+
+        // Fresh per-connection invocation-ID tracker.
+        let tracker = Arc::new(Mutex::new(InvocationTracker::default()));
+
+        let on_record = make_on_record(encoding, outbound_tx, handlers.clone(), tracker);
+
+        // Steady state: read loop + ping ticker + outbound drain, all
+        // racing the shutdown signal.
+        let exit = run_session(ws, encoding, &mut shutdown, &mut outbound_rx, on_record).await;
 
         match exit {
             Ok(SessionExit::LocalShutdown) => return Ok(()),

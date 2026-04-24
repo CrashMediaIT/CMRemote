@@ -10,6 +10,8 @@
 
 pub mod cli;
 pub mod config;
+pub mod dispatch;
+pub mod handlers;
 pub mod logging;
 pub mod runtime;
 pub mod transport;

@@ -18,6 +18,7 @@
 
 use std::time::Duration;
 
+use cmremote_agent::dispatch::DispatchOutcome;
 use cmremote_agent::transport::{
     perform_handshake, run_session, SessionError, SessionExit, IDLE_TIMEOUT, PING_INTERVAL,
 };
@@ -26,7 +27,7 @@ use cmremote_wire::{
 };
 use futures_util::{SinkExt, StreamExt};
 use tokio::net::TcpListener;
-use tokio::sync::watch;
+use tokio::sync::{mpsc, watch};
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 use tokio_tungstenite::tungstenite::protocol::CloseFrame;
 use tokio_tungstenite::tungstenite::Message;
@@ -139,10 +140,14 @@ async fn session_surfaces_inbound_record_then_exits_on_server_close() {
         .expect("handshake");
 
     let (_tx, mut rx) = watch::channel(false);
+    let (_otx, mut orx) = mpsc::channel::<Message>(1);
     let mut received: Vec<Vec<u8>> = Vec::new();
-    let exit = run_session(ws, HubProtocol::Json, &mut rx, |rec| received.push(rec))
-        .await
-        .expect("session");
+    let exit = run_session(ws, HubProtocol::Json, &mut rx, &mut orx, |rec| {
+        received.push(rec);
+        DispatchOutcome::Continue
+    })
+    .await
+    .expect("session");
 
     assert!(
         matches!(exit, SessionExit::Reconnect { .. }),
@@ -163,6 +168,7 @@ async fn session_exits_cleanly_on_local_shutdown() {
         .expect("handshake");
 
     let (tx, mut rx) = watch::channel(false);
+    let (_otx, mut orx) = mpsc::channel::<Message>(1);
 
     // Flip shutdown to true after a short delay; the session must
     // observe it and return `LocalShutdown`.
@@ -171,9 +177,11 @@ async fn session_exits_cleanly_on_local_shutdown() {
         let _ = tx.send(true);
     });
 
-    let exit = run_session(ws, HubProtocol::Json, &mut rx, |_| {})
-        .await
-        .expect("session");
+    let exit = run_session(ws, HubProtocol::Json, &mut rx, &mut orx, |_| {
+        DispatchOutcome::Continue
+    })
+    .await
+    .expect("session");
     assert_eq!(exit, SessionExit::LocalShutdown);
 
     shutdown_handle.await.unwrap();

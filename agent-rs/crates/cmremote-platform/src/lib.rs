@@ -1,15 +1,23 @@
 // Source: CMRemote, clean-room implementation.
 //
 // `cmremote-platform` defines the per-OS provider traits used by the
-// agent. The R0 scaffold only declares the trait surface and a generic
-// host descriptor; per-OS implementations land slice-by-slice (see
-// ROADMAP.md → "Rust agent slice-by-slice delivery plan").
+// agent. Slice R3 expands the device-info snapshot to the full
+// `DeviceSnapshot` DTO matching the .NET `DeviceClientDto`, adds the
+// `InstalledApplicationsProvider` trait (R5), and provides a
+// `LinuxDeviceInfoProvider` backed by `/proc` and `/sys`.
 
 #![forbid(unsafe_code)]
 #![deny(rust_2018_idioms)]
 #![warn(missing_docs)]
 
 //! Operating-system abstractions for the CMRemote agent.
+
+pub mod apps;
+#[cfg(target_os = "linux")]
+pub mod linux;
+#[cfg(target_os = "linux")]
+pub mod linux_apps;
+pub mod stubs;
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -64,53 +72,112 @@ pub enum PlatformError {
     Io(String),
 }
 
-/// Reports static information about the host (hostname, OS version,
-/// architecture, …). Implementations land in slice R3.
-pub trait DeviceInfoProvider: Send + Sync {
-    /// Return a snapshot of the current host description.
-    fn snapshot(&self) -> Result<HostDescriptor, PlatformError>;
+// ---------------------------------------------------------------------------
+// Device information — slice R3
+// ---------------------------------------------------------------------------
+
+/// A single filesystem / block-device reported in the device snapshot.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct DriveInfo {
+    /// Mount point or drive letter (e.g. `/` or `C:`).
+    pub name: String,
+    /// Total capacity in gibibytes.
+    pub total_gb: f64,
+    /// Free space in gibibytes.
+    pub free_gb: f64,
 }
 
-/// Static host description reported back to the server.
+/// Full device snapshot sent to the server via the `TriggerHeartbeat`
+/// hub invocation. Mirrors `Remotely.Shared.Dtos.DeviceClientDto` field
+/// for field.
 ///
-/// Field set is deliberately small for R0; slice R3 expands it to match
-/// the .NET agent's `Device` DTO.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct HostDescriptor {
-    /// Operating-system family.
-    pub os: HostOs,
-    /// Free-form OS description (e.g. `"Windows 11 23H2"`).
-    pub os_description: String,
-    /// Reported hostname.
+/// Fields `device_id` and `organization_id` are filled in by the caller
+/// (from `ConnectionInfo`) after the provider returns the snapshot.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "PascalCase")]
+pub struct DeviceSnapshot {
+    /// Device UUID — populated from `ConnectionInfo.DeviceID`.
+    pub device_id: String,
+    /// Org UUID — populated from `ConnectionInfo.OrganizationID`.
+    pub organization_id: String,
+    /// Machine / DNS hostname.
     pub hostname: String,
-    /// CPU architecture (`x86_64`, `aarch64`, …).
+    /// OS family.
+    pub os: HostOs,
+    /// Detailed OS string (e.g. `"Linux 6.1.0 #1 SMP"`).
+    pub os_description: String,
+    /// CPU architecture string (`x86_64`, `aarch64`, …).
     pub architecture: String,
+    /// Logical processor count.
+    pub processor_count: usize,
+    /// `true` when the process is 64-bit.
+    pub is_64bit: bool,
+    /// Agent build version from `CARGO_PKG_VERSION`.
+    pub agent_version: String,
+    /// Logged-in user running the agent process.
+    pub current_user: String,
+    /// Mounted drives / volumes.
+    pub drives: Vec<DriveInfo>,
+    /// Total physical memory in GB.
+    pub total_memory_gb: f64,
+    /// Used physical memory in GB.
+    pub used_memory_gb: f64,
+    /// Instantaneous CPU utilisation 0–100.
+    pub cpu_utilization: f64,
+    /// MAC addresses of active network interfaces.
+    pub mac_addresses: Vec<String>,
 }
 
-impl HostDescriptor {
-    /// Construct a `HostDescriptor` from the values the Rust standard
-    /// library exposes without any OS-specific dependencies. Used by
-    /// the R0 stub provider and by tests.
-    pub fn from_std() -> Self {
-        Self {
-            os: HostOs::current(),
-            os_description: std::env::consts::OS.to_string(),
-            hostname: std::env::var("HOSTNAME")
-                .or_else(|_| std::env::var("COMPUTERNAME"))
-                .unwrap_or_else(|_| "unknown".into()),
-            architecture: std::env::consts::ARCH.to_string(),
-        }
+impl Default for HostOs {
+    fn default() -> Self {
+        HostOs::current()
     }
 }
 
-/// R0 stub provider that returns the standard-library snapshot.
-/// Replaced per-OS in slice R3.
+/// Reports static + dynamic information about the host.
+pub trait DeviceInfoProvider: Send + Sync {
+    /// Return a snapshot of the current host. The `device_id` and
+    /// `organization_id` fields default to empty strings; the caller
+    /// must fill them from `ConnectionInfo` before sending.
+    fn snapshot(&self) -> Result<DeviceSnapshot, PlatformError>;
+}
+
+/// Backward-compat alias used by R0-era code.
+pub type HostDescriptor = DeviceSnapshot;
+
+// ---------------------------------------------------------------------------
+// Std / stub provider
+// ---------------------------------------------------------------------------
+
+/// Provider that reads everything available through the Rust standard
+/// library. On Linux this delegates to `LinuxDeviceInfoProvider` for
+/// the richer `/proc` data.
 #[derive(Debug, Default)]
 pub struct StdDeviceInfoProvider;
 
 impl DeviceInfoProvider for StdDeviceInfoProvider {
-    fn snapshot(&self) -> Result<HostDescriptor, PlatformError> {
-        Ok(HostDescriptor::from_std())
+    fn snapshot(&self) -> Result<DeviceSnapshot, PlatformError> {
+        #[cfg(target_os = "linux")]
+        {
+            linux::LinuxDeviceInfoProvider.snapshot()
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            Ok(DeviceSnapshot {
+                os: HostOs::current(),
+                os_description: std::env::consts::OS.to_string(),
+                hostname: std::env::var("HOSTNAME")
+                    .or_else(|_| std::env::var("COMPUTERNAME"))
+                    .unwrap_or_else(|_| "unknown".into()),
+                architecture: std::env::consts::ARCH.to_string(),
+                processor_count: std::thread::available_parallelism()
+                    .map(|n| n.get())
+                    .unwrap_or(1),
+                is_64bit: cfg!(target_pointer_width = "64"),
+                agent_version: env!("CARGO_PKG_VERSION").to_string(),
+                ..DeviceSnapshot::default()
+            })
+        }
     }
 }
 
@@ -132,5 +199,6 @@ mod tests {
         let snap = StdDeviceInfoProvider.snapshot().unwrap();
         assert!(!snap.architecture.is_empty());
         assert!(!snap.os_description.is_empty());
+        assert!(snap.processor_count > 0);
     }
 }

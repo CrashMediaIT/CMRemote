@@ -4,14 +4,22 @@
 //!
 //! Slice R0 set up structured logging, configuration, and a shutdown
 //! signal. Slice R2 layers the WebSocket connection / heartbeat /
-//! reconnect loop on top via [`crate::transport::run_until_shutdown`].
+//! reconnect loop on top. Slice R2a wires in the hub dispatch layer
+//! (R3/R4/R5 handlers follow).
 
+use std::sync::Arc;
+
+#[cfg(target_os = "linux")]
+use cmremote_platform::linux_apps::DpkgProvider;
+#[cfg(not(target_os = "linux"))]
+use cmremote_platform::stubs::NotSupportedAppsProvider;
 use cmremote_platform::{DeviceInfoProvider, StdDeviceInfoProvider};
 use cmremote_wire::ConnectionInfo;
 use tokio::sync::watch;
 use tracing::{info, warn};
 
 use crate::cli::CliArgs;
+use crate::handlers::AgentHandlers;
 use crate::transport::{self, TransportError};
 
 /// Errors surfaced from the agent runtime.
@@ -40,6 +48,19 @@ pub async fn run(cli: CliArgs) -> Result<(), RuntimeError> {
 
     log_startup_banner(&info, &host);
 
+    let device_info = Arc::new(StdDeviceInfoProvider);
+
+    #[cfg(target_os = "linux")]
+    let apps = Arc::new(DpkgProvider);
+    #[cfg(not(target_os = "linux"))]
+    let apps = Arc::new(NotSupportedAppsProvider);
+
+    let handlers = Arc::new(AgentHandlers {
+        connection_info: info.clone(),
+        device_info,
+        apps,
+    });
+
     // The shutdown channel is a single-producer / multi-consumer
     // boolean: the OS-signal task flips it from `false` to `true`,
     // and every owner of a `watch::Receiver` (currently: the
@@ -52,7 +73,7 @@ pub async fn run(cli: CliArgs) -> Result<(), RuntimeError> {
         let _ = shutdown_tx.send(true);
     });
 
-    let transport_result = transport::run_until_shutdown(info, shutdown_rx).await;
+    let transport_result = transport::run_until_shutdown(info, handlers, shutdown_rx).await;
 
     // Make sure the signal task has finished — otherwise we leak it
     // for the (vanishingly small) window between transport exit and
@@ -63,7 +84,7 @@ pub async fn run(cli: CliArgs) -> Result<(), RuntimeError> {
     Ok(())
 }
 
-fn log_startup_banner(info: &ConnectionInfo, host: &cmremote_platform::HostDescriptor) {
+fn log_startup_banner(info: &ConnectionInfo, host: &cmremote_platform::DeviceSnapshot) {
     info!(
         device_id = %info.device_id,
         organization_id = info.organization_id.as_deref().unwrap_or(""),
@@ -71,7 +92,7 @@ fn log_startup_banner(info: &ConnectionInfo, host: &cmremote_platform::HostDescr
         os = host.os.as_str(),
         os_description = %host.os_description,
         architecture = %host.architecture,
-        "cmremote-agent starting (slice R2: connection / heartbeat loop)"
+        "cmremote-agent starting (slice R2a: hub dispatch surface)"
     );
 }
 
@@ -116,7 +137,7 @@ mod tests {
             server_verification_token: None,
             organization_token: None,
         };
-        let host = cmremote_platform::HostDescriptor::from_std();
+        let host = StdDeviceInfoProvider.snapshot().unwrap();
         log_startup_banner(&info, &host);
     }
 }

@@ -24,7 +24,7 @@ authors = ["CMRemote contributors"]
 
 [workspace.dependencies]
 # Async runtime + utilities.
-tokio = { version = "1.41", features = ["macros", "rt-multi-thread", "signal", "sync", "time", "fs", "io-util", "net"] }
+tokio = { version = "1.41", features = ["macros", "rt-multi-thread", "signal", "sync", "time", "fs", "io-util", "net", "process"] }
 futures = "0.3"
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 
