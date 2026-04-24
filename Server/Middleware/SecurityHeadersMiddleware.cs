@@ -148,17 +148,14 @@ public class SecurityHeadersMiddleware
 
     public Task InvokeAsync(HttpContext context)
     {
-        // Headers are written into Response.OnStarting so they apply to
-        // every code path that produces a response, including short-circuit
-        // responses returned by other middleware (e.g. the setup-redirect
-        // middleware's 503 + Retry-After response).
-        context.Response.OnStarting(static state =>
-        {
-            var ctx = (HttpContext)state;
-            ApplyHeaders(ctx);
-            return Task.CompletedTask;
-        }, context);
-
+        // Apply headers eagerly so they are present on every response,
+        // including short-circuit responses returned by other middleware
+        // (e.g. the setup-redirect middleware's 503 + Retry-After
+        // response). SetIfMissing preserves anything an upstream
+        // middleware has already set; downstream middleware that needs
+        // a per-request override can still mutate the header dictionary
+        // before Response.StartAsync fires.
+        ApplyHeaders(context);
         return _next(context);
     }
 

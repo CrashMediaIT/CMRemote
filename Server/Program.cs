@@ -235,6 +235,7 @@ services.AddTransient<IDataService, DataService>();
 services.AddScoped<ApiAuthorizationFilter>();
 services.AddScoped<LocalOnlyFilter>();
 services.AddScoped<ExpiringTokenFilter>();
+services.AddScoped<SignedMsiTokenFilter>();
 services.AddHostedService<DataCleanupService>();
 services.AddHostedService<ScriptScheduler>();
 services.AddSingleton<IUpgradeService, UpgradeService>();
@@ -248,6 +249,9 @@ services.AddSingleton<ICircuitManager, CircuitManager>();
 services.AddScoped<IAuthService, AuthService>();
 services.AddScoped<ISelectedCardsStore, SelectedCardsStore>();
 services.AddScoped<IExpiringTokenService, ExpiringTokenService>();
+services.AddScoped<ISignedMsiUrlService, SignedMsiUrlService>();
+services.AddScoped<Remotely.Server.Services.AuditLog.IAuditLogService,
+    Remotely.Server.Services.AuditLog.AuditLogService>();
 services.AddScoped<IScriptScheduleDispatcher, ScriptScheduleDispatcher>();
 services.AddSingleton<IOtpProvider, OtpProvider>();
 services.AddSingleton<IEmbeddedServerDataProvider, EmbeddedServerDataProvider>();

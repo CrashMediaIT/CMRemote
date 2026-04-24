@@ -66,4 +66,28 @@ public class PackageInstallRequestDto
     /// be sanitised server-side (no path separators, no NUL).
     /// </summary>
     public string? MsiFileName { get; set; }
+
+    /// <summary>
+    /// Signed download token (ROADMAP.md "Track S / S7 — Runtime
+    /// security posture: signed download URLs ... with a short TTL and
+    /// a device-scoped HMAC"). Populated alongside
+    /// <see cref="MsiAuthToken"/> while the agent rolls over to the
+    /// new <c>/api/uploaded-msi/{id}/download</c> endpoint. The agent
+    /// presents this token in the
+    /// <c>X-CMRemote-Msi-Token</c> header; the token's protected
+    /// payload binds the download to a specific (device, MSI) pair so
+    /// a leaked URL has bounded blast radius. Optional during R6
+    /// rollout; required once the legacy <c>/api/filesharing/{id}</c>
+    /// path is locked down to admin users only.
+    /// </summary>
+    public string? MsiSignedToken { get; set; }
+
+    /// <summary>
+    /// Absolute download URL the agent should fetch
+    /// <see cref="MsiSharedFileId"/> from when
+    /// <see cref="MsiSignedToken"/> is in use. Distinct from the
+    /// implicit <c>/api/filesharing/{id}</c> URL the legacy
+    /// expiring-token path uses.
+    /// </summary>
+    public string? MsiSignedDownloadUrl { get; set; }
 }

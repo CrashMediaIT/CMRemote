@@ -104,6 +104,20 @@ public class PackageInstallJobRateLimiter : IPackageInstallJobRateLimiter, IDisp
         }
 
         var limiter = _limiters.GetOrAdd(organizationId, CreateLimiter);
+
+        // SlidingWindowRateLimiter throws ArgumentOutOfRangeException when
+        // a single AcquireAsync call asks for more permits than the
+        // window's PermitLimit. For us, that's a legitimate business
+        // outcome (the bundle is bigger than the per-window budget) so
+        // we translate the throw into a refusal.
+        if (permitCount > Math.Max(1, _options.PermitsPerWindow))
+        {
+            _logger.LogWarning(
+                "Per-org install-job rate limit hit for OrgId={orgId} — request size {permits} exceeds the window budget {budget}.",
+                organizationId, permitCount, _options.PermitsPerWindow);
+            return false;
+        }
+
         using var lease = await limiter.AcquireAsync(permitCount, cancellationToken);
         if (lease.IsAcquired)
         {

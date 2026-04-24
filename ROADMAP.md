@@ -209,7 +209,7 @@ below. Summary of the new tempo:
   is re-targeted at the clean-room codebase rather than added to the
   legacy one.
 
-### 🟡 Track S — Security & supply-chain baseline *(cross-cutting — S1 + S2 + S3 + S4 shipped; S6 partially shipped)*
+### 🟡 Track S — Security & supply-chain baseline *(cross-cutting — S1 + S2 + S3 + S4 + S7 shipped; S6 partially shipped)*
 
 Security is called out as a top-priority, standalone track rather than
 being left as scattered mentions inside the Rust slices. Items here gate
@@ -345,23 +345,55 @@ Still queued under S2 (not yet shipped): `cargo-vet` audit set,
   for `ConnectionInfo.json` lands (today's runtime only reads the
   file; writes will land with the enrolment slice).
 
-**S7 — Runtime security posture *(🔜, lands with server rewrite)*.**
+**S7 — Runtime security posture *(✅ shipped — headers + per-org rate limits + signed MSI URLs + immutable audit log).***
 
 - Default strict **CSP**, **HSTS** (`includeSubDomains; preload`),
   `X-Content-Type-Options: nosniff`, `Referrer-Policy:
   strict-origin-when-cross-origin`, and a `Permissions-Policy` that
   denies camera/microphone/geolocation by default on every response
   from the Razor server. The WebRTC viewer opts back in on the
-  specific routes that need it.
-- Per-org **rate limits** on install-job dispatch (was PR D); pulled
-  forward to land with Module 4 (`Server.Hubs`) rather than waiting
-  until after the agent rewrite.
+  specific routes that need it. Shipped as
+  [`Server/Middleware/SecurityHeadersMiddleware.cs`](Server/Middleware/SecurityHeadersMiddleware.cs)
+  with `SecurityHeadersMiddlewareTests` covering the default-route
+  headers, the `/Viewer` opt-in, and the no-overwrite composition
+  contract. Wired into `Program.cs` immediately after `UseRouting`.
+- Per-org **rate limits** on install-job dispatch (was PR D), shipped
+  as `PackageInstallJobRateLimiter` (sliding-window, default
+  240 / minute / org). Wraps both
+  `PackageInstallJobService.QueueJobAsync` and `QueueBundleAsync`;
+  bundle path charges the limiter for the full fan-out up-front and
+  refuses partial inserts. A request that asks for more permits than
+  the per-window budget is translated into a clean refusal rather
+  than the underlying `ArgumentOutOfRangeException`. Tests in
+  `PackageInstallJobRateLimiterTests`.
 - **Uploaded-MSI download URLs** signed with a short TTL + device-scoped
-  HMAC (was PR D); pulled forward to land with slice R6 so the Rust
-  agent never sees an unsigned variant.
+  HMAC (was PR D), shipped as `SignedMsiUrlService` +
+  `SignedMsiTokenFilter` + `UploadedMsiDownloadController`. Tokens are
+  ASP.NET Core `IDataProtector` envelopes binding
+  `{deviceId, sharedFileId, expiresAt}` to a purpose-pinned key so a
+  leaked URL only works for the device + MSI it was minted for, only
+  inside its TTL window. Minted in `CircuitConnection.DispatchJobAsync`
+  alongside the legacy expiring token so old agents keep working
+  during R6 rollout. Surfaced on `PackageInstallRequestDto` as
+  `MsiSignedToken` + `MsiSignedDownloadUrl`. Tests in
+  `SignedMsiUrlServiceTests` cover the device + file binding, the
+  TTL, and tamper detection.
 - An **immutable audit log** (was PR D) is re-scoped as a Track S
   deliverable and lands with Module 3 (`Server.Services`) so every
-  subsequent module inherits it.
+  subsequent module inherits it. Shipped as `AuditLogEntry` +
+  `IAuditLogService` / `AuditLogService` with EF migrations across
+  SQLite / SQL Server / PostgreSQL (`Add_AuditLog`). Each row carries
+  `EntryHash = SHA-256(prev_hash || canonical_serialized_body)`;
+  verification is one linear scan and reports the sequence number of
+  the first tampered or broken-link row. Chains are per-organization
+  so a multi-tenant deployment can be sharded / archived /
+  GDPR-deleted per-org without breaking the chain for other orgs.
+  `CircuitConnection.DispatchJobAsync` appends a
+  `package.install.dispatch` row on every dispatch (the failure path
+  is logged but cannot block the dispatch). Tests in
+  `AuditLogServiceTests` cover the chain link, per-org isolation,
+  tampered-summary detection, broken-link detection, and the
+  canonicalised `DetailJson` form.
 
 **Sequencing.** S1 and S2 land before any further functional work on
 Track R. S4 lands before slice R2 *(shipped)*. S3 lands before Module 3.
@@ -1107,7 +1139,7 @@ agent and the Rust agent can run side-by-side until parity.
 | **R5 — Installed-applications provider** ✅ | `InstalledApplicationsProvider` trait + `InstalledApp` DTO in `cmremote-platform`; `DpkgProvider` (cfg `target_os = "linux"`) runs `dpkg-query --show` and falls back to `rpm -qa`; `uninstall` calls `apt-get remove -y` or `rpm -e`; `NotSupportedAppsProvider` stub for Windows/macOS. `RequestInstalledApplications` and `UninstallApplication` hub handlers wired into the dispatcher. | Unit tests parse mock `dpkg-query` output; not-supported stub confirmed. |
 | **R6 — Package manager (Chocolatey + MSI + Exe)** *(🟡 wire surface + safety helpers shipped; concrete fetch/install handlers wait for R8)* | `cmremote-wire`: `PackageProvider` / `PackageInstallAction` / `PackageInstallRequest` / `PackageInstallResult` PascalCase wire types — defaults to `Unknown` so a malformed payload fails closed. `cmremote-platform::packages`: `PackageProviderHandler` async trait + safety helpers — `is_safe_chocolatey_package_id`, `is_safe_chocolatey_version`, `is_safe_msi_file_name`, `is_msi_magic_bytes` (OLE2 `D0 CF 11 E0 A1 B1 1A E1`), `compute_sha256_hex`, `ct_eq_hex` constant-time compare, `is_chocolatey_success_exit_code` matching `Shared.PackageManager.ChocolateyOutputParser.SuccessfulExitCodes` — plus `NotSupportedPackageProvider` and `CompositePackageProvider` router. `cmremote-agent::handlers::packages` decodes the `InstallPackage` invocation, dispatches through the composite, and serialises a `PackageInstallResult` back as the completion payload. The composite ships with **no concrete handlers registered** so every request is answered with a structured "not supported" failure — operator sees a clean job-failed status rather than a hung job. The concrete fetch + install handlers (Chocolatey via `choco.exe`, MSI via `msiexec.exe` after SHA-256 + OLE2 magic re-verification, Executable via SilentArgs) land alongside the signed-build pipeline (slice R8) so the agent never sees an unsigned variant. | Workspace builds clean on stable Rust; `cargo fmt --check` / `cargo clippy --workspace --all-targets -- -D warnings` / `cargo test --workspace --all-targets` all green; new `sha2` + `async-trait` deps clean against `cargo deny check`. |
 | **R7 — Desktop transport** | Last and largest. WebRTC capture/encode behind a thin trait so we can swap backends. Tracks Module 5's protocol doc. | Latency / FPS within 10 % of the .NET/Desktop client on a reference workload. |
-| **R8 — Installer wrappers** | Windows MSI (WiX or `cargo-wix`), Linux `.deb` / `.rpm` (`cargo-deb` / `cargo-generate-rpm`), macOS notarized `.pkg`. Replaces PR E's templated PowerShell installer for the Rust channel. | One-liner deploy URL produces a working agent on each OS without PowerShell. |
+| **R8 — Installer wrappers** *(🟡 publisher manifest + Linux `.deb` / `.rpm` packaging + Windows MSI scaffold + macOS `.pkg` scaffold + manifest-backed dispatcher + release pipeline shipped; agent-side fetch handler lands with R6)* | **Publisher manifest** ([`docs/publisher-manifest.md`](docs/publisher-manifest.md), schema-versioned JSON, JSON-Schema validated, sample manifests under [`docs/publisher-manifest-samples/`](docs/publisher-manifest-samples/)) is the contract every concrete installer hangs off. **Linux** `.deb` (`cargo-deb`) and `.rpm` (`cargo-generate-rpm`) packaging metadata in `agent-rs/crates/cmremote-agent/Cargo.toml` against a hardened systemd unit (`NoNewPrivileges`, `ProtectSystem=strict`, `RestrictAddressFamilies`, `SystemCallFilter=@system-service`). **Windows MSI** scaffold via `cargo wix` ([`agent-rs/packaging/wix/main.wxs`](agent-rs/packaging/wix/main.wxs)) — perMachine install, `CMRemoteAgent` Windows service. **macOS `.pkg`** scaffold ([`agent-rs/packaging/macos/build-pkg.sh`](agent-rs/packaging/macos/build-pkg.sh)) — universal2 binary, `_cmremote` LaunchDaemon. **Release workflow** ([`.github/workflows/release.yml`](.github/workflows/release.yml)) on a `v*` tag builds every target, signs every artifact with **Sigstore cosign keyless** (this also discharges Track S / S5 for the Linux artifacts), emits the publisher manifest, validates against the JSON schema, and uploads everything as a draft release. **Server-side resolver**: `PublisherManifest` parser (constant-time SHA-256 hex compare; refuses path-traversal in file names), `PublisherManifestProvider` (HTTP/file fetch + per-channel cache), and `ManifestBackedAgentUpgradeDispatcher` (maps `Device.Platform` + `OSArchitecture` → `(target, format)`, picks the unique manifest entry, refuses already-on-target devices). Wired into `Program.cs` so when at least one channel URL is configured the dispatcher serves real upgrade targets; otherwise the existing no-op stays. Tests in `PublisherManifestParserTests`. The agent-side fetch handler that consumes the resolved `AgentUpgradeTarget` and runs the install lands with R6 (it is the same fetch-and-execute path the Chocolatey/MSI/Exe install jobs need). | One-liner deploy URL produces a working agent on each OS without PowerShell. |
 
 ### Definition of done for the separation track
 
