@@ -56,6 +56,15 @@ tokio-tungstenite = { version = "0.24", default-features = false, features = ["c
 # Track-S deny.toml ban on `ring` while keeping the crypto provider
 # entirely in safe-Rust + audited C (`aws-lc-sys`).
 rustls = { version = "0.23", default-features = false, features = ["std", "tls12", "aws_lc_rs"] }
+# HTTPS client used by slice R6's `ReqwestArtifactDownloader` to
+# stream-download MSI / Executable artifacts and the M3 agent
+# self-update payload. Feature set is deliberately narrow:
+# `rustls-tls-webpki-roots-no-provider` selects rustls + the
+# Mozilla webpki root set without picking a crypto provider, so
+# the application installs `aws-lc-rs` explicitly at startup
+# (see `cmremote_agent::runtime`). This satisfies the Track-S
+# `deny.toml` ban on `ring`.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-webpki-roots-no-provider", "stream", "http2"] }
 # Random number generator backing the jittered exponential backoff.
 # `default-features = false` drops `rand_chacha` so we don't pull in
 # crates we don't need; `std_rng` is enough for jitter.

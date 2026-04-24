@@ -46,6 +46,7 @@ pub mod download;
 pub mod executable;
 pub mod msi;
 pub mod process;
+pub mod reqwest_download;
 
 pub use chocolatey::ChocolateyPackageProvider;
 pub use download::{
@@ -54,6 +55,29 @@ pub use download::{
 pub use executable::ExecutablePackageProvider;
 pub use msi::UploadedMsiPackageProvider;
 pub use process::{ProcessCommand, ProcessOutcome, ProcessRunner, TokioProcessRunner};
+pub use reqwest_download::ReqwestArtifactDownloader;
+
+/// Install `aws-lc-rs` as the process-wide rustls crypto provider.
+///
+/// The agent bans `ring` (see `agent-rs/deny.toml`) so rustls cannot
+/// pick a provider on its own. This helper installs the `aws-lc-rs`
+/// provider exactly once; subsequent calls (or calls made after a
+/// different provider has already been installed) are silent no-ops.
+///
+/// Called from [`ReqwestArtifactDownloader::new`] so simply
+/// constructing the downloader is enough — the agent binary does not
+/// need to remember to call it during startup.
+pub fn install_default_crypto_provider() {
+    use std::sync::Once;
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
+        // Ignore the result: if a different provider was already
+        // installed (for example by tokio-tungstenite's TLS connector
+        // earlier in startup) the call returns `Err(())`. That is the
+        // intended fail-quiet behaviour.
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    });
+}
 
 /// First eight bytes of every OLE2 / Compound File Binary (CFB)
 /// document, of which an MSI is one. The .NET `MsiFileValidator`
