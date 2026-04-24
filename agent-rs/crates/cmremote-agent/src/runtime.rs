@@ -80,7 +80,10 @@ pub async fn run(cli: CliArgs) -> Result<(), RuntimeError> {
         Err(e) => {
             tracing::warn!(
                 error = %e,
-                "failed to construct HTTPS artifact downloader; falling back to rejecting stub",
+                "failed to construct HTTPS artifact downloader (rustls / aws-lc-rs init failed — \
+                 typically caused by a competing crypto provider already installed by another \
+                 library); falling back to RejectingDownloader so package + agent-update jobs \
+                 surface a clean structured failure instead of hanging",
             );
             Arc::new(RejectingDownloader)
         }

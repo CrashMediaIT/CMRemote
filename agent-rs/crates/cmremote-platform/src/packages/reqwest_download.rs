@@ -185,8 +185,8 @@ impl ReqwestArtifactDownloader {
             Err(_) => {
                 cleanup_partial(&dest_path).await;
                 Err(DownloadError::Transport(format!(
-                    "download exceeded the {}s timeout",
-                    request.timeout.as_secs()
+                    "download exceeded the {}ms timeout",
+                    request.timeout.as_millis()
                 )))
             }
         }
@@ -249,10 +249,8 @@ impl ReqwestArtifactDownloader {
         file.flush()
             .await
             .map_err(|e| DownloadError::Io(e.to_string()))?;
-        // Drop the handle so a subsequent verifier can re-open the
-        // file with shared-read semantics on Windows.
-        drop(file);
-
+        // The handle is dropped at the end of this scope; explicit
+        // close is unnecessary because we have already flushed.
         Ok(written)
     }
 }
