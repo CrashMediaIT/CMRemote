@@ -16,6 +16,7 @@
 //! Wire-level data types for the CMRemote agent.
 
 pub mod connection_info;
+pub mod desktop;
 pub mod dispatch;
 pub mod envelope;
 pub mod error;
@@ -26,6 +27,10 @@ pub mod package;
 pub mod script;
 
 pub use connection_info::ConnectionInfo;
+pub use desktop::{
+    ChangeWindowsSessionRequest, DesktopTransportResult, InvokeCtrlAltDelRequest,
+    RemoteControlSessionRequest, RestartScreenCasterRequest,
+};
 pub use dispatch::{decode_envelope, decode_envelope_with, HubEnvelope};
 pub use envelope::{HubClose, HubCompletion, HubInvocation, HubMessageKind, HubPing};
 pub use error::WireError;

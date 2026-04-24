@@ -9,6 +9,7 @@
 
 use std::sync::Arc;
 
+use cmremote_platform::desktop::NotSupportedDesktopTransport;
 #[cfg(target_os = "linux")]
 use cmremote_platform::linux_apps::DpkgProvider;
 use cmremote_platform::packages::{
@@ -100,12 +101,20 @@ pub async fn run(cli: CliArgs) -> Result<(), RuntimeError> {
         stage_dir,
     });
 
+    // Slice R7 — desktop transport: until the WebRTC capture / encode
+    // driver lands, every request resolves to a structured "not
+    // supported on <OS>" failure. Concrete drivers will register here
+    // alongside the package providers; the dispatch surface and
+    // wire-level result shape are already in place.
+    let desktop = Arc::new(NotSupportedDesktopTransport::for_current_host());
+
     let handlers = Arc::new(AgentHandlers {
         connection_info: info.clone(),
         device_info,
         apps,
         packages,
         agent_update,
+        desktop,
     });
 
     // The shutdown channel is a single-producer / multi-consumer

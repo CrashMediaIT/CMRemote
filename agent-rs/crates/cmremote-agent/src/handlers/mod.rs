@@ -8,6 +8,7 @@
 
 pub mod agent_update;
 pub mod apps;
+pub mod desktop;
 pub mod device_info;
 pub mod packages;
 pub mod script;
@@ -17,7 +18,8 @@ use std::sync::Arc;
 use cmremote_wire::HubInvocation;
 
 use cmremote_platform::{
-    apps::InstalledApplicationsProvider, packages::PackageProviderHandler, DeviceInfoProvider,
+    apps::InstalledApplicationsProvider, desktop::DesktopTransportProvider,
+    packages::PackageProviderHandler, DeviceInfoProvider,
 };
 
 use crate::dispatch::MethodName;
@@ -30,6 +32,7 @@ pub struct AgentHandlers {
     pub(crate) apps: Arc<dyn InstalledApplicationsProvider>,
     pub(crate) packages: Arc<dyn PackageProviderHandler>,
     pub(crate) agent_update: Arc<agent_update::AgentUpdateContext>,
+    pub(crate) desktop: Arc<dyn DesktopTransportProvider>,
 }
 
 impl AgentHandlers {
@@ -60,7 +63,27 @@ impl AgentHandlers {
             MethodName::InstallAgentUpdate => {
                 agent_update::handle_install_agent_update(inv, &self.agent_update).await
             }
-            // R7–R8 stubs
+            // Slice R7 — desktop transport. The default provider
+            // (`NotSupportedDesktopTransport`) returns a structured
+            // failure so the operator sees a clear "not supported on
+            // <OS>" message instead of `not_implemented`. Concrete
+            // WebRTC-backed drivers register here without any further
+            // dispatch-layer changes.
+            MethodName::RemoteControl => desktop::handle_remote_control(inv, &*self.desktop).await,
+            MethodName::RestartScreenCaster => {
+                desktop::handle_restart_screen_caster(inv, &*self.desktop).await
+            }
+            MethodName::ChangeWindowsSession => {
+                desktop::handle_change_windows_session(inv, &*self.desktop).await
+            }
+            MethodName::InvokeCtrlAltDel => {
+                desktop::handle_invoke_ctrl_alt_del(inv, &*self.desktop).await
+            }
+            // R8 stubs (RunScript / DeleteLogs / GetLogs /
+            // ReinstallAgent / UninstallAgent / WakeDevice /
+            // TransferFileFromBrowserToAgent) — fall through to the
+            // generic `not_implemented` completion until their
+            // respective slices land.
             _ => Err("not_implemented".to_string()),
         }
     }
