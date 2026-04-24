@@ -42,6 +42,17 @@ pub struct ConnectionInfo {
     /// reconnect. Optional on first run.
     #[serde(rename = "ServerVerificationToken", default)]
     pub server_verification_token: Option<String>,
+
+    /// Bearer token presented as `Authorization: Bearer <…>` on the
+    /// WebSocket upgrade. Optional: legacy on-disk configs that
+    /// pre-date the bearer-token spec lack this field, in which case
+    /// the agent connects without an `Authorization` header and
+    /// relies on the server's anonymous-enrolment path. The token,
+    /// when present, is treated as a secret in exactly the same way
+    /// as `server_verification_token`: redacted from `Debug`, never
+    /// echoed to logs or panic output.
+    #[serde(rename = "OrganizationToken", default)]
+    pub organization_token: Option<String>,
 }
 
 impl ConnectionInfo {
@@ -52,6 +63,7 @@ impl ConnectionInfo {
             host: None,
             organization_id: None,
             server_verification_token: None,
+            organization_token: None,
         }
     }
 
@@ -114,6 +126,10 @@ impl fmt::Debug for ConnectionInfo {
                     .as_ref()
                     .map(|_| "<redacted>"),
             )
+            .field(
+                "organization_token",
+                &self.organization_token.as_ref().map(|_| "<redacted>"),
+            )
             .finish()
     }
 }
@@ -137,6 +153,7 @@ mod tests {
             host: Some("  https://example.com/  ".into()),
             organization_id: Some("o".into()),
             server_verification_token: None,
+            organization_token: None,
         };
         assert_eq!(
             info.normalized_host().as_deref(),
@@ -161,6 +178,7 @@ mod tests {
             host: Some("https://example.com".into()),
             organization_id: Some("org".into()),
             server_verification_token: None,
+            organization_token: None,
         };
         assert!(matches!(info.validate(), Err(WireError::InvalidConfig(_))));
     }
@@ -191,6 +209,7 @@ mod tests {
             host: Some("https://cmremote.example.com".into()),
             organization_id: Some("org-1".into()),
             server_verification_token: Some("svt_super_secret_value".into()),
+            organization_token: None,
         };
         let rendered = format!("{info:?}");
         assert!(
@@ -210,8 +229,51 @@ mod tests {
             host: Some("https://cmremote.example.com".into()),
             organization_id: Some("org-1".into()),
             server_verification_token: None,
+            organization_token: None,
         };
         let rendered = format!("{info:?}");
         assert!(rendered.contains("server_verification_token: None"));
+        assert!(rendered.contains("organization_token: None"));
+    }
+
+    #[test]
+    fn debug_redacts_organization_token() {
+        // Bearer token must be treated as a secret for the same
+        // reason the verification token is — it grants the agent
+        // the ability to enrol against the org.
+        let info = ConnectionInfo {
+            device_id: "dev-3".into(),
+            host: Some("https://cmremote.example.com".into()),
+            organization_id: Some("org-1".into()),
+            server_verification_token: None,
+            organization_token: Some("ot_super_secret_bearer".into()),
+        };
+        let rendered = format!("{info:?}");
+        assert!(
+            !rendered.contains("ot_super_secret_bearer"),
+            "Debug output leaked the organization token: {rendered}"
+        );
+        assert!(
+            rendered.contains("organization_token: Some(\"<redacted>\")"),
+            "Debug output should mark the token as redacted: {rendered}"
+        );
+    }
+
+    #[test]
+    fn round_trips_organization_token_field() {
+        // Additive field; extending an existing PascalCase config
+        // with `OrganizationToken` must round-trip the same way as
+        // every other field.
+        let json = r#"{
+            "DeviceID": "f2b0a595-5ea8-471b-975f-12e70e0f3497",
+            "Host": "https://cmremote.example.com",
+            "OrganizationID": "org-1",
+            "ServerVerificationToken": "svt",
+            "OrganizationToken": "ot"
+        }"#;
+        let info: ConnectionInfo = serde_json::from_str(json).unwrap();
+        assert_eq!(info.organization_token.as_deref(), Some("ot"));
+        let re = serde_json::to_string(&info).unwrap();
+        assert!(re.contains("\"OrganizationToken\":\"ot\""));
     }
 }

@@ -24,8 +24,9 @@ authors = ["CMRemote contributors"]
 
 [workspace.dependencies]
 # Async runtime + utilities.
-tokio = { version = "1.41", features = ["macros", "rt-multi-thread", "signal", "sync", "time", "fs", "io-util"] }
+tokio = { version = "1.41", features = ["macros", "rt-multi-thread", "signal", "sync", "time", "fs", "io-util", "net", "process"] }
 futures = "0.3"
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 
 # Serialization.
 serde = { version = "1.0", features = ["derive"] }
@@ -44,6 +45,21 @@ anyhow = "1.0"
 # Misc.
 uuid = { version = "1.10", features = ["v4", "serde"] }
 once_cell = "1.20"
+
+# WebSocket transport for slice R2 — connection / heartbeat loop.
+# `rustls-tls-webpki-roots` selects the rustls + webpki-roots feature
+# combo so we never link OpenSSL or `ring` (banned in `deny.toml`).
+tokio-tungstenite = { version = "0.24", default-features = false, features = ["connect", "handshake", "rustls-tls-webpki-roots"] }
+# rustls is pulled in transitively by tokio-tungstenite; we depend on
+# it explicitly here so we can pin the `aws_lc_rs` crypto provider
+# feature without relying on a transitive default. This satisfies the
+# Track-S deny.toml ban on `ring` while keeping the crypto provider
+# entirely in safe-Rust + audited C (`aws-lc-sys`).
+rustls = { version = "0.23", default-features = false, features = ["std", "tls12", "aws_lc_rs"] }
+# Random number generator backing the jittered exponential backoff.
+# `default-features = false` drops `rand_chacha` so we don't pull in
+# crates we don't need; `std_rng` is enough for jitter.
+rand = { version = "0.8", default-features = false, features = ["std", "std_rng"] }
 
 # Property-based testing (Track S / S4). Used only in `[dev-dependencies]`
 # — never linked into release binaries.

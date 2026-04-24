@@ -2,15 +2,25 @@
 
 //! Top-level async runtime for the agent.
 //!
-//! In R0 this only sets up structured logging, loads configuration,
-//! prints a startup banner, and waits for a shutdown signal. The
-//! connection / heartbeat loop is added in slice R2.
+//! Slice R0 set up structured logging, configuration, and a shutdown
+//! signal. Slice R2 layers the WebSocket connection / heartbeat /
+//! reconnect loop on top. Slice R2a wires in the hub dispatch layer
+//! (R3/R4/R5 handlers follow).
 
+use std::sync::Arc;
+
+#[cfg(target_os = "linux")]
+use cmremote_platform::linux_apps::DpkgProvider;
+#[cfg(not(target_os = "linux"))]
+use cmremote_platform::stubs::NotSupportedAppsProvider;
 use cmremote_platform::{DeviceInfoProvider, StdDeviceInfoProvider};
 use cmremote_wire::ConnectionInfo;
-use tracing::{info, warn};
+use tokio::sync::watch;
+use tracing::info;
 
 use crate::cli::CliArgs;
+use crate::handlers::AgentHandlers;
+use crate::transport::{self, TransportError};
 
 /// Errors surfaced from the agent runtime.
 #[derive(Debug, thiserror::Error)]
@@ -22,6 +32,11 @@ pub enum RuntimeError {
     /// Failure querying OS state.
     #[error(transparent)]
     Platform(#[from] cmremote_platform::PlatformError),
+
+    /// Transport-layer failure that the reconnect loop could not
+    /// recover from on its own.
+    #[error(transparent)]
+    Transport(#[from] TransportError),
 }
 
 /// Run the agent until a shutdown signal is received.
@@ -33,13 +48,43 @@ pub async fn run(cli: CliArgs) -> Result<(), RuntimeError> {
 
     log_startup_banner(&info, &host);
 
-    wait_for_shutdown().await;
+    let device_info = Arc::new(StdDeviceInfoProvider);
 
-    info!("shutdown signal received; stopping agent");
+    #[cfg(target_os = "linux")]
+    let apps = Arc::new(DpkgProvider);
+    #[cfg(not(target_os = "linux"))]
+    let apps = Arc::new(NotSupportedAppsProvider);
+
+    let handlers = Arc::new(AgentHandlers {
+        connection_info: info.clone(),
+        device_info,
+        apps,
+    });
+
+    // The shutdown channel is a single-producer / multi-consumer
+    // boolean: the OS-signal task flips it from `false` to `true`,
+    // and every owner of a `watch::Receiver` (currently: the
+    // transport loop) bails out cooperatively.
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+
+    let signal_handle = tokio::spawn(async move {
+        wait_for_shutdown().await;
+        info!("shutdown signal received; stopping agent");
+        let _ = shutdown_tx.send(true);
+    });
+
+    let transport_result = transport::run_until_shutdown(info, handlers, shutdown_rx).await;
+
+    // Make sure the signal task has finished — otherwise we leak it
+    // for the (vanishingly small) window between transport exit and
+    // process shutdown.
+    let _ = signal_handle.await;
+
+    transport_result?;
     Ok(())
 }
 
-fn log_startup_banner(info: &ConnectionInfo, host: &cmremote_platform::HostDescriptor) {
+fn log_startup_banner(info: &ConnectionInfo, host: &cmremote_platform::DeviceSnapshot) {
     info!(
         device_id = %info.device_id,
         organization_id = info.organization_id.as_deref().unwrap_or(""),
@@ -47,7 +92,7 @@ fn log_startup_banner(info: &ConnectionInfo, host: &cmremote_platform::HostDescr
         os = host.os.as_str(),
         os_description = %host.os_description,
         architecture = %host.architecture,
-        "cmremote-agent starting (R0 scaffold; no network I/O yet)"
+        "cmremote-agent starting (slice R2a: hub dispatch surface)"
     );
 }
 
@@ -59,6 +104,7 @@ async fn wait_for_shutdown() {
     #[cfg(unix)]
     {
         use tokio::signal::unix::{signal, SignalKind};
+        use tracing::warn;
         let mut sigterm = match signal(SignalKind::terminate()) {
             Ok(s) => s,
             Err(e) => {
@@ -90,8 +136,9 @@ mod tests {
             host: Some("https://example.com".into()),
             organization_id: Some("o".into()),
             server_verification_token: None,
+            organization_token: None,
         };
-        let host = cmremote_platform::HostDescriptor::from_std();
+        let host = StdDeviceInfoProvider.snapshot().unwrap();
         log_startup_banner(&info, &host);
     }
 }

@@ -106,6 +106,26 @@ impl HubCompletion {
         }
         Ok(())
     }
+
+    /// Construct a successful completion.
+    pub fn ok(invocation_id: impl Into<String>, result: serde_json::Value) -> Self {
+        Self {
+            kind: HubMessageKind::Completion as u8,
+            invocation_id: invocation_id.into(),
+            result: Some(result),
+            error: None,
+        }
+    }
+
+    /// Construct an error completion.
+    pub fn err(invocation_id: impl Into<String>, error: impl Into<String>) -> Self {
+        Self {
+            kind: HubMessageKind::Completion as u8,
+            invocation_id: invocation_id.into(),
+            result: None,
+            error: Some(error.into()),
+        }
+    }
 }
 
 /// Server → client orderly shutdown.
