@@ -12,7 +12,6 @@ members = [
     "crates/cmremote-wire",
     "crates/cmremote-platform",
     "crates/cmremote-agent",
-    "crates/cmremote-webrtc-crypto-spike",
 ]
 
 [workspace.package]
@@ -81,3 +80,31 @@ lto = "thin"
 codegen-units = 1
 strip = "symbols"
 panic = "abort"
+
+# ---------------------------------------------------------------------------
+# Patches — supply-chain pins.
+# ---------------------------------------------------------------------------
+# Pins `webrtc-dtls` to the CMRemote fork that swaps the upstream `ring`
+# dependency for `aws-lc-rs`, per ADR 0001 Option B
+# ([`docs/decisions/0001-webrtc-crypto-provider.md`](../docs/decisions/0001-webrtc-crypto-provider.md))
+# and Step 8 of the fork-creation runbook
+# ([`docs/decisions/0001-spike-fork-instructions.md`](../docs/decisions/0001-spike-fork-instructions.md)).
+#
+# The patch is dormant until a workspace crate pulls in `webrtc-dtls`
+# (directly or transitively via the upstream `webrtc` crate); landing
+# it here ahead of the driver wiring locks in the supply-chain seam so
+# the eventual driver PR cannot accidentally pull stock `webrtc-dtls`
+# (which would re-introduce `ring` and trip the `[bans].deny` entry in
+# `deny.toml`). Update the tag in lockstep with the fork's
+# `v<upstream>-cmremote.<rev>` cadence (see Step 9 of the runbook).
+[patch.crates-io]
+# Pins `webrtc-dtls` to the CMRemote fork tagged `v0.5.4-cmremote.1`,
+# which is the fork's first release after Step 7 of the runbook
+# ([`docs/decisions/0001-spike-fork-instructions.md`](../docs/decisions/0001-spike-fork-instructions.md)).
+# Bump the tag in lockstep with the fork's `v<upstream>-cmremote.<rev>`
+# rebase cadence (Step 9 of the runbook); after editing this entry,
+# run `cargo update -p webrtc-dtls` so the lock-file picks up the new
+# commit. The `[bans].deny` entry on `ring` in `deny.toml` is the
+# load-bearing assertion that this pin is honouring Option B and
+# **must not** be touched alongside a pin bump.
+webrtc-dtls = { git = "https://github.com/CrashMediaIT/webrtc-cmremote.git", tag = "v0.5.4-cmremote.1" }

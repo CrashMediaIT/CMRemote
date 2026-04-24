@@ -114,4 +114,10 @@ skip-tree = []
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
-allow-git = []
+# CMRemote fork of `webrtc-rs/dtls` that swaps `ring` for `aws-lc-rs`.
+# Pinned by `[patch.crates-io].webrtc-dtls` in `Cargo.toml` per ADR
+# 0001 Option B (see `docs/decisions/0001-spike-fork-instructions.md`
+# Step 8). The repository URL must match the patch entry exactly —
+# `cargo deny check sources` walks the resolved graph, so the URL
+# without the trailing `.git` is what shows up here.
+allow-git = ["https://github.com/CrashMediaIT/webrtc-cmremote"]

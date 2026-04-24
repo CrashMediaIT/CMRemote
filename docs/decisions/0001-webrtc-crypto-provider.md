@@ -338,26 +338,34 @@ Option B.
     sign-off and deliverables. Deliverable #1 (symbol mapping) is
     landed at [0001-spike-report.md](0001-spike-report.md) with a
     **GO** recommendation. Deliverable #2 (PoC with green CI
-    demonstrating the substitution works) is landed as the
-    [`cmremote-webrtc-crypto-spike`](../../agent-rs/crates/cmremote-webrtc-crypto-spike/)
-    workspace member: 11/11 tests pass against real `aws-lc-rs`
-    1.16.x, exercising every distinct symbol from the report.
-    **Maintainer gate #2 is hereby ACCEPTED (2026-04-24)** on the
-    basis of those two deliverables — proceed to creating the
-    `CrashMediaIT/webrtc-cmremote` repository per the runbook at
+    demonstrating the substitution works) was landed as the
+    `cmremote-webrtc-crypto-spike` workspace member (11/11 tests
+    passed against real `aws-lc-rs` 1.16.x, exercising every
+    distinct symbol from the report) and has now been deleted by
+    Step 8 of the runbook once the fork was wired in via
+    `[patch.crates-io]`; `cargo test` evidence is preserved in git
+    history. **Maintainer gate #2 is hereby ACCEPTED (2026-04-24)**
+    on the basis of those two deliverables — the
+    `CrashMediaIT/webrtc-cmremote` repository was subsequently
+    created per the runbook at
     [0001-spike-fork-instructions.md](0001-spike-fork-instructions.md)
-    and to opening the follow-up agent-side PR that wires
-    `[patch.crates-io]` and adds the `[sources].allow-git` entry.
-- **After the spike succeeds:** a follow-up PR creates the
+    and Step 8 of that runbook (wiring `[patch.crates-io]` to
+    tag `v0.5.4-cmremote.1` and adding the `[sources].allow-git`
+    entry) has landed against this repository.
+- **After the spike succeeds:** the follow-up PR that creates the
   `CrashMediaIT/webrtc-cmremote` repository, adds the
   `[patch.crates-io]` entry and the `[sources].allow-git`
   allow-list entry to
   [`agent-rs/deny.toml`](../../agent-rs/deny.toml), and lands the
   WebRTC driver behind the existing
   [`DesktopTransportProvider`](../../agent-rs/crates/cmremote-platform/src/desktop/mod.rs)
-  seam. The `[bans].deny` entry for `ring` is **not** touched in
-  that PR — its continued presence is the load-bearing assertion
-  that Option B is still being honoured.
+  seam. The fork-creation and the `[patch.crates-io]` /
+  `[sources].allow-git` parts have landed (see "Status" above);
+  the actual WebRTC driver remains the next R7 slice and is the
+  step that activates the dormant `webrtc-dtls` patch by pulling
+  it into the crate graph. The `[bans].deny` entry for `ring` is
+  **not** touched in any of these PRs — its continued presence is
+  the load-bearing assertion that Option B is still being honoured.
 - **Ongoing:** every upstream `webrtc` minor release triggers a
   fork-rebase task owned by the `agent-rs/` CODEOWNERS, with the
   rebased fork re-pinned via the `[patch.crates-io]` git ref.
@@ -376,5 +384,5 @@ Option B.
 - [CMRemote roadmap — slice R7 row](../../ROADMAP.md)
 - [Feasibility spike approval — gate #1](0001-spike-approval.md)
 - [Feasibility spike report — `ring` → `aws-lc-rs` symbol mapping](0001-spike-report.md)
-- [Spike PoC crate — `agent-rs/crates/cmremote-webrtc-crypto-spike/`](../../agent-rs/crates/cmremote-webrtc-crypto-spike/)
+- Spike PoC crate — formerly `agent-rs/crates/cmremote-webrtc-crypto-spike/`; deleted by Step 8 once the fork was wired in via `[patch.crates-io]`; `cargo test` evidence preserved in git history
 - [Fork-creation runbook for `CrashMediaIT/webrtc-cmremote`](0001-spike-fork-instructions.md)

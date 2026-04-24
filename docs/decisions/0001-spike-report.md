@@ -229,10 +229,13 @@ These items were originally listed as "out of scope for this report" pending
 follow-up work; the present revision records their completion.
 
 - **Deliverable #2 — PoC demonstrating the substitution works.**
-  **Complete** as the [`cmremote-webrtc-crypto-spike`](../../agent-rs/crates/cmremote-webrtc-crypto-spike/)
-  workspace member. 11/11 tests pass against real `aws-lc-rs` 1.16.x,
-  exercising every distinct symbol from the table above (Ed25519,
-  ECDSA-P256-ASN1, ECDSA-P384-ASN1, RSA-PKCS#1 SHA-256/384/512, RSA-PKCS#1
+  **Complete** as the `cmremote-webrtc-crypto-spike` workspace
+  member (deleted by Step 8 of the runbook once the fork was wired
+  in via `[patch.crates-io]`; `cargo test` evidence preserved in
+  git history at the parent of the deletion commit). 11/11 tests
+  passed against real `aws-lc-rs` 1.16.x, exercising every distinct
+  symbol from the table above (Ed25519, ECDSA-P256-ASN1,
+  ECDSA-P384-ASN1, RSA-PKCS#1 SHA-256/384/512, RSA-PKCS#1
   SHA-1 legacy verify, `SystemRandom`, `&dyn VerificationAlgorithm`,
   `UnparsedPublicKey`), plus negative-path coverage. The cross-compile leg
   of the original deliverable (build green on all five triples in
@@ -243,19 +246,19 @@ follow-up work; the present revision records their completion.
   gate #2 is **ACCEPTED** as recorded in
   [`0001-webrtc-crypto-provider.md`](0001-webrtc-crypto-provider.md)
   §"Consequences" §"Status (2026-04-24)".
-- **Next step — external repository creation.** The
-  `CrashMediaIT/webrtc-cmremote` repository must be created by a
-  maintainer with `CrashMediaIT` org admin rights (a cloud agent cannot
-  create new GitHub repositories under the org from this sandbox). The
-  full step-by-step runbook is at
-  [`0001-spike-fork-instructions.md`](0001-spike-fork-instructions.md).
-  Once the fork exists and is tagged, a follow-up PR against this
-  repository wires `[patch.crates-io]`, adds the `[sources].allow-git`
-  entry, lands the WebRTC driver behind the existing
+- **Next step — external repository creation.** **Complete.** The
+  `CrashMediaIT/webrtc-cmremote` repository was created and seeded
+  by a maintainer per
+  [`0001-spike-fork-instructions.md`](0001-spike-fork-instructions.md)
+  Steps 1–7, and Step 8 of the runbook (`[patch.crates-io]` +
+  `[sources].allow-git` + spike PoC deletion) landed against this
+  repository pinning `webrtc-dtls` to the fork's
+  `v0.5.4-cmremote.1` tag. The `cmremote-webrtc-crypto-spike` PoC
+  crate has been removed; `cargo test` evidence is preserved in
+  git history. Landing the actual WebRTC driver behind the existing
   [`DesktopTransportProvider`](../../agent-rs/crates/cmremote-platform/src/desktop/mod.rs)
-  seam, and deletes the
-  [`cmremote-webrtc-crypto-spike`](../../agent-rs/crates/cmremote-webrtc-crypto-spike/)
-  PoC crate.
+  seam (which activates the dormant patch by pulling `webrtc-dtls`
+  into the crate graph) is the next R7 slice.
 
 The `[bans].deny` entry for `ring` in
 [`agent-rs/deny.toml`](../../agent-rs/deny.toml) **is not touched** by
