@@ -28,9 +28,11 @@ pub mod script;
 
 pub use connection_info::ConnectionInfo;
 pub use desktop::{
-    ChangeWindowsSessionRequest, DesktopTransportResult, IceCandidate, InvokeCtrlAltDelRequest,
+    ChangeWindowsSessionRequest, DesktopTransportResult, IceCandidate, IceCredentialType,
+    IceServer, IceServerConfig, IceTransportPolicy, InvokeCtrlAltDelRequest,
     RemoteControlSessionRequest, RestartScreenCasterRequest, SdpAnswer, SdpKind, SdpOffer,
-    MAX_SDP_BYTES, MAX_SIGNALLING_STRING_LEN,
+    MAX_ICE_CREDENTIAL_LEN, MAX_ICE_SERVERS, MAX_ICE_URL_LEN, MAX_SDP_BYTES,
+    MAX_SIGNALLING_STRING_LEN, MAX_URLS_PER_ICE_SERVER,
 };
 pub use dispatch::{decode_envelope, decode_envelope_with, HubEnvelope};
 pub use envelope::{HubClose, HubCompletion, HubInvocation, HubMessageKind, HubPing};

@@ -203,6 +203,135 @@ pub struct IceCandidate {
     pub sdp_mline_index: Option<u16>,
 }
 
+// ---------------------------------------------------------------------------
+// Slice R7.i — ICE / TURN server configuration.
+//
+// The future WebRTC peer connection needs to know which STUN / TURN
+// servers to try before it can negotiate a path through restricted
+// networks. Slice R7.i ships only the wire DTOs and the per-config
+// length caps; the agent-side guard helpers live in
+// `cmremote_platform::desktop::guards` and the (future) WebRTC driver
+// consumes both. The .NET hub will eventually deliver an
+// [`IceServerConfig`] either as a field on the existing
+// `RemoteControlSessionRequest` (extension under the same wire
+// protocol bump rules) or via a dedicated `ProvideIceServers` hub
+// method; that integration step is deliberately deferred so the
+// DTO contract can land first and the .NET side can build against
+// frozen vectors.
+// ---------------------------------------------------------------------------
+
+/// Maximum number of [`IceServer`] entries permitted in a single
+/// [`IceServerConfig`]. 8 is comfortably above the 2–4 entries a
+/// typical deployment configures (one STUN, one TURN-UDP, one
+/// TURN-TCP, one TURNS-TCP) and well below a number that would let a
+/// hostile config exhaust the WebRTC stack's resolver budget.
+pub const MAX_ICE_SERVERS: usize = 8;
+
+/// Maximum number of `urls` entries on a single [`IceServer`]. The
+/// W3C `RTCIceServer` shape lets one entry advertise multiple
+/// transports for the same logical server; 4 covers the
+/// TURN-UDP / TURN-TCP / TURNS-UDP / TURNS-TCP fan-out without
+/// admitting an unbounded list.
+pub const MAX_URLS_PER_ICE_SERVER: usize = 4;
+
+/// Maximum byte length of any single ICE-server URL. 512 bytes is
+/// far above any legitimate `turns:host:port?transport=tcp` form and
+/// well below the point where the URL parser becomes a useful
+/// memory-exhaustion vector.
+pub const MAX_ICE_URL_LEN: usize = 512;
+
+/// Maximum byte length of an [`IceServer::credential`] (the TURN
+/// shared secret). 512 bytes is an order of magnitude above any
+/// legitimate REST-API-shared credential while still bounding the
+/// secret-handling code's memory footprint.
+pub const MAX_ICE_CREDENTIAL_LEN: usize = 512;
+
+/// Type discriminator for [`IceServer::credential`] — mirrors the
+/// W3C `RTCIceCredentialType` enum.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "PascalCase")]
+pub enum IceCredentialType {
+    /// Plain shared secret. The default and the only variant the
+    /// agent's WebRTC driver will initially honour.
+    #[default]
+    Password,
+    /// OAuth-style credential (RFC 7635). Reserved on the wire so
+    /// future deployments can opt in without a contract bump; the
+    /// initial agent will surface
+    /// [`crate::DesktopTransportResult::failed`] for any session
+    /// that uses this credential type.
+    Oauth,
+}
+
+/// ICE-transport policy hint — mirrors the W3C
+/// `RTCIceTransportPolicy` enum.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "PascalCase")]
+pub enum IceTransportPolicy {
+    /// Try every gathered candidate (host, server-reflexive, relay).
+    /// The default — same shape browsers use.
+    #[default]
+    All,
+    /// Only use relay (TURN) candidates. Useful for restricted
+    /// network environments where direct paths are blocked or
+    /// undesirable for compliance reasons.
+    Relay,
+}
+
+/// A single ICE / STUN / TURN server entry. Mirrors the W3C
+/// `RTCIceServer` shape; PascalCase wire field names match the
+/// `.NET` hub.
+///
+/// `credential` is **sensitive**. The wire layer round-trips it as
+/// part of the contract, but every downstream code path — logging,
+/// `Debug`, error redactor, audit log — MUST refuse to render its
+/// value. The agent-side guard helper
+/// (`cmremote_platform::desktop::guards::check_ice_server_config`)
+/// validates length and refuses hostile bytes without ever echoing
+/// the credential into a rejection message.
+///
+/// `urls` MUST contain at least one entry; an empty list is a
+/// malformed payload that the agent-side guard refuses.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "PascalCase")]
+pub struct IceServer {
+    /// One or more `stun:` / `stuns:` / `turn:` / `turns:` URLs that
+    /// describe the same logical server. Each URL is length-capped
+    /// at [`MAX_ICE_URL_LEN`]; the list itself is bounded by
+    /// [`MAX_URLS_PER_ICE_SERVER`].
+    pub urls: Vec<String>,
+    /// TURN username when [`Self::credential_type`] is
+    /// [`IceCredentialType::Password`]. Absent for plain `stun:`.
+    /// Sanitised by the same operator-string contract the desktop
+    /// envelope guards apply.
+    #[serde(default)]
+    pub username: Option<String>,
+    /// **Sensitive.** TURN credential (shared secret or REST-issued
+    /// password). Length-capped at [`MAX_ICE_CREDENTIAL_LEN`].
+    /// Implementations MUST NOT log, print, or echo this value.
+    #[serde(default)]
+    pub credential: Option<String>,
+    /// How [`Self::credential`] should be interpreted. Defaults to
+    /// [`IceCredentialType::Password`].
+    #[serde(default)]
+    pub credential_type: IceCredentialType,
+}
+
+/// Full ICE configuration delivered to the agent's WebRTC peer
+/// connection — mirrors the subset of W3C `RTCConfiguration` the
+/// agent honours. Bounded by [`MAX_ICE_SERVERS`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "PascalCase")]
+pub struct IceServerConfig {
+    /// Servers tried in declaration order. May be empty — in which
+    /// case the WebRTC driver only attempts host candidates and
+    /// will work only on the same LAN as the viewer.
+    pub ice_servers: Vec<IceServer>,
+    /// Transport-policy hint. Defaults to [`IceTransportPolicy::All`].
+    #[serde(default)]
+    pub ice_transport_policy: IceTransportPolicy,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -367,5 +496,143 @@ mod tests {
         // agent-side guards can rely on them without re-deriving.
         assert_eq!(MAX_SDP_BYTES, 16 * 1024);
         assert_eq!(MAX_SIGNALLING_STRING_LEN, 1024);
+    }
+
+    // -----------------------------------------------------------------
+    // Slice R7.i — ICE / TURN server configuration tests.
+    // -----------------------------------------------------------------
+
+    fn ice_config() -> IceServerConfig {
+        IceServerConfig {
+            ice_servers: vec![
+                IceServer {
+                    urls: vec!["stun:stun.example.org:3478".into()],
+                    username: None,
+                    credential: None,
+                    credential_type: IceCredentialType::Password,
+                },
+                IceServer {
+                    urls: vec![
+                        "turn:turn.example.org:3478?transport=udp".into(),
+                        "turns:turn.example.org:5349?transport=tcp".into(),
+                    ],
+                    username: Some("agent-bob".into()),
+                    credential: Some("hunter2".into()),
+                    credential_type: IceCredentialType::Password,
+                },
+            ],
+            ice_transport_policy: IceTransportPolicy::All,
+        }
+    }
+
+    #[test]
+    fn ice_server_config_round_trip_pascal_case() {
+        let cfg = ice_config();
+        let json = serde_json::to_string(&cfg).unwrap();
+        // PascalCase wire field names must survive — the .NET hub
+        // is the consumer and matches on these exact keys.
+        assert!(json.contains("\"IceServers\":"), "{json}");
+        assert!(json.contains("\"IceTransportPolicy\":\"All\""), "{json}");
+        assert!(json.contains("\"Urls\":"), "{json}");
+        assert!(json.contains("\"Username\":\"agent-bob\""), "{json}");
+        // The credential is on the wire — the wire layer's job is
+        // only to round-trip it; the *agent* logging layer is what
+        // refuses to render it. We pin its presence here so the
+        // contract with the .NET hub is explicit.
+        assert!(json.contains("\"Credential\":\"hunter2\""), "{json}");
+        assert!(json.contains("\"CredentialType\":\"Password\""), "{json}");
+        let back: IceServerConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, cfg);
+    }
+
+    #[test]
+    fn ice_server_config_round_trip_through_msgpack() {
+        let cfg = ice_config();
+        let bytes = to_msgpack(&cfg).unwrap();
+        let back: IceServerConfig = from_msgpack(&bytes).unwrap();
+        assert_eq!(back, cfg);
+    }
+
+    #[test]
+    fn ice_server_config_relay_only_round_trips() {
+        let cfg = IceServerConfig {
+            ice_servers: vec![IceServer {
+                urls: vec!["turns:relay.example.org:5349?transport=tcp".into()],
+                username: Some("agent-bob".into()),
+                credential: Some("hunter2".into()),
+                credential_type: IceCredentialType::Password,
+            }],
+            ice_transport_policy: IceTransportPolicy::Relay,
+        };
+        let json = serde_json::to_string(&cfg).unwrap();
+        assert!(json.contains("\"IceTransportPolicy\":\"Relay\""), "{json}");
+        let back: IceServerConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, cfg);
+    }
+
+    #[test]
+    fn ice_server_omits_optional_fields_when_absent() {
+        let s = IceServer {
+            urls: vec!["stun:stun.example.org".into()],
+            username: None,
+            credential: None,
+            credential_type: IceCredentialType::Password,
+        };
+        let json = serde_json::to_string(&s).unwrap();
+        // Optional credentials are emitted as JSON `null` (matching
+        // the existing `IceCandidate` SdpMid / SdpMlineIndex
+        // convention) so the .NET side detects absence by the field
+        // being null rather than missing — pin both shapes.
+        assert!(json.contains("\"Username\":null"), "{json}");
+        assert!(json.contains("\"Credential\":null"), "{json}");
+        let back: IceServer = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, s);
+    }
+
+    #[test]
+    fn defaults_fail_closed_with_empty_collections() {
+        let cfg: IceServerConfig = Default::default();
+        assert!(cfg.ice_servers.is_empty());
+        assert_eq!(cfg.ice_transport_policy, IceTransportPolicy::All);
+
+        let s: IceServer = Default::default();
+        assert!(s.urls.is_empty());
+        assert!(s.username.is_none());
+        assert!(s.credential.is_none());
+        assert_eq!(s.credential_type, IceCredentialType::Password);
+    }
+
+    #[test]
+    fn ice_credential_type_pascal_case() {
+        assert_eq!(
+            serde_json::to_string(&IceCredentialType::Password).unwrap(),
+            "\"Password\""
+        );
+        assert_eq!(
+            serde_json::to_string(&IceCredentialType::Oauth).unwrap(),
+            "\"Oauth\""
+        );
+    }
+
+    #[test]
+    fn ice_transport_policy_pascal_case() {
+        assert_eq!(
+            serde_json::to_string(&IceTransportPolicy::All).unwrap(),
+            "\"All\""
+        );
+        assert_eq!(
+            serde_json::to_string(&IceTransportPolicy::Relay).unwrap(),
+            "\"Relay\""
+        );
+    }
+
+    #[test]
+    fn ice_cap_constants_have_expected_values() {
+        // Pin the per-config caps — slice R7.i freezes these so the
+        // agent-side guards can rely on them without re-deriving.
+        assert_eq!(MAX_ICE_SERVERS, 8);
+        assert_eq!(MAX_URLS_PER_ICE_SERVER, 4);
+        assert_eq!(MAX_ICE_URL_LEN, 512);
+        assert_eq!(MAX_ICE_CREDENTIAL_LEN, 512);
     }
 }

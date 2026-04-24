@@ -1,0 +1,13 @@
+{
+  "IceServers": [
+    {
+      "Urls": [
+        "turns:relay.example.org:5349?transport=tcp"
+      ],
+      "Username": "agent-bob",
+      "Credential": "hunter2",
+      "CredentialType": "Password"
+    }
+  ],
+  "IceTransportPolicy": "Relay"
+}
