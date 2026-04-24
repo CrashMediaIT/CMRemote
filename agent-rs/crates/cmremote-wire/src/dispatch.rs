@@ -9,7 +9,9 @@
 
 use serde::Deserialize;
 
-use crate::{HubClose, HubCompletion, HubInvocation, HubPing, WireError};
+use crate::{
+    from_msgpack, HubClose, HubCompletion, HubInvocation, HubPing, HubProtocol, WireError,
+};
 
 /// A fully-decoded hub envelope, discriminated on the `"type"` field.
 #[derive(Debug)]
@@ -27,12 +29,30 @@ pub enum HubEnvelope {
     Unknown(u8),
 }
 
-/// Peek the `"type"` discriminator and deserialise the envelope.
+/// Peek the `"type"` discriminator and deserialise a JSON-encoded
+/// hub record into a typed envelope.
 ///
-/// Works for JSON-encoded records. MessagePack records must first be
-/// decoded to a `serde_json::Value` or use the msgpack decode path
-/// directly on the constituent types.
+/// Use [`decode_envelope_with`] when the encoding may vary at
+/// runtime; this function exists for callers that always speak JSON
+/// (for example test vectors) and want a slightly cleaner signature.
 pub fn decode_envelope(bytes: &[u8]) -> Result<HubEnvelope, WireError> {
+    decode_envelope_with(bytes, HubProtocol::Json)
+}
+
+/// Peek the `"type"` discriminator on a hub record encoded with the
+/// negotiated [`HubProtocol`] and deserialise it into a typed envelope.
+///
+/// This is the function the agent's dispatch layer uses, since the
+/// transport selects between JSON and MessagePack at handshake time
+/// (see `transport::run_until_shutdown`).
+pub fn decode_envelope_with(bytes: &[u8], encoding: HubProtocol) -> Result<HubEnvelope, WireError> {
+    match encoding {
+        HubProtocol::Json => decode_json(bytes),
+        HubProtocol::Messagepack => decode_msgpack(bytes),
+    }
+}
+
+fn decode_json(bytes: &[u8]) -> Result<HubEnvelope, WireError> {
     #[derive(Deserialize)]
     struct TypePeeker {
         #[serde(rename = "type")]
@@ -49,9 +69,30 @@ pub fn decode_envelope(bytes: &[u8]) -> Result<HubEnvelope, WireError> {
     }
 }
 
+fn decode_msgpack(bytes: &[u8]) -> Result<HubEnvelope, WireError> {
+    // The MessagePack hub protocol uses named-field maps (see
+    // `msgpack` module docs). Peek `"type"` by deserialising into a
+    // permissive struct that ignores any other fields.
+    #[derive(Deserialize)]
+    struct TypePeeker {
+        #[serde(rename = "type")]
+        kind: u8,
+    }
+
+    let peeked: TypePeeker = from_msgpack(bytes)?;
+    match peeked.kind {
+        1 => Ok(HubEnvelope::Invocation(from_msgpack(bytes)?)),
+        3 => Ok(HubEnvelope::Completion(from_msgpack(bytes)?)),
+        6 => Ok(HubEnvelope::Ping(from_msgpack(bytes)?)),
+        7 => Ok(HubEnvelope::Close(from_msgpack(bytes)?)),
+        n => Ok(HubEnvelope::Unknown(n)),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{to_msgpack, HubMessageKind};
 
     #[test]
     fn decodes_invocation() {
@@ -92,5 +133,41 @@ mod tests {
         let j = br#"{"type":42}"#;
         let env = decode_envelope(j).unwrap();
         assert!(matches!(env, HubEnvelope::Unknown(42)));
+    }
+
+    #[test]
+    fn decodes_msgpack_invocation() {
+        // Round-trip via msgpack to make sure the envelope decoder
+        // matches what `to_msgpack` produces for our types.
+        let inv = HubInvocation {
+            kind: HubMessageKind::Invocation as u8,
+            invocation_id: Some("9".into()),
+            target: "TriggerHeartbeat".into(),
+            arguments: vec![],
+        };
+        let bytes = to_msgpack(&inv).unwrap();
+        let env = decode_envelope_with(&bytes, HubProtocol::Messagepack).unwrap();
+        match env {
+            HubEnvelope::Invocation(got) => assert_eq!(got, inv),
+            other => panic!("expected Invocation, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn decodes_msgpack_close() {
+        let c = HubClose {
+            kind: HubMessageKind::Close as u8,
+            error: Some("bye".into()),
+            allow_reconnect: false,
+        };
+        let bytes = to_msgpack(&c).unwrap();
+        let env = decode_envelope_with(&bytes, HubProtocol::Messagepack).unwrap();
+        match env {
+            HubEnvelope::Close(got) => {
+                assert!(!got.allow_reconnect);
+                assert_eq!(got.error.as_deref(), Some("bye"));
+            }
+            other => panic!("expected Close, got {other:?}"),
+        }
     }
 }

@@ -13,12 +13,12 @@
 //! * Signal the session to quarantine when the server sends
 //!   `HubClose { allowReconnect: false }`.
 
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::sync::Arc;
 
 use cmremote_wire::{
-    decode_envelope, write_json_record, write_msgpack_record, HubClose, HubCompletion, HubEnvelope,
-    HubProtocol,
+    decode_envelope_with, write_json_record, write_msgpack_record, HubClose, HubCompletion,
+    HubEnvelope, HubProtocol,
 };
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::Message;
@@ -43,23 +43,68 @@ pub enum DispatchOutcome {
 // Invocation-ID deduplication
 // ---------------------------------------------------------------------------
 
+/// Maximum number of distinct invocation IDs the tracker remembers per
+/// connection. Once the cap is reached, the oldest IDs are evicted in
+/// FIFO order so the agent's memory footprint stays bounded on
+/// long-lived sessions.
+///
+/// Sized generously: at the agent's design heartbeat of one inbound
+/// invocation per ~5 seconds, 16 384 entries cover roughly 22 hours of
+/// uninterrupted traffic — far longer than any realistic session.
+pub const INVOCATION_TRACKER_CAPACITY: usize = 16_384;
+
 /// Tracks invocation IDs seen on the current connection to enforce the
 /// spec's uniqueness guarantee (section *Replay and ordering*).
-#[derive(Debug, Default)]
+///
+/// Bounded to [`INVOCATION_TRACKER_CAPACITY`] entries with FIFO
+/// eviction so a long-running session cannot grow the set without
+/// limit (DoS-safety property).
+#[derive(Debug)]
 pub struct InvocationTracker {
     seen: HashSet<String>,
+    order: VecDeque<String>,
+    capacity: usize,
+}
+
+impl Default for InvocationTracker {
+    fn default() -> Self {
+        Self::with_capacity(INVOCATION_TRACKER_CAPACITY)
+    }
 }
 
 impl InvocationTracker {
+    /// Construct a tracker with an explicit cap. Used by tests.
+    pub fn with_capacity(capacity: usize) -> Self {
+        // A capacity of zero would deadlock the eviction loop; treat
+        // it as a no-op tracker that always reports "new".
+        let capacity = capacity.max(1);
+        Self {
+            seen: HashSet::with_capacity(capacity.min(1024)),
+            order: VecDeque::with_capacity(capacity.min(1024)),
+            capacity,
+        }
+    }
+
     /// Returns `true` if `id` was **already** seen on this connection.
-    /// Inserts it if it was new.
+    /// Inserts it (and evicts the oldest entry if at capacity) when new.
     pub fn seen(&mut self, id: &str) -> bool {
-        !self.seen.insert(id.to_string())
+        if self.seen.contains(id) {
+            return true;
+        }
+        if self.seen.len() >= self.capacity {
+            if let Some(oldest) = self.order.pop_front() {
+                self.seen.remove(&oldest);
+            }
+        }
+        self.seen.insert(id.to_string());
+        self.order.push_back(id.to_string());
+        false
     }
 
     /// Reset for a new connection.
     pub fn clear(&mut self) {
         self.seen.clear();
+        self.order.clear();
     }
 }
 
@@ -170,7 +215,7 @@ pub fn make_on_record(
     tracker: Arc<std::sync::Mutex<InvocationTracker>>,
 ) -> impl FnMut(Vec<u8>) -> DispatchOutcome {
     move |record: Vec<u8>| {
-        let envelope = match decode_envelope(&record) {
+        let envelope = match decode_envelope_with(&record, encoding) {
             Ok(e) => e,
             Err(e) => {
                 warn!(error = %e, "malformed inbound hub record; ignoring");
@@ -204,8 +249,7 @@ pub fn make_on_record(
                     let mut t = tracker.lock().unwrap_or_else(|p| p.into_inner());
                     if t.seen(id) {
                         let c = HubCompletion::err(id.clone(), "duplicate_invocation");
-                        let msg = encode_completion(&c, encoding);
-                        let _ = outbound_tx.try_send(msg);
+                        send_completion(outbound_tx.clone(), encoding, c);
                         return DispatchOutcome::Continue;
                     }
                 }
@@ -217,7 +261,7 @@ pub fn make_on_record(
                         warn!(target = %inv.target, "unknown hub method");
                         if let Some(ref id) = inv.invocation_id {
                             let c = HubCompletion::err(id.clone(), "not_implemented");
-                            let _ = outbound_tx.try_send(encode_completion(&c, encoding));
+                            send_completion(outbound_tx.clone(), encoding, c);
                         }
                         return DispatchOutcome::Continue;
                     }
@@ -248,6 +292,18 @@ pub fn make_on_record(
     }
 }
 
+/// Send a completion in the background using `send().await`, so that a
+/// momentarily full outbound channel applies back-pressure rather than
+/// silently dropping the response (as `try_send` would). The closure is
+/// synchronous, so we hop into a small task; this is fine because the
+/// payloads here are short and infrequent.
+fn send_completion(tx: mpsc::Sender<Message>, encoding: HubProtocol, completion: HubCompletion) {
+    let msg = encode_completion(&completion, encoding);
+    tokio::spawn(async move {
+        let _ = tx.send(msg).await;
+    });
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -270,6 +326,36 @@ mod tests {
         t.seen("abc");
         t.clear();
         assert!(!t.seen("abc")); // cleared → no longer seen
+    }
+
+    #[test]
+    fn invocation_tracker_evicts_oldest_at_capacity() {
+        let mut t = InvocationTracker::with_capacity(3);
+        assert!(!t.seen("a"));
+        assert!(!t.seen("b"));
+        assert!(!t.seen("c"));
+        // Re-checking entries inside the window does not change order.
+        assert!(t.seen("a"));
+        assert!(t.seen("b"));
+        assert!(t.seen("c"));
+        // At cap. Inserting "d" must evict "a" (oldest).
+        assert!(!t.seen("d"));
+        // "a" is gone — re-inserting it counts as new (and evicts "b").
+        assert!(!t.seen("a"));
+        // "b" was just evicted, so it now reads as new (and evicts "c").
+        assert!(!t.seen("b"));
+        // "c" was evicted by re-inserting "b"; now reads as new.
+        assert!(!t.seen("c"));
+    }
+
+    #[test]
+    fn invocation_tracker_capacity_zero_clamped_to_one() {
+        // Guard against an accidental zero-cap deadlock.
+        let mut t = InvocationTracker::with_capacity(0);
+        assert!(!t.seen("a"));
+        // Cap is 1, so "a" gets evicted by "b".
+        assert!(!t.seen("b"));
+        assert!(!t.seen("a"));
     }
 
     #[test]

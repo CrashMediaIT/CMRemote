@@ -15,6 +15,9 @@ pub struct LinuxDeviceInfoProvider;
 
 impl DeviceInfoProvider for LinuxDeviceInfoProvider {
     fn snapshot(&self) -> Result<DeviceSnapshot, PlatformError> {
+        // Read /proc/meminfo once and derive both fields from it,
+        // instead of paying for two separate file reads.
+        let mem = MemorySnapshot::read();
         Ok(DeviceSnapshot {
             device_id: String::new(),
             organization_id: String::new(),
@@ -29,8 +32,8 @@ impl DeviceInfoProvider for LinuxDeviceInfoProvider {
             agent_version: env!("CARGO_PKG_VERSION").to_string(),
             current_user: read_current_user(),
             drives: read_drives(),
-            total_memory_gb: memory_total_gb(),
-            used_memory_gb: memory_used_gb(),
+            total_memory_gb: mem.total_gb,
+            used_memory_gb: mem.used_gb,
             cpu_utilization: cpu_utilization_percent(),
             mac_addresses: read_mac_addresses(),
         })
@@ -70,6 +73,25 @@ fn read_current_user() -> String {
         .unwrap_or_else(|_| "unknown".into())
 }
 
+/// Snapshot of memory usage in GB, parsed once per call. Cheaper
+/// than re-reading `/proc/meminfo` for each derived field.
+#[derive(Debug, Clone, Copy)]
+struct MemorySnapshot {
+    total_gb: f64,
+    used_gb: f64,
+}
+
+impl MemorySnapshot {
+    fn read() -> Self {
+        let (total_kb, avail_kb) = parse_meminfo();
+        let used_kb = total_kb.saturating_sub(avail_kb);
+        Self {
+            total_gb: round2(total_kb as f64 / 1024.0 / 1024.0),
+            used_gb: round2(used_kb as f64 / 1024.0 / 1024.0),
+        }
+    }
+}
+
 /// Parse `/proc/meminfo` to extract total and available RAM in kB.
 fn parse_meminfo() -> (u64, u64) {
     let content = match fs::read_to_string("/proc/meminfo") {
@@ -93,17 +115,6 @@ fn parse_kb_value(s: &str) -> u64 {
         .next()
         .and_then(|v| v.parse().ok())
         .unwrap_or(0)
-}
-
-fn memory_total_gb() -> f64 {
-    let (total_kb, _) = parse_meminfo();
-    round2(total_kb as f64 / 1024.0 / 1024.0)
-}
-
-fn memory_used_gb() -> f64 {
-    let (total_kb, avail_kb) = parse_meminfo();
-    let used_kb = total_kb.saturating_sub(avail_kb);
-    round2(used_kb as f64 / 1024.0 / 1024.0)
 }
 
 /// Compute a 100 ms two-sample CPU utilisation from `/proc/stat`.

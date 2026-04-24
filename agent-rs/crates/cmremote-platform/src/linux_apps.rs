@@ -35,13 +35,30 @@ impl InstalledApplicationsProvider for DpkgProvider {
         if application_key.is_empty() || application_key.contains('\n') {
             return Err(PlatformError::Io("invalid application key".into()));
         }
+        // Reject keys that try to look like additional options to the
+        // package manager. `apt-get`, `rpm`, and most coreutils treat
+        // anything starting with `-` as a flag even when it appears in
+        // the trailing positional position; the leading `--` separator
+        // we add below stops that, but a defence-in-depth check here
+        // also rejects obviously-malicious payloads early.
+        if application_key.starts_with('-') {
+            return Err(PlatformError::Io(
+                "application key may not start with '-'".into(),
+            ));
+        }
 
+        // The leading `--` terminates option parsing for both apt-get
+        // and rpm, so a key that slips a `-` past the check above (for
+        // example via locale-specific characters) still cannot be
+        // interpreted as a flag.
         let status = if dpkg_available() {
             Command::new("apt-get")
-                .args(["remove", "-y", application_key])
+                .args(["remove", "-y", "--", application_key])
                 .status()
         } else {
-            Command::new("rpm").args(["-e", application_key]).status()
+            Command::new("rpm")
+                .args(["-e", "--", application_key])
+                .status()
         };
 
         match status {
@@ -132,5 +149,24 @@ mod tests {
         let tsv = "bash\t5.1\tDebian\n\ncurl\t7.68\tDebian\n";
         let apps = parse_tsv_apps(tsv);
         assert_eq!(apps.len(), 2);
+    }
+
+    #[test]
+    fn uninstall_rejects_option_like_key() {
+        let provider = DpkgProvider;
+        // Any key starting with '-' must be rejected before we shell
+        // out, regardless of whether dpkg/rpm exist on the host.
+        let err = provider
+            .uninstall("--reinstall")
+            .expect_err("should reject option-like key");
+        let msg = err.to_string();
+        assert!(msg.contains("'-'"), "unexpected error: {msg}");
+    }
+
+    #[test]
+    fn uninstall_rejects_empty_or_multiline_key() {
+        let provider = DpkgProvider;
+        assert!(provider.uninstall("").is_err());
+        assert!(provider.uninstall("foo\nrm -rf /").is_err());
     }
 }

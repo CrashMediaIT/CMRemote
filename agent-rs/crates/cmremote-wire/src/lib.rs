@@ -25,7 +25,7 @@ pub mod msgpack;
 pub mod script;
 
 pub use connection_info::ConnectionInfo;
-pub use dispatch::{decode_envelope, HubEnvelope};
+pub use dispatch::{decode_envelope, decode_envelope_with, HubEnvelope};
 pub use envelope::{HubClose, HubCompletion, HubInvocation, HubMessageKind, HubPing};
 pub use error::WireError;
 pub use framing::{

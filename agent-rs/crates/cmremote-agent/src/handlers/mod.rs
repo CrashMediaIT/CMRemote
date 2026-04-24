@@ -35,7 +35,11 @@ impl AgentHandlers {
     ) -> Result<serde_json::Value, String> {
         match method {
             MethodName::TriggerHeartbeat => {
-                device_info::handle_trigger_heartbeat(&self.connection_info, &*self.device_info)
+                device_info::handle_trigger_heartbeat(
+                    &self.connection_info,
+                    self.device_info.clone(),
+                )
+                .await
             }
             MethodName::ExecuteCommand => script::handle_execute_command(inv).await,
             MethodName::RequestInstalledApplications => {
