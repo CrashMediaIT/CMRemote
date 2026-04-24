@@ -1,0 +1,184 @@
+@page "/admin/agent-upgrade"
+@attribute [Authorize(Policy = PolicyNames.OrganizationAdminRequired)]
+@inherits AuthComponentBase
+@rendermode InteractiveServer
+
+@using Remotely.Server.Auth
+@using Remotely.Shared.Enums
+
+<PageTitle>Agent Upgrade</PageTitle>
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h2 class="mb-0">Agent Upgrade</h2>
+    <div>
+        <a class="btn btn-sm btn-outline-secondary me-2"
+           href="/api/agent-upgrade/export.csv"
+           target="_blank"
+           rel="noopener">
+            Export CSV
+        </a>
+        <button class="btn btn-sm btn-outline-secondary"
+                @onclick="ReloadAsync"
+                disabled="@_busy">
+            Refresh
+        </button>
+    </div>
+</div>
+
+<p class="text-muted small">
+    Background agent-upgrade pipeline status for this organisation.
+    Devices that have been offline for more than 60 days are skipped
+    automatically and reactivated the next time they reconnect.
+</p>
+
+@if (_flashMessage is not null)
+{
+    <div class="@_flashStyle d-flex justify-content-between align-items-center" role="alert">
+        <span>@_flashMessage</span>
+        <button type="button" class="btn-close" aria-label="Dismiss" @onclick="DismissFlash"></button>
+    </div>
+}
+
+<div class="row g-2 mb-3">
+    @foreach (var state in Enum.GetValues<AgentUpgradeState>())
+    {
+        <div class="col-6 col-md-3 col-lg-auto">
+            <div class="card h-100">
+                <div class="card-body py-2 px-3">
+                    <div class="small text-muted">@StateLabel(state)</div>
+                    <div class="fs-4">
+                        <span class="badge @StateBadgeCss(state)">@(_counts.TryGetValue(state, out var c) ? c : 0)</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    }
+</div>
+
+<div class="row g-2 mb-2 align-items-center">
+    <div class="col-12 col-md-6">
+        <div class="input-group input-group-sm">
+            <span class="input-group-text">Search</span>
+            <input class="form-control"
+                   placeholder="Device id or name…"
+                   @bind="_search"
+                   @bind:event="oninput"
+                   @onkeydown="OnSearchKeyDownAsync"
+                   disabled="@_busy" />
+            <button class="btn btn-outline-primary"
+                    @onclick="@(() => OnSearchSubmitted(EventArgs.Empty))"
+                    disabled="@_busy">
+                Apply
+            </button>
+            @if (!string.IsNullOrEmpty(_search))
+            {
+                <button class="btn btn-outline-secondary"
+                        @onclick="ClearSearchAsync"
+                        disabled="@_busy">
+                    Clear
+                </button>
+            }
+        </div>
+    </div>
+    <div class="col-12 col-md-6 text-md-end small text-muted">
+        @if (_totalRows == 0)
+        {
+            <span>No rows.</span>
+        }
+        else
+        {
+            <span>
+                Showing @(_page * PageSize + 1)–@(Math.Min(_totalRows, (_page + 1) * PageSize))
+                of @_totalRows
+            </span>
+        }
+    </div>
+</div>
+
+@if (_rows.Count == 0)
+{
+    <div class="text-muted">No devices match the current filter.</div>
+}
+else
+{
+    <div class="table-responsive">
+        <table class="table table-sm align-middle">
+            <thead>
+                <tr>
+                    <th>Device</th>
+                    <th>State</th>
+                    <th>From → To</th>
+                    <th>Last online</th>
+                    <th>Attempts</th>
+                    <th>Last error</th>
+                    <th class="text-end">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var row in _rows)
+                {
+                    <tr @key="row.Id">
+                        <td>
+                            <div>@(string.IsNullOrWhiteSpace(row.DeviceName) ? "(unknown)" : row.DeviceName)</div>
+                            <code class="small text-muted">@row.DeviceId</code>
+                        </td>
+                        <td>
+                            <span class="badge @StateBadgeCss(row.State)">@StateLabel(row.State)</span>
+                        </td>
+                        <td class="small">
+                            @(row.FromVersion ?? "?") → @(row.ToVersion ?? "?")
+                        </td>
+                        <td class="small" title="@(row.LastOnline?.ToString("u"))">
+                            @FormatLastOnlineAge(row.LastOnline)
+                        </td>
+                        <td>@row.AttemptCount</td>
+                        <td>
+                            @if (!string.IsNullOrEmpty(row.LastAttemptError))
+                            {
+                                <details>
+                                    <summary class="small text-danger">error</summary>
+                                    <pre class="small mb-0" style="max-height:8rem;overflow:auto">@row.LastAttemptError</pre>
+                                </details>
+                            }
+                            else
+                            {
+                                <span class="text-muted small">—</span>
+                            }
+                        </td>
+                        <td class="text-end">
+                            @* Retry / Force are both "operator says try this now"; ForceRetryAsync handles either case. *@
+                            <button class="btn btn-sm btn-outline-primary me-1"
+                                    title="Reset attempts and queue for immediate dispatch."
+                                    @onclick="@(() => ForceRetryAsync(row))"
+                                    disabled="@_busy">
+                                @(row.State == AgentUpgradeState.Failed ? "Retry" : "Force")
+                            </button>
+                            <button class="btn btn-sm btn-outline-warning"
+                                    title="Pin this device to opt-out so the orchestrator never dispatches against it."
+                                    @onclick="@(() => SetOptOutAsync(row))"
+                                    disabled="@(_busy || row.State == AgentUpgradeState.SkippedOptOut || row.State == AgentUpgradeState.InProgress)">
+                                Skip
+                            </button>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+
+    <div class="d-flex justify-content-between align-items-center small">
+        <div>Page @(_page + 1) of @TotalPages</div>
+        <div>
+            <button class="btn btn-sm btn-outline-secondary me-1"
+                    @onclick="PreviousPageAsync"
+                    disabled="@(_busy || !HasPrevious)">
+                ‹ Previous
+            </button>
+            <button class="btn btn-sm btn-outline-secondary"
+                    @onclick="NextPageAsync"
+                    disabled="@(_busy || !HasNext)">
+                Next ›
+            </button>
+        </div>
+    </div>
+}
