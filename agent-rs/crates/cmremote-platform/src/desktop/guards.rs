@@ -30,8 +30,8 @@
 //! cannot disclose them.
 
 use cmremote_wire::{
-    ChangeWindowsSessionRequest, DesktopTransportResult, RemoteControlSessionRequest,
-    RestartScreenCasterRequest,
+    ChangeWindowsSessionRequest, DesktopTransportResult, IceCandidate, RemoteControlSessionRequest,
+    RestartScreenCasterRequest, SdpAnswer, SdpOffer, MAX_SDP_BYTES, MAX_SIGNALLING_STRING_LEN,
 };
 
 /// Maximum byte length permitted for any operator-supplied string
@@ -256,6 +256,141 @@ where
             message,
         }),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Slice R7.g — signalling DTO guards.
+//
+// Same shape as the four method-surface guards above, plus an
+// SDP-body length check (capped at `MAX_SDP_BYTES`) and per-field
+// length checks on the ICE candidate / sdp-mid strings (capped at
+// `MAX_SIGNALLING_STRING_LEN`). Semantic validation of the SDP /
+// candidate grammar is left to the WebRTC driver.
+// ---------------------------------------------------------------------------
+
+/// Validate an inline SDP body. Refuses an empty payload (the .NET
+/// hub never sends one — an end-of-negotiation marker uses a
+/// dedicated DTO type) and any payload exceeding [`MAX_SDP_BYTES`].
+/// The body itself is not echoed into the rejection message — only
+/// its length — so a hostile SDP cannot poison the audit log.
+fn validate_sdp(field: &str, value: &str) -> Result<(), String> {
+    if value.is_empty() {
+        return Err(format!("{field} must not be empty"));
+    }
+    if value.len() > MAX_SDP_BYTES {
+        return Err(format!("{field} exceeds {MAX_SDP_BYTES}-byte limit"));
+    }
+    Ok(())
+}
+
+/// Validate a per-line signalling string (an ICE candidate line or
+/// an `sdp-mid`). Refuses values exceeding
+/// [`MAX_SIGNALLING_STRING_LEN`] bytes. Empty is allowed for the
+/// candidate field (end-of-candidates marker) so the caller decides
+/// per-field whether emptiness is acceptable.
+fn validate_signalling_string_allowing_empty(field: &str, value: &str) -> Result<(), String> {
+    if value.len() > MAX_SIGNALLING_STRING_LEN {
+        return Err(format!(
+            "{field} exceeds {MAX_SIGNALLING_STRING_LEN}-byte limit"
+        ));
+    }
+    // Allow embedded controls inside the candidate / sdp-mid line —
+    // the SDP grammar uses CR/LF and tab — but reject the
+    // bidi-override range, which has no place in a transport line.
+    for c in value.chars() {
+        if matches!(
+            c,
+            '\u{200E}' | '\u{200F}'
+                | '\u{202A}'..='\u{202E}'
+                | '\u{2066}'..='\u{2069}'
+        ) {
+            return Err(format!("{field} contains a bidi-override character"));
+        }
+    }
+    Ok(())
+}
+
+fn check_signalling_envelope<F>(
+    session_id: &str,
+    org_id: &str,
+    viewer_connection_id: &str,
+    requester_name: &str,
+    org_name: &str,
+    expected_org_id: Option<&str>,
+    body: F,
+) -> Result<(), GuardRejection>
+where
+    F: FnOnce() -> Result<(), String>,
+{
+    run(|s| {
+        validate_session_id(session_id)?;
+        *s = session_id.to_string();
+        validate_org(expected_org_id, org_id)?;
+        validate_operator_string("viewer_connection_id", viewer_connection_id)?;
+        validate_operator_string("requester_name", requester_name)?;
+        validate_operator_string("org_name", org_name)?;
+        body()
+    })
+}
+
+/// Run the security-contract guards against an [`SdpOffer`]. Called
+/// by the desktop-transport provider *before* the SDP body itself is
+/// parsed by the WebRTC layer.
+pub fn check_sdp_offer(
+    request: &SdpOffer,
+    expected_org_id: Option<&str>,
+) -> Result<(), GuardRejection> {
+    check_signalling_envelope(
+        &request.session_id,
+        &request.org_id,
+        &request.viewer_connection_id,
+        &request.requester_name,
+        &request.org_name,
+        expected_org_id,
+        || validate_sdp("sdp", &request.sdp),
+    )
+}
+
+/// Run the security-contract guards against an [`SdpAnswer`]. Same
+/// shape as [`check_sdp_offer`].
+pub fn check_sdp_answer(
+    request: &SdpAnswer,
+    expected_org_id: Option<&str>,
+) -> Result<(), GuardRejection> {
+    check_signalling_envelope(
+        &request.session_id,
+        &request.org_id,
+        &request.viewer_connection_id,
+        &request.requester_name,
+        &request.org_name,
+        expected_org_id,
+        || validate_sdp("sdp", &request.sdp),
+    )
+}
+
+/// Run the security-contract guards against an [`IceCandidate`].
+/// Allows an empty `candidate` line (RFC 8838 end-of-candidates
+/// marker) and treats the `sdp_mid` length cap as additive on top
+/// of the envelope checks.
+pub fn check_ice_candidate(
+    request: &IceCandidate,
+    expected_org_id: Option<&str>,
+) -> Result<(), GuardRejection> {
+    check_signalling_envelope(
+        &request.session_id,
+        &request.org_id,
+        &request.viewer_connection_id,
+        &request.requester_name,
+        &request.org_name,
+        expected_org_id,
+        || {
+            validate_signalling_string_allowing_empty("candidate", &request.candidate)?;
+            if let Some(mid) = request.sdp_mid.as_deref() {
+                validate_signalling_string_allowing_empty("sdp_mid", mid)?;
+            }
+            Ok(())
+        },
+    )
 }
 
 #[cfg(test)]
@@ -488,5 +623,135 @@ mod tests {
         assert!(!r.success);
         assert_eq!(r.session_id, VALID_SESSION_ID);
         assert_eq!(r.error_message.as_deref(), Some("boom"));
+    }
+
+    // -----------------------------------------------------------------
+    // Slice R7.g — signalling DTO guard tests.
+    // -----------------------------------------------------------------
+
+    fn offer() -> SdpOffer {
+        SdpOffer {
+            viewer_connection_id: "viewer-1".into(),
+            session_id: VALID_SESSION_ID.into(),
+            requester_name: "Alice".into(),
+            org_name: "Acme".into(),
+            org_id: VALID_ORG_ID.into(),
+            kind: cmremote_wire::SdpKind::Offer,
+            sdp: "v=0\r\n".into(),
+        }
+    }
+
+    fn answer() -> SdpAnswer {
+        SdpAnswer {
+            viewer_connection_id: "viewer-1".into(),
+            session_id: VALID_SESSION_ID.into(),
+            requester_name: "Alice".into(),
+            org_name: "Acme".into(),
+            org_id: VALID_ORG_ID.into(),
+            kind: cmremote_wire::SdpKind::Answer,
+            sdp: "v=0\r\n".into(),
+        }
+    }
+
+    fn ice() -> IceCandidate {
+        IceCandidate {
+            viewer_connection_id: "viewer-1".into(),
+            session_id: VALID_SESSION_ID.into(),
+            requester_name: "Alice".into(),
+            org_name: "Acme".into(),
+            org_id: VALID_ORG_ID.into(),
+            candidate: "candidate:1 1 UDP 2130706431 192.0.2.1 12345 typ host".into(),
+            sdp_mid: Some("0".into()),
+            sdp_mline_index: Some(0),
+        }
+    }
+
+    #[test]
+    fn sdp_offer_happy_path_passes() {
+        check_sdp_offer(&offer(), Some(VALID_ORG_ID)).expect("happy path");
+    }
+
+    #[test]
+    fn sdp_answer_happy_path_passes() {
+        check_sdp_answer(&answer(), Some(VALID_ORG_ID)).expect("happy path");
+    }
+
+    #[test]
+    fn ice_candidate_happy_path_passes() {
+        check_ice_candidate(&ice(), Some(VALID_ORG_ID)).expect("happy path");
+    }
+
+    #[test]
+    fn ice_candidate_end_of_candidates_marker_is_accepted() {
+        let mut req = ice();
+        req.candidate = String::new();
+        req.sdp_mid = None;
+        req.sdp_mline_index = None;
+        check_ice_candidate(&req, Some(VALID_ORG_ID))
+            .expect("end-of-candidates marker is RFC 8838-legal");
+    }
+
+    #[test]
+    fn cross_org_sdp_offer_is_refused() {
+        let mut req = offer();
+        req.org_id = "ffffffff-ffff-ffff-ffff-ffffffffffff".into();
+        let r = check_sdp_offer(&req, Some(VALID_ORG_ID)).unwrap_err();
+        assert!(r.message.contains("organisation"), "{}", r.message);
+    }
+
+    #[test]
+    fn empty_sdp_body_is_refused() {
+        let mut req = offer();
+        req.sdp = String::new();
+        let r = check_sdp_offer(&req, Some(VALID_ORG_ID)).unwrap_err();
+        assert!(r.message.contains("sdp"), "{}", r.message);
+    }
+
+    #[test]
+    fn over_length_sdp_body_is_refused_without_echoing_body() {
+        let mut req = offer();
+        req.sdp = "v".repeat(cmremote_wire::MAX_SDP_BYTES + 1);
+        let r = check_sdp_offer(&req, Some(VALID_ORG_ID)).unwrap_err();
+        assert!(r.message.contains("sdp"), "{}", r.message);
+        assert!(r.message.contains("limit"), "{}", r.message);
+        // The rejection MUST NOT echo the offending body — that would
+        // turn a hostile SDP into a log-amplification vector.
+        assert!(!r.message.contains(&"v".repeat(64)), "{}", r.message);
+    }
+
+    #[test]
+    fn over_length_ice_candidate_is_refused() {
+        let mut req = ice();
+        req.candidate = "c".repeat(cmremote_wire::MAX_SIGNALLING_STRING_LEN + 1);
+        let r = check_ice_candidate(&req, Some(VALID_ORG_ID)).unwrap_err();
+        assert!(r.message.contains("candidate"), "{}", r.message);
+        assert!(r.message.contains("limit"), "{}", r.message);
+    }
+
+    #[test]
+    fn malformed_session_id_in_signalling_does_not_echo_value() {
+        let mut req = offer();
+        req.session_id = "DROP TABLE sessions".into();
+        let r = check_sdp_offer(&req, Some(VALID_ORG_ID)).unwrap_err();
+        // Same invariant slice R7.b pinned for the four method-surface
+        // requests: a malformed session id is never reflected back.
+        assert_eq!(r.session_id, "");
+        assert!(r.message.contains("session_id"), "{}", r.message);
+    }
+
+    #[test]
+    fn bidi_override_in_ice_candidate_is_refused() {
+        let mut req = ice();
+        req.candidate = "candidate:1\u{202E}".into();
+        let r = check_ice_candidate(&req, Some(VALID_ORG_ID)).unwrap_err();
+        assert!(r.message.contains("bidi-override"), "{}", r.message);
+    }
+
+    #[test]
+    fn bidi_override_in_sdp_mid_is_refused() {
+        let mut req = ice();
+        req.sdp_mid = Some("0\u{202E}".into());
+        let r = check_ice_candidate(&req, Some(VALID_ORG_ID)).unwrap_err();
+        assert!(r.message.contains("sdp_mid"), "{}", r.message);
     }
 }

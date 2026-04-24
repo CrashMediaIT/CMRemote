@@ -57,8 +57,8 @@
 
 use async_trait::async_trait;
 use cmremote_wire::{
-    ChangeWindowsSessionRequest, DesktopTransportResult, InvokeCtrlAltDelRequest,
-    RemoteControlSessionRequest, RestartScreenCasterRequest,
+    ChangeWindowsSessionRequest, DesktopTransportResult, IceCandidate, InvokeCtrlAltDelRequest,
+    RemoteControlSessionRequest, RestartScreenCasterRequest, SdpAnswer, SdpOffer,
 };
 
 use crate::HostOs;
@@ -109,6 +109,59 @@ pub trait DesktopTransportProvider: Send + Sync {
         &self,
         request: &InvokeCtrlAltDelRequest,
     ) -> DesktopTransportResult;
+
+    // ---------------------------------------------------------------
+    // Slice R7.g — signalling hooks.
+    //
+    // The `Send*` family of methods is the WebRTC negotiation
+    // surface every concrete driver plugs into. Until a driver lands
+    // (gated on the crypto-provider ADR), the default
+    // `NotSupportedDesktopTransport` runs the same security guards
+    // these hooks contractually require, then returns a structured
+    // "not supported on <host_os>" failure. The dispatch layer
+    // routes `SendSdpOffer` / `SendSdpAnswer` / `SendIceCandidate`
+    // hub invocations here.
+    //
+    // All three methods MUST run the matching `guards::check_*_*`
+    // helper *before* parsing the SDP / candidate body — same
+    // contract as the four method-surface methods above. The body
+    // length cap (`MAX_SDP_BYTES` for SDP, `MAX_SIGNALLING_STRING_LEN`
+    // for ICE lines) is enforced inside the guard helper, so an
+    // over-length payload never reaches the driver.
+    // ---------------------------------------------------------------
+
+    /// Service a `SendSdpOffer(viewerConnectionId, sessionId, …, sdp)`
+    /// invocation — the viewer is opening (or re-opening) the WebRTC
+    /// negotiation. Default-impl provided so existing driver crates
+    /// (and downstream forks) compile without a churn step; concrete
+    /// drivers MUST override it.
+    async fn on_sdp_offer(&self, request: &SdpOffer) -> DesktopTransportResult {
+        DesktopTransportResult::failed(
+            request.session_id.clone(),
+            "Desktop transport for \"SendSdpOffer\" is not implemented by this provider."
+                .to_string(),
+        )
+    }
+
+    /// Service a `SendSdpAnswer(…)` invocation — the viewer is
+    /// accepting an agent-initiated renegotiation.
+    async fn on_sdp_answer(&self, request: &SdpAnswer) -> DesktopTransportResult {
+        DesktopTransportResult::failed(
+            request.session_id.clone(),
+            "Desktop transport for \"SendSdpAnswer\" is not implemented by this provider."
+                .to_string(),
+        )
+    }
+
+    /// Service a `SendIceCandidate(…)` invocation — a trickled ICE
+    /// candidate from the viewer.
+    async fn on_ice_candidate(&self, request: &IceCandidate) -> DesktopTransportResult {
+        DesktopTransportResult::failed(
+            request.session_id.clone(),
+            "Desktop transport for \"SendIceCandidate\" is not implemented by this provider."
+                .to_string(),
+        )
+    }
 }
 
 /// Default provider returned by the runtime when no concrete
@@ -215,6 +268,34 @@ impl DesktopTransportProvider for NotSupportedDesktopTransport {
         // Surface an empty session id so the server can correlate
         // against the original invocation by id rather than session.
         DesktopTransportResult::failed(String::new(), self.message("InvokeCtrlAltDel"))
+    }
+
+    // -----------------------------------------------------------------
+    // Slice R7.g — signalling hooks. Same guard-first ordering as the
+    // four method-surface methods: a hostile request never reaches
+    // the per-OS error path. Concrete WebRTC drivers will override
+    // these methods with the actual peer-connection plumbing.
+    // -----------------------------------------------------------------
+
+    async fn on_sdp_offer(&self, request: &SdpOffer) -> DesktopTransportResult {
+        if let Err(rejection) = guards::check_sdp_offer(request, self.expected_org()) {
+            return rejection.into_result();
+        }
+        DesktopTransportResult::failed(request.session_id.clone(), self.message("SendSdpOffer"))
+    }
+
+    async fn on_sdp_answer(&self, request: &SdpAnswer) -> DesktopTransportResult {
+        if let Err(rejection) = guards::check_sdp_answer(request, self.expected_org()) {
+            return rejection.into_result();
+        }
+        DesktopTransportResult::failed(request.session_id.clone(), self.message("SendSdpAnswer"))
+    }
+
+    async fn on_ice_candidate(&self, request: &IceCandidate) -> DesktopTransportResult {
+        if let Err(rejection) = guards::check_ice_candidate(request, self.expected_org()) {
+            return rejection.into_result();
+        }
+        DesktopTransportResult::failed(request.session_id.clone(), self.message("SendIceCandidate"))
     }
 }
 
@@ -382,5 +463,127 @@ mod tests {
     fn trait_is_object_safe() {
         let _p: Box<dyn DesktopTransportProvider> =
             Box::new(NotSupportedDesktopTransport::for_current_host(None));
+    }
+
+    // -----------------------------------------------------------------
+    // Slice R7.g — signalling-hook stub behaviour. Mirror the
+    // method-surface tests above: guards run *before* the
+    // OS-not-supported branch.
+    // -----------------------------------------------------------------
+
+    fn sdp_offer_req() -> SdpOffer {
+        SdpOffer {
+            viewer_connection_id: "viewer-1".into(),
+            session_id: VALID_SESSION_ID.into(),
+            requester_name: "Alice".into(),
+            org_name: "Acme".into(),
+            org_id: VALID_ORG_ID.into(),
+            kind: cmremote_wire::SdpKind::Offer,
+            sdp: "v=0\r\n".into(),
+        }
+    }
+
+    fn sdp_answer_req() -> SdpAnswer {
+        SdpAnswer {
+            viewer_connection_id: "viewer-1".into(),
+            session_id: VALID_SESSION_ID.into(),
+            requester_name: "Alice".into(),
+            org_name: "Acme".into(),
+            org_id: VALID_ORG_ID.into(),
+            kind: cmremote_wire::SdpKind::Answer,
+            sdp: "v=0\r\n".into(),
+        }
+    }
+
+    fn ice_req() -> IceCandidate {
+        IceCandidate {
+            viewer_connection_id: "viewer-1".into(),
+            session_id: VALID_SESSION_ID.into(),
+            requester_name: "Alice".into(),
+            org_name: "Acme".into(),
+            org_id: VALID_ORG_ID.into(),
+            candidate: "candidate:1 1 UDP 2130706431 192.0.2.1 12345 typ host".into(),
+            sdp_mid: Some("0".into()),
+            sdp_mline_index: Some(0),
+        }
+    }
+
+    #[tokio::test]
+    async fn not_supported_sdp_offer_is_structured_failure_naming_method_and_os() {
+        let p = NotSupportedDesktopTransport::new(HostOs::Linux, Some(VALID_ORG_ID.into()));
+        let r = p.on_sdp_offer(&sdp_offer_req()).await;
+        assert!(!r.success);
+        assert_eq!(r.session_id, VALID_SESSION_ID);
+        let msg = r.error_message.unwrap();
+        assert!(msg.contains("SendSdpOffer"), "{msg}");
+        assert!(msg.contains("Linux"), "{msg}");
+    }
+
+    #[tokio::test]
+    async fn not_supported_sdp_answer_is_structured_failure_naming_method_and_os() {
+        let p = NotSupportedDesktopTransport::new(HostOs::MacOs, Some(VALID_ORG_ID.into()));
+        let r = p.on_sdp_answer(&sdp_answer_req()).await;
+        assert!(!r.success);
+        assert_eq!(r.session_id, VALID_SESSION_ID);
+        let msg = r.error_message.unwrap();
+        assert!(msg.contains("SendSdpAnswer"), "{msg}");
+        assert!(msg.contains("MacOs"), "{msg}");
+    }
+
+    #[tokio::test]
+    async fn not_supported_ice_candidate_is_structured_failure_naming_method_and_os() {
+        let p = NotSupportedDesktopTransport::new(HostOs::Windows, Some(VALID_ORG_ID.into()));
+        let r = p.on_ice_candidate(&ice_req()).await;
+        assert!(!r.success);
+        assert_eq!(r.session_id, VALID_SESSION_ID);
+        let msg = r.error_message.unwrap();
+        assert!(msg.contains("SendIceCandidate"), "{msg}");
+        assert!(msg.contains("Windows"), "{msg}");
+    }
+
+    #[tokio::test]
+    async fn cross_org_sdp_offer_is_refused_before_os_check() {
+        let p = NotSupportedDesktopTransport::new(HostOs::Linux, Some(VALID_ORG_ID.into()));
+        let mut req = sdp_offer_req();
+        req.org_id = "ffffffff-ffff-ffff-ffff-ffffffffffff".into();
+        let r = p.on_sdp_offer(&req).await;
+        assert!(!r.success);
+        let msg = r.error_message.unwrap();
+        // Cross-org refusal — proves the guard runs *before* the
+        // OS-not-supported branch.
+        assert!(msg.contains("organisation"), "{msg}");
+        assert!(!msg.contains("Linux"), "{msg}");
+        assert!(!msg.contains("SendSdpOffer"), "{msg}");
+    }
+
+    #[tokio::test]
+    async fn over_length_sdp_in_offer_is_refused_before_os_check() {
+        let p = NotSupportedDesktopTransport::new(HostOs::Linux, Some(VALID_ORG_ID.into()));
+        let mut req = sdp_offer_req();
+        req.sdp = "v".repeat(cmremote_wire::MAX_SDP_BYTES + 1);
+        let r = p.on_sdp_offer(&req).await;
+        assert!(!r.success);
+        let msg = r.error_message.unwrap();
+        assert!(msg.contains("sdp"), "{msg}");
+        assert!(msg.contains("limit"), "{msg}");
+        // Body must NOT be echoed.
+        assert!(!msg.contains(&"v".repeat(64)), "{msg}");
+    }
+
+    #[tokio::test]
+    async fn end_of_candidates_marker_passes_guards_and_surfaces_os_not_supported() {
+        let p = NotSupportedDesktopTransport::new(HostOs::Linux, Some(VALID_ORG_ID.into()));
+        let mut req = ice_req();
+        req.candidate = String::new();
+        req.sdp_mid = None;
+        req.sdp_mline_index = None;
+        let r = p.on_ice_candidate(&req).await;
+        // Guards accept the marker; the stub then fails closed with
+        // the OS-not-supported message — the *expected* shape until
+        // a concrete WebRTC driver registers.
+        assert!(!r.success);
+        let msg = r.error_message.unwrap();
+        assert!(msg.contains("SendIceCandidate"), "{msg}");
+        assert!(msg.contains("Linux"), "{msg}");
     }
 }

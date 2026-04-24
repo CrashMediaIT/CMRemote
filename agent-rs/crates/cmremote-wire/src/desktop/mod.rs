@@ -32,6 +32,12 @@
 
 use serde::{Deserialize, Serialize};
 
+pub mod signalling;
+
+pub use signalling::{
+    IceCandidate, SdpAnswer, SdpKind, SdpOffer, MAX_SDP_BYTES, MAX_SIGNALLING_STRING_LEN,
+};
+
 /// Request payload for the `RemoteControl(sessionId, accessKey, …)`
 /// hub method. Fields mirror the .NET signature in
 /// `IAgentHubClient.RemoteControl` exactly.

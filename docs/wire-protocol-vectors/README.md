@@ -19,7 +19,9 @@ wire-protocol-vectors/
 ├── handshake/        # SignalR handshake request/response records
 ├── envelope/         # Hub-message envelopes (invocation, completion, …)
 └── method-surface/   # Per-method request + result DTOs (slice R7.d
-                      # locks the four desktop-transport methods).
+                      # locks the four desktop-transport methods;
+                      # slice R7.g adds the WebRTC signalling DTOs
+                      # under method-surface/signalling/).
 ```
 
 Files are intentionally one-shape-per-file so that test failures

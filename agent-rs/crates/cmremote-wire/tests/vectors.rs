@@ -9,7 +9,8 @@ use std::path::{Path, PathBuf};
 use cmremote_wire::{
     from_msgpack, to_msgpack, ChangeWindowsSessionRequest, ConnectionInfo, DesktopTransportResult,
     HandshakeRequest, HandshakeResponse, HubClose, HubCompletion, HubInvocation, HubPing,
-    HubProtocol, InvokeCtrlAltDelRequest, RemoteControlSessionRequest, RestartScreenCasterRequest,
+    HubProtocol, IceCandidate, InvokeCtrlAltDelRequest, RemoteControlSessionRequest,
+    RestartScreenCasterRequest, SdpAnswer, SdpKind, SdpOffer,
 };
 
 /// Walk up from the crate's manifest directory until we find the
@@ -388,5 +389,114 @@ fn method_surface_invoke_ctrl_alt_del_vectors_round_trip() {
         .contains("InvokeCtrlAltDel"));
 
     assert_msgpack_round_trip::<InvokeCtrlAltDelRequest>(&dir.join("request.json"));
+    assert_msgpack_round_trip::<DesktopTransportResult>(&dir.join("result-failure.json"));
+}
+
+// -------------------------------------------------------------------------
+// Slice R7.g — Signalling vectors. The .NET side will land its half of
+// the WebRTC negotiation surface against these byte-stable JSON shapes,
+// so each vector must round-trip through both JSON and MessagePack and
+// keep its PascalCase wire field names intact on re-serialisation.
+// -------------------------------------------------------------------------
+
+#[test]
+fn signalling_sdp_offer_vector_round_trips() {
+    let path = vectors_root()
+        .join("method-surface")
+        .join("signalling")
+        .join("sdp-offer.json");
+    let raw = read(&path);
+    let req: SdpOffer = serde_json::from_str(&raw).unwrap();
+    assert_eq!(req.session_id, DESKTOP_VALID_SESSION_ID);
+    assert_eq!(req.org_id, DESKTOP_VALID_ORG_ID);
+    assert_eq!(req.kind, SdpKind::Offer);
+    assert!(req.sdp.starts_with("v=0\r\n"), "{}", req.sdp);
+    let re = serde_json::to_string(&req).unwrap();
+    // PascalCase must survive — this is the contract with the .NET hub.
+    assert!(re.contains("\"ViewerConnectionId\""), "{re}");
+    assert!(re.contains("\"SessionId\""), "{re}");
+    assert!(re.contains("\"OrgId\""), "{re}");
+    assert!(re.contains("\"Kind\":\"Offer\""), "{re}");
+    assert!(re.contains("\"Sdp\""), "{re}");
+    assert_msgpack_round_trip::<SdpOffer>(&path);
+}
+
+#[test]
+fn signalling_sdp_answer_vector_round_trips() {
+    let path = vectors_root()
+        .join("method-surface")
+        .join("signalling")
+        .join("sdp-answer.json");
+    let raw = read(&path);
+    let req: SdpAnswer = serde_json::from_str(&raw).unwrap();
+    assert_eq!(req.session_id, DESKTOP_VALID_SESSION_ID);
+    assert_eq!(req.kind, SdpKind::Answer);
+    let re = serde_json::to_string(&req).unwrap();
+    assert!(re.contains("\"Kind\":\"Answer\""), "{re}");
+    assert_msgpack_round_trip::<SdpAnswer>(&path);
+}
+
+#[test]
+fn signalling_ice_candidate_vector_round_trips() {
+    let dir = vectors_root().join("method-surface").join("signalling");
+
+    let path = dir.join("ice-candidate.json");
+    let req: IceCandidate = serde_json::from_str(&read(&path)).unwrap();
+    assert_eq!(req.session_id, DESKTOP_VALID_SESSION_ID);
+    assert_eq!(req.sdp_mid.as_deref(), Some("0"));
+    assert_eq!(req.sdp_mline_index, Some(0));
+    let re = serde_json::to_string(&req).unwrap();
+    assert!(re.contains("\"Candidate\""), "{re}");
+    assert!(re.contains("\"SdpMid\":\"0\""), "{re}");
+    assert!(re.contains("\"SdpMlineIndex\":0"), "{re}");
+    assert_msgpack_round_trip::<IceCandidate>(&path);
+}
+
+#[test]
+fn signalling_ice_candidate_end_of_candidates_marker_vector_round_trips() {
+    let path = vectors_root()
+        .join("method-surface")
+        .join("signalling")
+        .join("ice-candidate-end-of-candidates.json");
+    let raw = read(&path);
+    let req: IceCandidate = serde_json::from_str(&raw).unwrap();
+    // RFC 8838 end-of-candidates: empty `candidate` line, no mid, no
+    // mline index. The .NET side detects the marker by absence of a
+    // value rather than by comparing against an empty string, so the
+    // round-trip must preserve `null` for both Option fields.
+    assert_eq!(req.candidate, "");
+    assert!(req.sdp_mid.is_none());
+    assert!(req.sdp_mline_index.is_none());
+    let re = serde_json::to_string(&req).unwrap();
+    assert!(re.contains("\"SdpMid\":null"), "{re}");
+    assert!(re.contains("\"SdpMlineIndex\":null"), "{re}");
+    assert_msgpack_round_trip::<IceCandidate>(&path);
+}
+
+#[test]
+fn signalling_result_vectors_round_trip() {
+    let dir = vectors_root().join("method-surface").join("signalling");
+
+    let ok: DesktopTransportResult =
+        serde_json::from_str(&read(&dir.join("result-success.json"))).unwrap();
+    assert!(ok.success);
+    assert_eq!(ok.session_id, DESKTOP_VALID_SESSION_ID);
+    let re = serde_json::to_string(&ok).unwrap();
+    // ErrorMessage is omitted from the on-wire form when None.
+    assert!(!re.contains("ErrorMessage"), "{re}");
+
+    let bad: DesktopTransportResult =
+        serde_json::from_str(&read(&dir.join("result-failure.json"))).unwrap();
+    assert!(!bad.success);
+    let msg = bad.error_message.as_deref().unwrap();
+    assert!(msg.contains("SendSdpOffer"), "{msg}");
+    // The failure vector deliberately mirrors the stub's
+    // OS-not-supported message; pin that it never carries a
+    // placeholder access key (no `RemoteControl` request shape would
+    // have one in this method, but pin it anyway against future
+    // drift in result-shape conventions).
+    assert!(!msg.contains("REDACTED-IN-LOGS"), "{msg}");
+
+    assert_msgpack_round_trip::<DesktopTransportResult>(&dir.join("result-success.json"));
     assert_msgpack_round_trip::<DesktopTransportResult>(&dir.join("result-failure.json"));
 }

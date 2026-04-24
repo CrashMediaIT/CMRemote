@@ -1,0 +1,5 @@
+{
+  "SessionId": "11111111-2222-3333-4444-555555555555",
+  "Success": false,
+  "ErrorMessage": "Desktop transport for \"SendSdpOffer\" is not supported on Linux."
+}

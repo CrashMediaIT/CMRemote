@@ -79,6 +79,16 @@ impl AgentHandlers {
             MethodName::InvokeCtrlAltDel => {
                 desktop::handle_invoke_ctrl_alt_del(inv, &*self.desktop).await
             }
+            // Slice R7.g — desktop signalling. Same dispatch shape as
+            // the four method-surface methods above; until the
+            // crypto-provider ADR is decided and a real WebRTC
+            // driver lands, every call resolves to a structured
+            // "not supported on <OS>" failure.
+            MethodName::SendSdpOffer => desktop::handle_send_sdp_offer(inv, &*self.desktop).await,
+            MethodName::SendSdpAnswer => desktop::handle_send_sdp_answer(inv, &*self.desktop).await,
+            MethodName::SendIceCandidate => {
+                desktop::handle_send_ice_candidate(inv, &*self.desktop).await
+            }
             // R8 stubs (RunScript / DeleteLogs / GetLogs /
             // ReinstallAgent / UninstallAgent / WakeDevice /
             // TransferFileFromBrowserToAgent) — fall through to the

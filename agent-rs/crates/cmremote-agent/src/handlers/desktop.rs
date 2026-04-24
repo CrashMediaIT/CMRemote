@@ -18,8 +18,9 @@
 
 use cmremote_platform::desktop::DesktopTransportProvider;
 use cmremote_wire::{
-    ChangeWindowsSessionRequest, DesktopTransportResult, HubInvocation, InvokeCtrlAltDelRequest,
-    RemoteControlSessionRequest, RestartScreenCasterRequest,
+    ChangeWindowsSessionRequest, DesktopTransportResult, HubInvocation, IceCandidate,
+    InvokeCtrlAltDelRequest, RemoteControlSessionRequest, RestartScreenCasterRequest, SdpAnswer,
+    SdpOffer,
 };
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -99,6 +100,60 @@ pub async fn handle_invoke_ctrl_alt_del(
     provider: &dyn DesktopTransportProvider,
 ) -> Result<Value, String> {
     let r = provider.invoke_ctrl_alt_del(&InvokeCtrlAltDelRequest).await;
+    result_to_json(&r)
+}
+
+// ---------------------------------------------------------------------
+// Slice R7.g — signalling handlers. Same single-arg decode + structured
+// failure shape as the four method-surface handlers above.
+// ---------------------------------------------------------------------
+
+/// Handler for `SendSdpOffer(viewerConnectionId, sessionId, …, sdp)`.
+pub async fn handle_send_sdp_offer(
+    inv: &HubInvocation,
+    provider: &dyn DesktopTransportProvider,
+) -> Result<Value, String> {
+    let req: SdpOffer = match decode_single_arg(inv) {
+        Ok(r) => r,
+        Err(e) => {
+            let r = DesktopTransportResult::failed(String::new(), e);
+            return result_to_json(&r);
+        }
+    };
+    let r = provider.on_sdp_offer(&req).await;
+    result_to_json(&r)
+}
+
+/// Handler for `SendSdpAnswer(viewerConnectionId, sessionId, …, sdp)`.
+pub async fn handle_send_sdp_answer(
+    inv: &HubInvocation,
+    provider: &dyn DesktopTransportProvider,
+) -> Result<Value, String> {
+    let req: SdpAnswer = match decode_single_arg(inv) {
+        Ok(r) => r,
+        Err(e) => {
+            let r = DesktopTransportResult::failed(String::new(), e);
+            return result_to_json(&r);
+        }
+    };
+    let r = provider.on_sdp_answer(&req).await;
+    result_to_json(&r)
+}
+
+/// Handler for `SendIceCandidate(viewerConnectionId, sessionId, …,
+/// candidate, sdpMid, sdpMlineIndex)`.
+pub async fn handle_send_ice_candidate(
+    inv: &HubInvocation,
+    provider: &dyn DesktopTransportProvider,
+) -> Result<Value, String> {
+    let req: IceCandidate = match decode_single_arg(inv) {
+        Ok(r) => r,
+        Err(e) => {
+            let r = DesktopTransportResult::failed(String::new(), e);
+            return result_to_json(&r);
+        }
+    };
+    let r = provider.on_ice_candidate(&req).await;
     result_to_json(&r)
 }
 
@@ -272,5 +327,105 @@ mod tests {
         assert_eq!(v["Success"], false);
         let msg = v["ErrorMessage"].as_str().unwrap();
         assert!(msg.contains("organisation"), "{msg}");
+    }
+
+    // -----------------------------------------------------------------
+    // Slice R7.g — signalling handler tests.
+    // -----------------------------------------------------------------
+
+    fn sdp_offer_args() -> Value {
+        json!({
+            "ViewerConnectionId": "viewer-1",
+            "SessionId": VALID_SESSION_ID,
+            "RequesterName": "Alice",
+            "OrgName": "Acme",
+            "OrgId": VALID_ORG_ID,
+            "Kind": "Offer",
+            "Sdp": "v=0\r\n",
+        })
+    }
+
+    fn sdp_answer_args() -> Value {
+        json!({
+            "ViewerConnectionId": "viewer-1",
+            "SessionId": VALID_SESSION_ID,
+            "RequesterName": "Alice",
+            "OrgName": "Acme",
+            "OrgId": VALID_ORG_ID,
+            "Kind": "Answer",
+            "Sdp": "v=0\r\n",
+        })
+    }
+
+    fn ice_args() -> Value {
+        json!({
+            "ViewerConnectionId": "viewer-1",
+            "SessionId": VALID_SESSION_ID,
+            "RequesterName": "Alice",
+            "OrgName": "Acme",
+            "OrgId": VALID_ORG_ID,
+            "Candidate": "candidate:1 1 UDP 2130706431 192.0.2.1 12345 typ host",
+            "SdpMid": "0",
+            "SdpMlineIndex": 0,
+        })
+    }
+
+    #[tokio::test]
+    async fn send_sdp_offer_routes_and_serialises_result() {
+        let provider = provider();
+        let inv = invocation("SendSdpOffer", vec![sdp_offer_args()]);
+        let v = handle_send_sdp_offer(&inv, &provider).await.unwrap();
+        assert_eq!(v["SessionId"], VALID_SESSION_ID);
+        assert_eq!(v["Success"], false);
+        let msg = v["ErrorMessage"].as_str().unwrap();
+        assert!(msg.contains("SendSdpOffer"), "{msg}");
+        assert!(msg.contains("Linux"), "{msg}");
+    }
+
+    #[tokio::test]
+    async fn send_sdp_answer_routes_and_serialises_result() {
+        let provider = provider();
+        let inv = invocation("SendSdpAnswer", vec![sdp_answer_args()]);
+        let v = handle_send_sdp_answer(&inv, &provider).await.unwrap();
+        assert_eq!(v["Success"], false);
+        let msg = v["ErrorMessage"].as_str().unwrap();
+        assert!(msg.contains("SendSdpAnswer"), "{msg}");
+    }
+
+    #[tokio::test]
+    async fn send_ice_candidate_routes_and_serialises_result() {
+        let provider = provider();
+        let inv = invocation("SendIceCandidate", vec![ice_args()]);
+        let v = handle_send_ice_candidate(&inv, &provider).await.unwrap();
+        assert_eq!(v["Success"], false);
+        let msg = v["ErrorMessage"].as_str().unwrap();
+        assert!(msg.contains("SendIceCandidate"), "{msg}");
+    }
+
+    #[tokio::test]
+    async fn cross_org_sdp_offer_is_refused_at_the_handler() {
+        let provider = provider();
+        let mut args = sdp_offer_args();
+        args["OrgId"] = json!("ffffffff-ffff-ffff-ffff-ffffffffffff");
+        let inv = invocation("SendSdpOffer", vec![args]);
+        let v = handle_send_sdp_offer(&inv, &provider).await.unwrap();
+        assert_eq!(v["Success"], false);
+        let msg = v["ErrorMessage"].as_str().unwrap();
+        assert!(msg.contains("organisation"), "{msg}");
+    }
+
+    #[tokio::test]
+    async fn malformed_signalling_arguments_become_structured_failure() {
+        let provider = provider();
+        // SessionId is required as a string — pass a number.
+        let mut args = sdp_offer_args();
+        args["SessionId"] = json!(12345);
+        let inv = invocation("SendSdpOffer", vec![args]);
+        let v = handle_send_sdp_offer(&inv, &provider).await.unwrap();
+        assert_eq!(v["Success"], false);
+        assert!(v["ErrorMessage"]
+            .as_str()
+            .unwrap()
+            .contains("invalid arguments"));
     }
 }

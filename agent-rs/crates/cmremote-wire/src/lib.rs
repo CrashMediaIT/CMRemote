@@ -28,8 +28,9 @@ pub mod script;
 
 pub use connection_info::ConnectionInfo;
 pub use desktop::{
-    ChangeWindowsSessionRequest, DesktopTransportResult, InvokeCtrlAltDelRequest,
-    RemoteControlSessionRequest, RestartScreenCasterRequest,
+    ChangeWindowsSessionRequest, DesktopTransportResult, IceCandidate, InvokeCtrlAltDelRequest,
+    RemoteControlSessionRequest, RestartScreenCasterRequest, SdpAnswer, SdpKind, SdpOffer,
+    MAX_SDP_BYTES, MAX_SIGNALLING_STRING_LEN,
 };
 pub use dispatch::{decode_envelope, decode_envelope_with, HubEnvelope};
 pub use envelope::{HubClose, HubCompletion, HubInvocation, HubMessageKind, HubPing};
