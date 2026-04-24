@@ -1,0 +1,96 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/CrashMediaIT/CMRemote/docs/publisher-manifest.schema.json",
+  "title": "CMRemote Publisher Manifest",
+  "description": "Schema for the CMRemote publisher manifest. See docs/publisher-manifest.md for the normative specification.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "publisher",
+    "generatedAt",
+    "channel",
+    "version",
+    "builds"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "integer",
+      "const": 1
+    },
+    "publisher": {
+      "type": "string",
+      "minLength": 1
+    },
+    "generatedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "channel": {
+      "type": "string",
+      "enum": ["stable", "preview", "previous"]
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+(-[0-9A-Za-z.-]+)?(\\+[0-9A-Za-z.-]+)?$"
+    },
+    "notes": {
+      "type": "string"
+    },
+    "builds": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/buildEntry" }
+    }
+  },
+  "$defs": {
+    "buildEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "agentVersion",
+        "target",
+        "format",
+        "file",
+        "size",
+        "sha256"
+      ],
+      "properties": {
+        "agentVersion": {
+          "type": "string",
+          "pattern": "^\\d+\\.\\d+\\.\\d+(-[0-9A-Za-z.-]+)?(\\+[0-9A-Za-z.-]+)?$"
+        },
+        "target": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9_]+(-[A-Za-z0-9_.]+)+$"
+        },
+        "format": {
+          "type": "string",
+          "enum": ["deb", "rpm", "msi", "pkg", "tar.gz"]
+        },
+        "file": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._-]+$"
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "signature": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._-]+$"
+        },
+        "signedBy": {
+          "type": "string"
+        }
+      },
+      "dependentRequired": {
+        "signature": ["signedBy"]
+      }
+    }
+  }
+}

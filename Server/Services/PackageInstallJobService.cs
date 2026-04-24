@@ -76,15 +76,18 @@ public class PackageInstallJobService : IPackageInstallJobService
 {
     private readonly IAppDbFactory _dbFactory;
     private readonly ISystemTime _systemTime;
+    private readonly IPackageInstallJobRateLimiter _rateLimiter;
     private readonly ILogger<PackageInstallJobService> _logger;
 
     public PackageInstallJobService(
         IAppDbFactory dbFactory,
         ISystemTime systemTime,
+        IPackageInstallJobRateLimiter rateLimiter,
         ILogger<PackageInstallJobService> logger)
     {
         _dbFactory = dbFactory;
         _systemTime = systemTime;
+        _rateLimiter = rateLimiter;
         _logger = logger;
     }
 
@@ -107,6 +110,17 @@ public class PackageInstallJobService : IPackageInstallJobService
         if (string.IsNullOrWhiteSpace(deviceId))
         {
             throw new ArgumentException("Device ID is required.", nameof(deviceId));
+        }
+
+        // Track S / S7 — per-org rate limit. Refuse the queue if the
+        // org has exceeded its sliding-window budget. The caller is
+        // responsible for surfacing the failure to the operator
+        // (CircuitConnection.QueueInstallPackage already returns a
+        // Result<Guid>, which is what the toast layer reads).
+        if (!await _rateLimiter.TryAcquireAsync(organizationId, CancellationToken.None))
+        {
+            throw new InvalidOperationException(
+                "Package install-job rate limit exceeded for this organization. Try again shortly.");
         }
 
         using var db = _dbFactory.GetContext();
@@ -167,6 +181,20 @@ public class PackageInstallJobService : IPackageInstallJobService
         if (bundle.Items.Count == 0 || deviceIds.Count == 0)
         {
             return Array.Empty<PackageInstallJob>();
+        }
+
+        // Track S / S7 — per-org rate limit. The bundle path can fan
+        // out to thousands of jobs in one call so we charge the limiter
+        // up-front for every job we're about to insert; if the budget
+        // doesn't cover the whole bundle we refuse the entire submission
+        // rather than partially inserting.
+        var totalJobs = bundle.Items.Count * deviceIds.Count(d => !string.IsNullOrWhiteSpace(d));
+        if (totalJobs > 0 &&
+            !await _rateLimiter.TryAcquireAsync(organizationId, totalJobs, CancellationToken.None))
+        {
+            throw new InvalidOperationException(
+                $"Bundle would queue {totalJobs} jobs which exceeds the per-organization rate limit. " +
+                "Try again shortly or split the bundle.");
         }
 
         var jobs = new List<PackageInstallJob>(bundle.Items.Count * deviceIds.Count);

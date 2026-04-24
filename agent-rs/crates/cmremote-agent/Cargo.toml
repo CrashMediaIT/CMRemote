@@ -35,3 +35,86 @@ tempfile = "3.13"
 futures-util = { workspace = true }
 tokio-tungstenite = { workspace = true }
 async-trait = "0.1"
+
+# -----------------------------------------------------------------------------
+# Linux .deb packaging — slice R8.
+# Consumed by `cargo deb -p cmremote-agent` (cargo-deb >= 2.0). Produces
+# target/debian/cmremote-agent_<version>-1_amd64.deb when run on an
+# x86_64-unknown-linux-gnu host. The systemd unit, env-file template, and
+# pre/post scripts live under packaging/systemd/ so cargo-generate-rpm
+# can consume the same source of truth.
+# -----------------------------------------------------------------------------
+[package.metadata.deb]
+name = "cmremote-agent"
+maintainer = "CMRemote contributors <security@crashmedia.ca>"
+copyright = "2026, CMRemote contributors"
+license-file = ["../../../LICENSE", "0"]
+extended-description = """\
+CMRemote is a self-hosted remote-management platform for endpoints. \
+This package installs the CMRemote endpoint agent — a small Rust \
+binary that connects to a CMRemote server over TLS, reports device \
+state, executes signed install jobs, and (with operator opt-in) hosts \
+a WebRTC remote-control session. See \
+https://github.com/CrashMediaIT/CMRemote for the server."""
+depends = "$auto, systemd"
+section = "admin"
+priority = "optional"
+assets = [
+    ["target/release/cmremote-agent", "usr/bin/", "755"],
+    ["../../packaging/systemd/cmremote-agent.service", "lib/systemd/system/", "644"],
+    ["../../packaging/systemd/agent.env.sample", "etc/cmremote/agent.env.sample", "640"],
+    ["../../packaging/README.md", "usr/share/doc/cmremote-agent/README.md", "644"],
+]
+conf-files = ["/etc/cmremote/agent.env.sample"]
+maintainer-scripts = "../../packaging/systemd"
+systemd-units = { unit-name = "cmremote-agent", enable = false, start = false }
+
+# -----------------------------------------------------------------------------
+# Linux .rpm packaging — slice R8.
+# Consumed by `cargo generate-rpm -p cmremote-agent` (cargo-generate-rpm
+# >= 0.14). Produces target/generate-rpm/cmremote-agent-<version>-1.x86_64.rpm.
+# Mirrors the cargo-deb metadata above so the two packages install an
+# identical filesystem layout — the systemd unit and env-file are the
+# same bytes either way.
+# -----------------------------------------------------------------------------
+[package.metadata.generate-rpm]
+name = "cmremote-agent"
+license = "MIT"
+summary = "CMRemote endpoint agent (clean-room Rust implementation)"
+url = "https://github.com/CrashMediaIT/CMRemote"
+assets = [
+    { source = "target/release/cmremote-agent", dest = "/usr/bin/cmremote-agent", mode = "755" },
+    { source = "../../packaging/systemd/cmremote-agent.service", dest = "/lib/systemd/system/cmremote-agent.service", mode = "644" },
+    { source = "../../packaging/systemd/agent.env.sample", dest = "/etc/cmremote/agent.env.sample", mode = "640", config = true },
+    { source = "../../packaging/README.md", dest = "/usr/share/doc/cmremote-agent/README.md", mode = "644", doc = true },
+]
+post_install_script = '''
+getent group cmremote >/dev/null || groupadd --system cmremote
+getent passwd cmremote >/dev/null || \
+    useradd --system --gid cmremote \
+        --home-dir /var/lib/cmremote --no-create-home \
+        --shell /sbin/nologin \
+        --comment "CMRemote endpoint agent" \
+        cmremote
+mkdir -p /etc/cmremote /var/lib/cmremote
+chown -R cmremote:cmremote /etc/cmremote /var/lib/cmremote
+chmod 0750 /etc/cmremote /var/lib/cmremote
+if [ -d /run/systemd/system ]; then
+    systemctl daemon-reload || true
+    systemctl enable cmremote-agent.service || true
+    if [ -f /etc/cmremote/ConnectionInfo.json ]; then
+        systemctl restart cmremote-agent.service || true
+    fi
+fi
+exit 0
+'''
+pre_uninstall_script = '''
+if [ "$1" = "0" ] && [ -d /run/systemd/system ]; then
+    systemctl stop cmremote-agent.service || true
+    systemctl disable cmremote-agent.service || true
+fi
+exit 0
+'''
+
+[package.metadata.generate-rpm.requires]
+systemd = "*"

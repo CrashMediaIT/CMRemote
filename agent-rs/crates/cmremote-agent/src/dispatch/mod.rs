@@ -144,6 +144,14 @@ pub enum MethodName {
     DeleteLogs,
     /// Stub — agent log retrieval.
     GetLogs,
+    /// Slot for slice R8 — agent self-update via the manifest-backed
+    /// dispatcher. The server pushes <c>InstallAgentUpdate(downloadUrl,
+    /// version, sha256)</c>; the concrete download / verify / install
+    /// driver lands with R6's package-install handlers (they share the
+    /// fetch-verify-execute path). Today the dispatcher returns
+    /// <c>not_implemented</c> so the wire layer does not reject the
+    /// unknown method, but no install actually happens.
+    InstallAgentUpdate,
     /// Stub — agent self-update (R8).
     ReinstallAgent,
     /// Stub — agent self-uninstall (R8).
@@ -170,6 +178,7 @@ impl MethodName {
             "InvokeCtrlAltDel" => Some(Self::InvokeCtrlAltDel),
             "DeleteLogs" => Some(Self::DeleteLogs),
             "GetLogs" => Some(Self::GetLogs),
+            "InstallAgentUpdate" => Some(Self::InstallAgentUpdate),
             "ReinstallAgent" => Some(Self::ReinstallAgent),
             "UninstallAgent" => Some(Self::UninstallAgent),
             "WakeDevice" => Some(Self::WakeDevice),

@@ -1,0 +1,253 @@
+# Source: CMRemote, clean-room implementation.
+#
+# Release workflow for the CMRemote Rust agent (slice R8).
+#
+# Triggered by a `v*` tag (e.g. v0.1.0). Builds the agent for every
+# supported target, packages each one (.deb / .rpm / .msi / .pkg),
+# computes the SHA-256 of every artifact, signs each artifact with
+# Sigstore cosign (keyless OIDC, Track S / S5), emits the publisher
+# manifest documented in docs/publisher-manifest.md, and uploads the
+# manifest + signatures + artifacts as GitHub release assets.
+#
+# Note: macOS and Windows build jobs require their respective runners
+# to be available in the GitHub Actions concurrency budget. The Linux
+# job is self-sufficient and is the minimum the M3 dispatcher needs to
+# resolve a Linux upgrade target.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "SemVer version to publish (e.g. 0.1.0)"
+        required: true
+
+permissions:
+  contents: write   # release-asset upload
+  id-token: write   # cosign keyless OIDC
+  attestations: write
+
+jobs:
+  # ---------------------------------------------------------------
+  # Linux .deb + .rpm
+  # ---------------------------------------------------------------
+  linux:
+    name: Linux ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target: [x86_64-unknown-linux-gnu]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cargo-deb + cargo-generate-rpm
+        run: |
+          cargo install cargo-deb --locked --version "^2.0"
+          cargo install cargo-generate-rpm --locked --version "^0.14"
+
+      - name: Build release binary
+        working-directory: agent-rs
+        run: cargo build --release -p cmremote-agent --target ${{ matrix.target }}
+
+      - name: Stage binary at workspace target/release
+        # cargo-deb / cargo-generate-rpm read from target/release by default;
+        # copy the per-target binary into that path so the metadata's `assets`
+        # entries resolve regardless of which target we built for.
+        working-directory: agent-rs
+        run: |
+          mkdir -p target/release
+          cp target/${{ matrix.target }}/release/cmremote-agent target/release/cmremote-agent
+
+      - name: Build .deb
+        working-directory: agent-rs
+        run: cargo deb -p cmremote-agent --no-build --target ${{ matrix.target }}
+
+      - name: Build .rpm
+        working-directory: agent-rs
+        run: cargo generate-rpm -p crates/cmremote-agent --target ${{ matrix.target }}
+
+      - name: Upload Linux artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-${{ matrix.target }}
+          path: |
+            agent-rs/target/${{ matrix.target }}/debian/*.deb
+            agent-rs/target/${{ matrix.target }}/generate-rpm/*.rpm
+          if-no-files-found: error
+          retention-days: 7
+
+  # ---------------------------------------------------------------
+  # Windows .msi
+  # ---------------------------------------------------------------
+  windows:
+    name: Windows MSI
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Install cargo-wix
+        run: cargo install cargo-wix --locked --version "^0.3"
+
+      - name: Build release binary
+        working-directory: agent-rs
+        run: cargo build --release -p cmremote-agent --target x86_64-pc-windows-msvc
+
+      - name: Build .msi
+        working-directory: agent-rs
+        run: cargo wix -p cmremote-agent --no-build --nocapture --target x86_64-pc-windows-msvc
+
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-x86_64-pc-windows-msvc
+          path: agent-rs/target/wix/*.msi
+          if-no-files-found: error
+          retention-days: 7
+
+  # ---------------------------------------------------------------
+  # macOS universal2 .pkg
+  # ---------------------------------------------------------------
+  macos:
+    name: macOS .pkg
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin,aarch64-apple-darwin
+
+      - name: Build release binaries (x64 + arm64)
+        working-directory: agent-rs
+        run: |
+          cargo build --release -p cmremote-agent --target x86_64-apple-darwin
+          cargo build --release -p cmremote-agent --target aarch64-apple-darwin
+
+      - name: Build universal2 .pkg
+        working-directory: agent-rs
+        env:
+          CMREMOTE_VERSION: ${{ github.ref_name }}
+          CMREMOTE_BIN_X64: target/x86_64-apple-darwin/release/cmremote-agent
+          CMREMOTE_BIN_ARM64: target/aarch64-apple-darwin/release/cmremote-agent
+        run: bash packaging/macos/build-pkg.sh
+
+      - name: Upload macOS artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-universal2-apple-darwin
+          path: agent-rs/target/macos/*.pkg
+          if-no-files-found: error
+          retention-days: 7
+
+  # ---------------------------------------------------------------
+  # Sign + manifest + release
+  # ---------------------------------------------------------------
+  publish:
+    name: Sign + manifest + release
+    needs: [linux, windows, macos]
+    runs-on: ubuntu-latest
+    if: always() && needs.linux.result == 'success'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign every artifact + emit manifest
+        id: manifest
+        env:
+          GH_REF_NAME: ${{ github.ref_name }}
+          GH_REPO: ${{ github.repository }}
+          GH_WORKFLOW_REF: ${{ github.workflow_ref }}
+        run: |
+          set -eu
+          mkdir -p out
+          version="${GH_REF_NAME#v}"
+          if [ -z "$version" ]; then
+            version="0.0.0"
+          fi
+          builds_json=""
+          for f in $(find dist -type f \( -name '*.deb' -o -name '*.rpm' -o -name '*.msi' -o -name '*.pkg' \) | sort); do
+              base=$(basename "$f")
+              cp "$f" "out/$base"
+              size=$(stat -c%s "$f")
+              sha=$(sha256sum "$f" | awk '{print $1}')
+              cosign sign-blob --yes --bundle "out/${base}.cosign.bundle" "out/$base"
+              case "$base" in
+                  *.deb) format=deb; target=x86_64-unknown-linux-gnu ;;
+                  *.rpm) format=rpm; target=x86_64-unknown-linux-gnu ;;
+                  *.msi) format=msi; target=x86_64-pc-windows-msvc ;;
+                  *.pkg) format=pkg; target=universal2-apple-darwin ;;
+              esac
+              entry=$(jq -n \
+                  --arg ver "$version" \
+                  --arg target "$target" \
+                  --arg format "$format" \
+                  --arg file "$base" \
+                  --argjson size "$size" \
+                  --arg sha "$sha" \
+                  --arg sig "${base}.cosign.bundle" \
+                  --arg signedBy "https://github.com/${GH_REPO}/.github/workflows/release.yml@refs/tags/${GH_REF_NAME}" \
+                  '{ agentVersion: $ver, target: $target, format: $format, file: $file, size: $size, sha256: $sha, signature: $sig, signedBy: $signedBy }')
+              if [ -z "$builds_json" ]; then
+                  builds_json="[$entry"
+              else
+                  builds_json="${builds_json},$entry"
+              fi
+          done
+          if [ -z "$builds_json" ]; then
+              builds_json="[]"
+          else
+              builds_json="${builds_json}]"
+          fi
+          generated_at=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          jq -n \
+              --argjson schemaVersion 1 \
+              --arg publisher "crashmedia.ca" \
+              --arg generatedAt "$generated_at" \
+              --arg channel "stable" \
+              --arg version "$version" \
+              --argjson builds "$builds_json" \
+              '{ schemaVersion: $schemaVersion, publisher: $publisher, generatedAt: $generatedAt, channel: $channel, version: $version, builds: $builds }' \
+              > out/publisher-manifest.json
+
+      - name: Validate manifest against schema
+        run: |
+          python3 -m pip install --quiet jsonschema
+          python3 - <<'PY'
+          import json, sys
+          import jsonschema
+          schema = json.load(open("docs/publisher-manifest.schema.json"))
+          manifest = json.load(open("out/publisher-manifest.json"))
+          jsonschema.validate(manifest, schema)
+          print("Manifest valid.")
+          PY
+
+      - name: Upload to GitHub release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            out/*
+          draft: true
+          generate_release_notes: true

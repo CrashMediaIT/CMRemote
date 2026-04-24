@@ -235,6 +235,7 @@ services.AddTransient<IDataService, DataService>();
 services.AddScoped<ApiAuthorizationFilter>();
 services.AddScoped<LocalOnlyFilter>();
 services.AddScoped<ExpiringTokenFilter>();
+services.AddScoped<SignedMsiTokenFilter>();
 services.AddHostedService<DataCleanupService>();
 services.AddHostedService<ScriptScheduler>();
 services.AddSingleton<IUpgradeService, UpgradeService>();
@@ -248,6 +249,9 @@ services.AddSingleton<ICircuitManager, CircuitManager>();
 services.AddScoped<IAuthService, AuthService>();
 services.AddScoped<ISelectedCardsStore, SelectedCardsStore>();
 services.AddScoped<IExpiringTokenService, ExpiringTokenService>();
+services.AddScoped<ISignedMsiUrlService, SignedMsiUrlService>();
+services.AddScoped<Remotely.Server.Services.AuditLog.IAuditLogService,
+    Remotely.Server.Services.AuditLog.AuditLogService>();
 services.AddScoped<IScriptScheduleDispatcher, ScriptScheduleDispatcher>();
 services.AddSingleton<IOtpProvider, OtpProvider>();
 services.AddSingleton<IEmbeddedServerDataProvider, EmbeddedServerDataProvider>();
@@ -265,18 +269,44 @@ services.AddSingleton<IAgentHubSessionCache, AgentHubSessionCache>();
 services.AddScoped<IInstalledApplicationsService, InstalledApplicationsService>();
 services.AddScoped<IPackageService, PackageService>();
 services.AddScoped<IPackageInstallJobService, PackageInstallJobService>();
+services.Configure<PackageInstallJobRateLimitOptions>(
+    builder.Configuration.GetSection(PackageInstallJobRateLimitOptions.SectionName));
+services.AddSingleton<IPackageInstallJobRateLimiter, PackageInstallJobRateLimiter>();
 services.AddScoped<IUploadedMsiService, UploadedMsiService>();
 // Background agent-upgrade pipeline (ROADMAP.md "M3 — Background
 // agent-upgrade pipeline"). Service holds the state machine; the
 // orchestrator is the IHostedService that sweeps eligible rows and
-// dispatches upgrades through IAgentUpgradeDispatcher. The default
-// dispatcher is a no-op until the publisher manifest + signed-build
-// pipeline (slice R6 / R8) is wired; replace the registration below
-// with the real dispatcher when that lands.
+// dispatches upgrades through IAgentUpgradeDispatcher. The dispatcher
+// is the manifest-backed implementation when a publisher manifest URL
+// is configured (slice R8); otherwise the legacy no-op default is used
+// so existing deployments remain stable.
 services.AddScoped<Remotely.Server.Services.AgentUpgrade.IAgentUpgradeService,
     Remotely.Server.Services.AgentUpgrade.AgentUpgradeService>();
-services.AddScoped<Remotely.Server.Services.AgentUpgrade.IAgentUpgradeDispatcher,
-    Remotely.Server.Services.AgentUpgrade.NoopAgentUpgradeDispatcher>();
+services.Configure<Remotely.Server.Services.AgentUpgrade.AgentUpgradeManifestOptions>(
+    builder.Configuration.GetSection(
+        Remotely.Server.Services.AgentUpgrade.AgentUpgradeManifestOptions.SectionName));
+services.AddSingleton<Remotely.Server.Services.AgentUpgrade.IPublisherManifestProvider,
+    Remotely.Server.Services.AgentUpgrade.PublisherManifestProvider>();
+
+// Pick the manifest-backed dispatcher when at least one channel has a
+// configured manifest URL; fall back to the no-op otherwise. The check
+// is one-shot at startup so a runtime configuration change requires a
+// restart (matches every other AgentUpgrade tunable).
+var manifestSection = builder.Configuration.GetSection(
+    Remotely.Server.Services.AgentUpgrade.AgentUpgradeManifestOptions.SectionName +
+    ":ManifestUrls");
+var hasAnyManifestUrl = manifestSection.GetChildren()
+    .Any(c => !string.IsNullOrWhiteSpace(c.Value));
+if (hasAnyManifestUrl)
+{
+    services.AddScoped<Remotely.Server.Services.AgentUpgrade.IAgentUpgradeDispatcher,
+        Remotely.Server.Services.AgentUpgrade.ManifestBackedAgentUpgradeDispatcher>();
+}
+else
+{
+    services.AddScoped<Remotely.Server.Services.AgentUpgrade.IAgentUpgradeDispatcher,
+        Remotely.Server.Services.AgentUpgrade.NoopAgentUpgradeDispatcher>();
+}
 services.Configure<Remotely.Server.Services.AgentUpgrade.AgentUpgradeOrchestratorOptions>(
     builder.Configuration.GetSection(
         Remotely.Server.Services.AgentUpgrade.AgentUpgradeOrchestratorOptions.SectionName));
@@ -332,6 +362,14 @@ else
         app.UseHttpsRedirection();
     }
 }
+
+// Track S / S7 — Runtime security posture. Sets the CMRemote security
+// headers baseline (Content-Security-Policy, X-Content-Type-Options,
+// Referrer-Policy, Permissions-Policy, X-Frame-Options, COOP/CORP) on
+// every response. Registered before UseRouting so framework-short-circuit
+// responses (404s, redirects, the setup-redirect middleware's 503) all
+// pick up the headers.
+app.UseMiddleware<SecurityHeadersMiddleware>();
 
 app.UseSwagger();
 app.UseSwaggerUI();

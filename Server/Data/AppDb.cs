@@ -47,6 +47,7 @@ public class AppDb : IdentityDbContext
     public DbSet<SharedFile> SharedFiles { get; set; }
     public DbSet<UploadedMsi> UploadedMsis { get; set; }
     public DbSet<AgentUpgradeStatus> AgentUpgradeStatuses { get; set; }
+    public DbSet<AuditLogEntry> AuditLogEntries { get; set; } = null!;
     public new DbSet<RemotelyUser> Users { get; set; }
 
     protected override void OnConfiguring(DbContextOptionsBuilder options)
@@ -278,6 +279,18 @@ public class AppDb : IdentityDbContext
 
         builder.Entity<AgentUpgradeStatus>()
             .HasIndex(x => x.OrganizationID);
+
+        // Audit log (Track S / S7). The chain is per-organization,
+        // strictly ordered by Sequence. The unique index on
+        // (OrganizationID, Sequence) is the *write* guarantee — a race
+        // that re-uses a sequence number fails at the database layer,
+        // not after we've already broken the chain in memory.
+        builder.Entity<AuditLogEntry>()
+            .HasIndex(x => new { x.OrganizationID, x.Sequence })
+            .IsUnique();
+
+        builder.Entity<AuditLogEntry>()
+            .HasIndex(x => new { x.OrganizationID, x.OccurredAt });
 
         builder.Entity<DeviceGroup>()
             .HasMany(x => x.Devices)

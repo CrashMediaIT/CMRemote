@@ -1,0 +1,125 @@
+<?xml version="1.0" encoding="windows-1252"?>
+<!--
+  Source: CMRemote, clean-room implementation.
+
+  WiX v3 source for the CMRemote Rust agent's Windows MSI (slice R8).
+  Consumed by `cargo wix -p cmremote-agent` (cargo-wix >= 0.3) on a
+  Windows runner with the WiX toolset on PATH. Produces
+  target/wix/cmremote-agent-<version>-x86_64.msi.
+
+  The MSI installs the agent under
+  C:\Program Files\CMRemote\cmremote-agent.exe and registers a Windows
+  service that launches it under the LocalSystem account on boot. The
+  agent's per-device verification token is read from
+  %ProgramData%\CMRemote\ConnectionInfo.json which the upstream
+  installer / enrolment flow drops at install time (the MSI itself does
+  not embed any secret material).
+-->
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi"
+     xmlns:util="http://schemas.microsoft.com/wix/UtilExtension">
+
+  <Product Id="*"
+           Name="CMRemote Agent"
+           UpgradeCode="A8B41F3E-2D4A-4F1F-8E1A-CMREMOTEAGENT01"
+           Manufacturer="CrashMedia"
+           Language="1033"
+           Codepage="1252"
+           Version="$(var.Version)">
+
+    <Package Id="*"
+             Keywords="Installer"
+             Description="CMRemote endpoint agent"
+             Manufacturer="CrashMedia"
+             InstallerVersion="500"
+             Languages="1033"
+             Compressed="yes"
+             InstallScope="perMachine"
+             SummaryCodepage="1252" />
+
+    <MajorUpgrade DowngradeErrorMessage="A newer version of CMRemote Agent is already installed."
+                  Schedule="afterInstallInitialize" />
+
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+
+    <Feature Id="MainFeature"
+             Title="CMRemote Agent"
+             Level="1"
+             ConfigurableDirectory="INSTALLFOLDER">
+      <ComponentRef Id="AgentExeComponent" />
+      <ComponentRef Id="ServiceComponent" />
+      <ComponentRef Id="ProgramDataDirComponent" />
+    </Feature>
+
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="ProgramFiles64Folder">
+        <Directory Id="CompanyFolder" Name="CMRemote">
+          <Directory Id="INSTALLFOLDER" Name="Agent">
+
+            <Component Id="AgentExeComponent" Guid="*" Win64="yes">
+              <File Id="AgentExe"
+                    Name="cmremote-agent.exe"
+                    Source="$(var.CargoTargetBinDir)\cmremote-agent.exe"
+                    KeyPath="yes" />
+            </Component>
+
+            <Component Id="ServiceComponent" Guid="*" Win64="yes">
+              <File Id="ServiceLauncherExe"
+                    Name="cmremote-agent-svc.exe"
+                    Source="$(var.CargoTargetBinDir)\cmremote-agent.exe" />
+              <ServiceInstall Id="CMRemoteAgentService"
+                              Name="CMRemoteAgent"
+                              DisplayName="CMRemote Agent"
+                              Description="CMRemote endpoint agent. Connects to the configured CMRemote server, reports device state, and executes signed install jobs."
+                              Type="ownProcess"
+                              Start="auto"
+                              ErrorControl="normal"
+                              Account="LocalSystem"
+                              Vital="yes">
+                <util:ServiceConfig FirstFailureActionType="restart"
+                                    SecondFailureActionType="restart"
+                                    ThirdFailureActionType="restart"
+                                    RestartServiceDelayInSeconds="30"
+                                    ResetPeriodInDays="1" />
+              </ServiceInstall>
+              <ServiceControl Id="StartCMRemoteAgent"
+                              Start="install"
+                              Stop="both"
+                              Remove="uninstall"
+                              Name="CMRemoteAgent"
+                              Wait="yes" />
+            </Component>
+
+          </Directory>
+        </Directory>
+      </Directory>
+
+      <!--
+        ConnectionInfo.json is dropped here by the enrolment flow. The
+        MSI only creates the directory with the right ACL (LocalSystem
+        + Administrators) so the Mark-of-the-Web cannot taint the file
+        and so non-admin users cannot read the per-device verification
+        token off disk.
+      -->
+      <Directory Id="CommonAppDataFolder">
+        <Directory Id="CMRemoteProgramData" Name="CMRemote">
+          <Component Id="ProgramDataDirComponent" Guid="*">
+            <CreateFolder Directory="CMRemoteProgramData">
+              <util:PermissionEx User="SYSTEM" GenericAll="yes" />
+              <util:PermissionEx User="Administrators" GenericAll="yes" />
+            </CreateFolder>
+            <RegistryValue Root="HKLM"
+                           Key="Software\CMRemote\Agent"
+                           Name="ConfigDir"
+                           Type="string"
+                           Value="[CMRemoteProgramData]"
+                           KeyPath="yes" />
+          </Component>
+        </Directory>
+      </Directory>
+    </Directory>
+
+    <Property Id="ARPPRODUCTICON" Value="cmremote.ico" />
+    <Property Id="ARPHELPLINK" Value="https://github.com/CrashMediaIT/CMRemote" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/CrashMediaIT/CMRemote" />
+  </Product>
+</Wix>

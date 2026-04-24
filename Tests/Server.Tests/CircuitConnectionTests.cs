@@ -1,5 +1,6 @@
 ﻿#nullable enable
 using Remotely.Server.Services;
+using Remotely.Server.Services.AuditLog;
 using Bitbound.SimpleMessenger;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -59,6 +60,8 @@ public class CircuitConnectionTests
             _circuitManager.Object,
             _toastService.Object,
             _expiringTokenService.Object,
+            new Mock<ISignedMsiUrlService>().Object,
+            new Mock<IAuditLogService>().Object,
             _remoteControlSessionCache.Object,
             _agentSessionCache.Object,
             new Mock<IInstalledApplicationsService>().Object,

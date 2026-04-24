@@ -8,6 +8,7 @@ using Remotely.Server.Models.Messages;
 using Remotely.Server.Services.Stores;
 using Remotely.Shared;
 using Remotely.Shared.Dtos;
+using Remotely.Server.Services.AuditLog;
 using Remotely.Shared.Entities;
 using Remotely.Shared.Enums;
 using Remotely.Shared.Interfaces;
@@ -109,6 +110,8 @@ public class CircuitConnection : CircuitHandler, ICircuitConnection
     private readonly ICircuitManager _circuitManager;
     private readonly IRemoteControlSessionCache _remoteControlSessionCache;
     private readonly IExpiringTokenService _expiringTokenService;
+    private readonly ISignedMsiUrlService _signedMsiUrlService;
+    private readonly IAuditLogService _auditLogService;
     private readonly ILogger<CircuitConnection> _logger;
     private readonly IAgentHubSessionCache _agentSessionCache;
     private readonly IMessenger _messenger;
@@ -123,6 +126,8 @@ public class CircuitConnection : CircuitHandler, ICircuitConnection
         ICircuitManager circuitManager,
         IToastService toastService,
         IExpiringTokenService expiringTokenService,
+        ISignedMsiUrlService signedMsiUrlService,
+        IAuditLogService auditLogService,
         IRemoteControlSessionCache remoteControlSessionCache,
         IAgentHubSessionCache agentSessionCache,
         IInstalledApplicationsService installedApplicationsService,
@@ -139,6 +144,8 @@ public class CircuitConnection : CircuitHandler, ICircuitConnection
         _circuitManager = circuitManager;
         _toastService = toastService;
         _expiringTokenService = expiringTokenService;
+        _signedMsiUrlService = signedMsiUrlService;
+        _auditLogService = auditLogService;
         _remoteControlSessionCache = remoteControlSessionCache;
         _agentSessionCache = agentSessionCache;
         _installedApplicationsService = installedApplicationsService;
@@ -662,7 +669,7 @@ public class CircuitConnection : CircuitHandler, ICircuitConnection
             bundleId: null,
             requestedByUserId: User.Id);
 
-        await DispatchJobAsync(connectionId, job.Id, package, action);
+        await DispatchJobAsync(deviceId, connectionId, job.Id, package, action);
         return Result.Ok(job.Id);
     }
 
@@ -741,14 +748,14 @@ public class CircuitConnection : CircuitHandler, ICircuitConnection
                 {
                     continue;
                 }
-                await DispatchJobAsync(connectionId, job.Id, package, PackageInstallAction.Install);
+                await DispatchJobAsync(deviceId, connectionId, job.Id, package, PackageInstallAction.Install);
             }
         }
 
         return Result.Ok(jobs.Count);
     }
 
-    private async Task DispatchJobAsync(string connectionId, Guid jobId, Package package, PackageInstallAction action)
+    private async Task DispatchJobAsync(string deviceId, string connectionId, Guid jobId, Package package, PackageInstallAction action)
     {
         var dispatched = await _packageInstallJobService.MarkDispatchedAsync(jobId);
         if (!dispatched)
@@ -798,14 +805,57 @@ public class CircuitConnection : CircuitHandler, ICircuitConnection
             // 5-minute window matches the existing TransferFileFromBrowserToAgent
             // path — long enough for a slow link to start the download
             // but too short for a leaked token to be useful.
-            var authToken = _expiringTokenService.GetToken(Time.Now.AddMinutes(5));
+            var expiresAt = Time.Now.AddMinutes(5);
+            var authToken = _expiringTokenService.GetToken(expiresAt);
             request.MsiSharedFileId = msi.SharedFileId;
             request.MsiAuthToken = authToken;
             request.MsiSha256 = msi.Sha256;
             request.MsiFileName = msi.FileName;
+
+            // Track S / S7 — also mint a signed, device-scoped token
+            // and a per-device download URL alongside the legacy
+            // expiring token. New agents read MsiSignedToken /
+            // MsiSignedDownloadUrl (validated by SignedMsiTokenFilter
+            // and bound to this device + this MSI); legacy agents
+            // continue to use MsiAuthToken until R6 locks down the
+            // legacy file-sharing endpoint.
+            request.MsiSignedToken = _signedMsiUrlService.MintToken(
+                deviceId, msi.SharedFileId, expiresAt);
+            request.MsiSignedDownloadUrl = $"/api/uploaded-msi/{msi.SharedFileId}/download";
         }
 
         await _agentHubContext.Clients.Client(connectionId).InstallPackage(request);
+
+        // Track S / S7 — append an immutable audit-log row so the M4
+        // dashboard's "who installed what, where, when" view is
+        // tamper-evident. Wrapped in try/catch because a failure to
+        // audit must NOT silently revert the dispatch — the install
+        // has already been pushed to the agent and the job row has
+        // been flipped to Dispatched.
+        try
+        {
+            await _auditLogService.AppendAsync(
+                organizationId: User.OrganizationID,
+                eventType: "package.install.dispatch",
+                actorId: User.Id,
+                subjectId: deviceId,
+                summary: $"{action} {package.Provider}:{package.PackageIdentifier} on {deviceId}",
+                detail: new
+                {
+                    JobId = jobId,
+                    PackageId = package.Id,
+                    PackageProvider = package.Provider.ToString(),
+                    PackageIdentifier = package.PackageIdentifier,
+                    Version = package.Version,
+                    Action = action.ToString(),
+                });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex,
+                "Audit-log append failed for package dispatch JobId={jobId}; dispatch already succeeded.",
+                jobId);
+        }
     }
 
     private (bool canAccess, string connectionId) CanAccessDevice(string deviceId)

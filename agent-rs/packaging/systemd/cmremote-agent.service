@@ -1,0 +1,62 @@
+# Source: CMRemote, clean-room implementation.
+# Systemd unit for the CMRemote Rust agent (slice R8, Linux .deb / .rpm
+# packaging). Installed at /lib/systemd/system/cmremote-agent.service by
+# both cargo-deb and cargo-generate-rpm. The packagers' postinst scripts
+# enable + start the unit on a fresh install.
+#
+# The unit runs as a dedicated `cmremote` system user (created by the
+# postinst), reads its config from /etc/cmremote/agent.env, and stores
+# state under /var/lib/cmremote. Hardening directives below restrict the
+# agent's filesystem and capability surface so a compromised agent can
+# only reach the directories it actually needs.
+
+[Unit]
+Description=CMRemote endpoint agent
+Documentation=https://github.com/CrashMediaIT/CMRemote
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=cmremote
+Group=cmremote
+EnvironmentFile=-/etc/cmremote/agent.env
+ExecStart=/usr/bin/cmremote-agent
+Restart=on-failure
+RestartSec=10s
+StateDirectory=cmremote
+StateDirectoryMode=0750
+ConfigurationDirectory=cmremote
+ConfigurationDirectoryMode=0750
+LogsDirectory=cmremote
+LogsDirectoryMode=0750
+WorkingDirectory=/var/lib/cmremote
+
+# Hardening — see systemd.exec(5). Locks the agent down to the minimum
+# surface it needs. The agent uses outbound HTTPS only (no listening
+# sockets) and never executes setuid binaries.
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+ReadWritePaths=/var/lib/cmremote /var/log/cmremote
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+
+[Install]
+WantedBy=multi-user.target

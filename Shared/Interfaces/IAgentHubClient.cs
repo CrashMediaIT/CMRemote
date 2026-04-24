@@ -52,6 +52,30 @@ public interface IAgentHubClient
 
     Task UninstallAgent();
 
+    /// <summary>
+    /// Asks the agent to download, verify, and install a specific build
+    /// (slice R8 — the M3 manifest-backed agent-upgrade dispatcher).
+    /// The agent MUST recompute the SHA-256 of the downloaded artifact
+    /// and refuse to install if it doesn't match <paramref name="sha256"/>.
+    /// On success the agent restarts and re-handshakes with its new
+    /// <c>AgentVersion</c>; the dispatcher observes that bump via the
+    /// session cache and marks the upgrade row Succeeded.
+    /// </summary>
+    /// <param name="downloadUrl">
+    /// Absolute https URL pointing at the artifact (e.g. an
+    /// <c>.msi</c> / <c>.deb</c> / <c>.rpm</c> / <c>.pkg</c>) the
+    /// publisher manifest resolved for this device.
+    /// </param>
+    /// <param name="version">
+    /// Target SemVer version. The dispatcher uses this to decide when
+    /// the upgrade has succeeded (heartbeat reports this version).
+    /// </param>
+    /// <param name="sha256">
+    /// Expected lowercase-hex SHA-256 of the artifact bytes from the
+    /// publisher manifest. The agent re-verifies independently.
+    /// </param>
+    Task InstallAgentUpdate(string downloadUrl, string version, string sha256);
+
     Task RemoteControl(
         Guid sessionId, 
         string accessKey, 

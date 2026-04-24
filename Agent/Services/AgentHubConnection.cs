@@ -531,6 +531,24 @@ public class AgentHubConnection : IAgentHubConnection, IDisposable
         return Task.CompletedTask;
     }
 
+    /// <summary>
+    /// Manifest-backed agent-upgrade dispatch (slice R8) targets the
+    /// Rust agent only — the legacy .NET agent ships PR E's polling
+    /// updater (<see cref="IUpdater.InstallLatestVersion"/>) which keeps
+    /// the existing zip-replace path. The hub method is wired so a
+    /// mixed fleet doesn't see "method not handled" hub completions on
+    /// every dispatch attempt; the actual install happens through the
+    /// updater's normal poll loop.
+    /// </summary>
+    public Task InstallAgentUpdate(string downloadUrl, string version, string sha256)
+    {
+        _logger.LogInformation(
+            "Server requested agent upgrade to version {version} via manifest URL {downloadUrl}; " +
+            "legacy .NET agent ignores hub-pushed upgrades and relies on the polling updater.",
+            version, downloadUrl);
+        return Task.CompletedTask;
+    }
+
     public async Task WakeDevice(string macAddress)
     {
         try
@@ -850,6 +868,8 @@ public class AgentHubConnection : IAgentHubConnection, IDisposable
         _hubConnection.On(nameof(ReinstallAgent), ReinstallAgent);
 
         _hubConnection.On(nameof(UninstallAgent), UninstallAgent);
+
+        _hubConnection.On<string, string, string>(nameof(InstallAgentUpdate), InstallAgentUpdate);
 
         _hubConnection.On<Guid, string, string, string, string, string>(nameof(RemoteControl), RemoteControl);
 
