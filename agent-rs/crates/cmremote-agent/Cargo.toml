@@ -34,6 +34,16 @@ rand = { workspace = true }
 # installers behind an Arc<dyn …>.
 async-trait = "0.1"
 
+[features]
+# Opt-in concrete WebRTC desktop-transport driver (slice R7.k). When
+# enabled, the runtime constructs `WebRtcDesktopTransport` instead of
+# `NotSupportedDesktopTransport`. The driver itself stubs the actual
+# peer-connection construction; the upstream `webrtc` crate dependency
+# lands in a follow-up slice (R7.l) once the supply-chain audit
+# authorises it. Default is OFF so the audit can land without
+# affecting any production build.
+webrtc-driver = ["cmremote-platform/webrtc-driver"]
+
 [dev-dependencies]
 tempfile = "3.13"
 futures-util = { workspace = true }

@@ -68,6 +68,9 @@ pub mod consent;
 pub mod guards;
 pub mod input;
 pub mod media;
+pub mod session;
+#[cfg(feature = "webrtc-driver")]
+pub mod webrtc;
 
 pub use consent::{
     ConsentDecision, ConsentPrompter, ConsentRequest, DenyAllConsentPrompter,
@@ -81,6 +84,12 @@ pub use media::{
     CapturedFrame, DesktopCapturer, DesktopMediaError, EncodedVideoChunk,
     NotSupportedDesktopCapturer, NotSupportedVideoEncoder, VideoEncoder,
 };
+pub use session::{
+    CloseReason, DesktopSession, DesktopSessionRegistry, DesktopSessionState, OpenOutcome,
+    TransitionOutcome, DEFAULT_IDLE_TIMEOUT,
+};
+#[cfg(feature = "webrtc-driver")]
+pub use webrtc::WebRtcDesktopTransport;
 
 /// Async trait every desktop-transport backend implements.
 ///

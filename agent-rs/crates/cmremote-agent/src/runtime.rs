@@ -9,7 +9,11 @@
 
 use std::sync::Arc;
 
+use cmremote_platform::desktop::DesktopTransportProvider;
+#[cfg(not(feature = "webrtc-driver"))]
 use cmremote_platform::desktop::NotSupportedDesktopTransport;
+#[cfg(feature = "webrtc-driver")]
+use cmremote_platform::desktop::WebRtcDesktopTransport;
 #[cfg(target_os = "linux")]
 use cmremote_platform::linux_apps::DpkgProvider;
 use cmremote_platform::packages::{
@@ -104,17 +108,25 @@ pub async fn run(cli: CliArgs) -> Result<(), RuntimeError> {
         stage_dir,
     });
 
-    // Slice R7 — desktop transport: until the WebRTC capture / encode
-    // driver lands, every request resolves to a structured "not
-    // supported on <OS>" failure. The stub is constructed with the
-    // agent's own organisation id so the slice R7.b cross-org guard
-    // refuses any hub invocation whose `org_id` does not match this
-    // device's organisation. Concrete drivers will register here
-    // alongside the package providers; the dispatch surface and
-    // wire-level result shape are already in place.
-    let desktop = Arc::new(NotSupportedDesktopTransport::for_current_host(
-        info.organization_id.clone(),
-    ));
+    // Slice R7 — desktop transport. By default, until the WebRTC
+    // capture / encode driver lands, every request resolves to a
+    // structured "not supported on <OS>" failure
+    // (`NotSupportedDesktopTransport`). When the workspace is built
+    // with `--features cmremote-agent/webrtc-driver` (slice R7.k), the
+    // runtime swaps in `WebRtcDesktopTransport` — a concrete provider
+    // that owns a per-session state machine and audit-logs every
+    // transition, but stubs the actual peer-connection construction
+    // until the supply-chain audit (slice R7.l) authorises adding the
+    // upstream `webrtc` crate. Either way the dispatcher's
+    // `Arc<dyn DesktopTransportProvider>` slot is unchanged.
+    #[cfg(not(feature = "webrtc-driver"))]
+    let desktop: Arc<dyn DesktopTransportProvider> = Arc::new(
+        NotSupportedDesktopTransport::for_current_host(info.organization_id.clone()),
+    );
+    #[cfg(feature = "webrtc-driver")]
+    let desktop: Arc<dyn DesktopTransportProvider> = Arc::new(
+        WebRtcDesktopTransport::for_current_host(info.organization_id.clone()),
+    );
 
     let handlers = Arc::new(AgentHandlers {
         connection_info: info.clone(),
