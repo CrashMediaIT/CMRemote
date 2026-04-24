@@ -348,6 +348,166 @@ public class AgentUpgradeService : IAgentUpgradeService
         return result;
     }
 
+    public async Task<IReadOnlyList<AgentUpgradeRow>> GetRowsForOrganizationAsync(
+        string organizationId,
+        string? search,
+        int skip,
+        int take,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(organizationId) || take <= 0)
+        {
+            return Array.Empty<AgentUpgradeRow>();
+        }
+        if (skip < 0)
+        {
+            skip = 0;
+        }
+
+        using var db = _dbFactory.GetContext();
+        // Left-join Devices so a status row whose underlying device has
+        // been deleted still surfaces in the dashboard with DeviceName /
+        // LastOnline = null instead of disappearing silently.
+        var query =
+            from s in db.AgentUpgradeStatuses.AsNoTracking()
+            where s.OrganizationID == organizationId
+            join d in db.Devices.AsNoTracking() on s.DeviceId equals d.ID into deviceJoin
+            from device in deviceJoin.DefaultIfEmpty()
+            select new { Status = s, DeviceName = device != null ? device.DeviceName : null, LastOnline = device != null ? (DateTimeOffset?)device.LastOnline : null };
+
+        if (!string.IsNullOrWhiteSpace(search))
+        {
+            // Case-insensitive substring match on DeviceId + DeviceName.
+            // EF translates Contains() with StringComparison via provider
+            // collation; we lower-case both sides ourselves so the same
+            // expression works on SQLite (where collation is BINARY by
+            // default), SQL Server, and PostgreSQL without a per-provider
+            // branch.
+            var needle = search.Trim().ToLowerInvariant();
+            query = query.Where(x =>
+                x.Status.DeviceId.ToLower().Contains(needle) ||
+                (x.DeviceName != null && x.DeviceName.ToLower().Contains(needle)));
+        }
+
+        var page = await query
+            .OrderByDescending(x => x.Status.CreatedAt)
+            .ThenBy(x => x.Status.Id)
+            .Skip(skip)
+            .Take(take)
+            .ToListAsync(cancellationToken);
+
+        return page.Select(x => new AgentUpgradeRow(
+            x.Status.Id,
+            x.Status.DeviceId,
+            x.Status.OrganizationID,
+            x.DeviceName,
+            x.LastOnline,
+            x.Status.FromVersion,
+            x.Status.ToVersion,
+            x.Status.State,
+            x.Status.CreatedAt,
+            x.Status.EligibleAt,
+            x.Status.LastAttemptAt,
+            x.Status.CompletedAt,
+            x.Status.LastAttemptError,
+            x.Status.AttemptCount)).ToList();
+    }
+
+    public async Task<int> CountRowsForOrganizationAsync(
+        string organizationId,
+        string? search,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(organizationId))
+        {
+            return 0;
+        }
+        using var db = _dbFactory.GetContext();
+
+        if (string.IsNullOrWhiteSpace(search))
+        {
+            return await db.AgentUpgradeStatuses
+                .AsNoTracking()
+                .Where(x => x.OrganizationID == organizationId)
+                .CountAsync(cancellationToken);
+        }
+
+        var needle = search.Trim().ToLowerInvariant();
+        // Mirror the join + filter shape used by GetRowsForOrganizationAsync
+        // so the count and the page never disagree.
+        var query =
+            from s in db.AgentUpgradeStatuses.AsNoTracking()
+            where s.OrganizationID == organizationId
+            join d in db.Devices.AsNoTracking() on s.DeviceId equals d.ID into deviceJoin
+            from device in deviceJoin.DefaultIfEmpty()
+            where s.DeviceId.ToLower().Contains(needle) ||
+                  (device != null && device.DeviceName != null && device.DeviceName.ToLower().Contains(needle))
+            select s.Id;
+
+        return await query.CountAsync(cancellationToken);
+    }
+
+    public async Task<bool> ForceRetryAsync(
+        Guid statusId,
+        string organizationId,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(organizationId))
+        {
+            return false;
+        }
+        // Org-scope check is performed against the same context the
+        // mutation runs in so the operator cannot race a row out of
+        // their org between the check and the write.
+        using var db = _dbFactory.GetContext();
+        var row = await db.AgentUpgradeStatuses
+            .FirstOrDefaultAsync(x => x.Id == statusId, cancellationToken);
+        if (row is null || row.OrganizationID != organizationId)
+        {
+            return false;
+        }
+        row.State = AgentUpgradeState.Pending;
+        row.EligibleAt = _systemTime.Now;
+        row.AttemptCount = 0;
+        row.LastAttemptError = null;
+        row.CompletedAt = null;
+        await db.SaveChangesAsync(cancellationToken);
+        _logger.LogInformation(
+            "Agent-upgrade row force-retried by operator. DeviceId={deviceId} OrgId={orgId}",
+            row.DeviceId, organizationId);
+        return true;
+    }
+
+    public async Task<bool> SetOptOutAsync(
+        Guid statusId,
+        string organizationId,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(organizationId))
+        {
+            return false;
+        }
+        using var db = _dbFactory.GetContext();
+        var row = await db.AgentUpgradeStatuses
+            .FirstOrDefaultAsync(x => x.Id == statusId, cancellationToken);
+        if (row is null || row.OrganizationID != organizationId)
+        {
+            return false;
+        }
+        // Same refusal-while-busy rail the org-less overload uses; let
+        // the in-flight dispatch terminate first.
+        if (row.State is AgentUpgradeState.InProgress)
+        {
+            return false;
+        }
+        row.State = AgentUpgradeState.SkippedOptOut;
+        await db.SaveChangesAsync(cancellationToken);
+        _logger.LogInformation(
+            "Agent-upgrade row opted-out by operator. DeviceId={deviceId} OrgId={orgId}",
+            row.DeviceId, organizationId);
+        return true;
+    }
+
     private static string? Truncate(string? value, int maxLength)
     {
         if (value is null)

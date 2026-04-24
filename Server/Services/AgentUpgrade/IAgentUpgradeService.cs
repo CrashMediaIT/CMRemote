@@ -199,4 +199,56 @@ public interface IAgentUpgradeService
     Task<IReadOnlyDictionary<AgentUpgradeState, int>> GetStateCountsAsync(
         string organizationId,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Paged listing for the M4 dashboard table. Joins each
+    /// <see cref="AgentUpgradeStatus"/> row with the matching
+    /// <c>Device.DeviceName</c> / <c>Device.LastOnline</c> when one
+    /// exists, scopes to <paramref name="organizationId"/>, and
+    /// optionally filters by <paramref name="search"/> (case-insensitive
+    /// substring match against <c>DeviceId</c> and <c>DeviceName</c>).
+    /// Results are ordered by <c>CreatedAt</c> descending so the most
+    /// recently enrolled rows surface first; pagination uses
+    /// <paramref name="skip"/> / <paramref name="take"/>. A
+    /// <paramref name="take"/> of zero or less returns an empty list.
+    /// </summary>
+    Task<IReadOnlyList<AgentUpgradeRow>> GetRowsForOrganizationAsync(
+        string organizationId,
+        string? search,
+        int skip,
+        int take,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Total row count for the same filter the dashboard's table uses,
+    /// so the page can render pagination controls without reading every
+    /// row. Mirrors the search semantics of
+    /// <see cref="GetRowsForOrganizationAsync"/>.
+    /// </summary>
+    Task<int> CountRowsForOrganizationAsync(
+        string organizationId,
+        string? search,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Org-scoped overload of <see cref="ForceRetryAsync(Guid, CancellationToken)"/>
+    /// for the M4 dashboard. Refuses (returns <c>false</c>) when the row
+    /// does not exist or does not belong to <paramref name="organizationId"/>
+    /// so an org-admin operator cannot reach into another organisation's
+    /// rows by guessing a status id.
+    /// </summary>
+    Task<bool> ForceRetryAsync(
+        Guid statusId,
+        string organizationId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Org-scoped overload of <see cref="SetOptOutAsync(Guid, CancellationToken)"/>
+    /// for the M4 dashboard. Refuses (returns <c>false</c>) when the row
+    /// does not exist or does not belong to <paramref name="organizationId"/>.
+    /// </summary>
+    Task<bool> SetOptOutAsync(
+        Guid statusId,
+        string organizationId,
+        CancellationToken cancellationToken = default);
 }

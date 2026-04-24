@@ -421,6 +421,163 @@ public class AgentUpgradeServiceTests
         Assert.AreEqual(0, none.Count);
     }
 
+    // ---- M4 dashboard surface: paged listing + org-scoped operator actions ----
+
+    [TestMethod]
+    public async Task GetRowsForOrganization_JoinsDeviceNameAndScopesByOrg()
+    {
+        // Org1Device1 is set up in TestData; enrol it so we have a row joinable
+        // back to the device record.
+        var enrolled = await _service.EnrolDeviceAsync(
+            _testData.Org1Id, _testData.Org1Device1.ID, "1.0.0", _systemTime.Now, "2.0.0");
+        // Enrol a row in Org2 to prove org scoping rejects it.
+        await _service.EnrolDeviceAsync(
+            _testData.Org2Id, _testData.Org2Device1.ID, "1.0.0", _systemTime.Now, "2.0.0");
+
+        var rows = await _service.GetRowsForOrganizationAsync(_testData.Org1Id, search: null, skip: 0, take: 10);
+        Assert.AreEqual(1, rows.Count);
+        Assert.AreEqual(enrolled.Id, rows[0].Id);
+        Assert.AreEqual(_testData.Org1Device1.ID, rows[0].DeviceId);
+        Assert.AreEqual(_testData.Org1Device1.DeviceName, rows[0].DeviceName);
+        Assert.IsNotNull(rows[0].LastOnline);
+    }
+
+    [TestMethod]
+    public async Task GetRowsForOrganization_LeftJoinsMissingDevice()
+    {
+        // No matching Device row exists for "ghost-device". The dashboard
+        // must still surface the upgrade row rather than swallowing it.
+        var enrolled = await _service.EnrolDeviceAsync(
+            _testData.Org1Id, "ghost-device", "1.0.0", _systemTime.Now, null);
+
+        var rows = await _service.GetRowsForOrganizationAsync(_testData.Org1Id, search: null, skip: 0, take: 10);
+        var ghost = rows.Single(r => r.Id == enrolled.Id);
+        Assert.IsNull(ghost.DeviceName);
+        Assert.IsNull(ghost.LastOnline);
+    }
+
+    [TestMethod]
+    public async Task GetRowsForOrganization_SearchMatchesDeviceIdAndName_CaseInsensitively()
+    {
+        await _service.EnrolDeviceAsync(_testData.Org1Id, _testData.Org1Device1.ID, "1", _systemTime.Now, null);
+        await _service.EnrolDeviceAsync(_testData.Org1Id, _testData.Org1Device2.ID, "1", _systemTime.Now, null);
+
+        // Match on device id substring.
+        var byId = await _service.GetRowsForOrganizationAsync(
+            _testData.Org1Id, search: "device1", skip: 0, take: 10);
+        Assert.AreEqual(1, byId.Count);
+        Assert.AreEqual(_testData.Org1Device1.ID, byId[0].DeviceId);
+
+        // Match on device name substring (lower-cased needle vs. mixed-case haystack).
+        var byName = await _service.GetRowsForOrganizationAsync(
+            _testData.Org1Id, search: "org1device2name", skip: 0, take: 10);
+        Assert.AreEqual(1, byName.Count);
+        Assert.AreEqual(_testData.Org1Device2.ID, byName[0].DeviceId);
+
+        // No match returns empty.
+        var none = await _service.GetRowsForOrganizationAsync(
+            _testData.Org1Id, search: "nope", skip: 0, take: 10);
+        Assert.AreEqual(0, none.Count);
+    }
+
+    [TestMethod]
+    public async Task GetRowsForOrganization_PagesByCreatedAtDescending()
+    {
+        var first = await _service.EnrolDeviceAsync(_testData.Org1Id, _testData.Org1Device1.ID, "1", _systemTime.Now, null);
+        _systemTime.Offset(TimeSpan.FromMinutes(1));
+        var second = await _service.EnrolDeviceAsync(_testData.Org1Id, _testData.Org1Device2.ID, "1", _systemTime.Now, null);
+
+        var page1 = await _service.GetRowsForOrganizationAsync(_testData.Org1Id, null, skip: 0, take: 1);
+        var page2 = await _service.GetRowsForOrganizationAsync(_testData.Org1Id, null, skip: 1, take: 1);
+
+        Assert.AreEqual(1, page1.Count);
+        Assert.AreEqual(1, page2.Count);
+        // Newest-first ordering: the row enrolled at the later clock value is on page 1.
+        Assert.AreEqual(second.Id, page1[0].Id);
+        Assert.AreEqual(first.Id, page2[0].Id);
+    }
+
+    [TestMethod]
+    public async Task GetRowsForOrganization_GuardsBlankOrgAndZeroTake()
+    {
+        await _service.EnrolDeviceAsync(_testData.Org1Id, _testData.Org1Device1.ID, "1", _systemTime.Now, null);
+        Assert.AreEqual(0, (await _service.GetRowsForOrganizationAsync("", null, 0, 10)).Count);
+        Assert.AreEqual(0, (await _service.GetRowsForOrganizationAsync(_testData.Org1Id, null, 0, 0)).Count);
+        Assert.AreEqual(0, (await _service.GetRowsForOrganizationAsync(_testData.Org1Id, null, 0, -5)).Count);
+    }
+
+    [TestMethod]
+    public async Task CountRowsForOrganization_TracksGetRowsFilter()
+    {
+        await _service.EnrolDeviceAsync(_testData.Org1Id, _testData.Org1Device1.ID, "1", _systemTime.Now, null);
+        await _service.EnrolDeviceAsync(_testData.Org1Id, _testData.Org1Device2.ID, "1", _systemTime.Now, null);
+        await _service.EnrolDeviceAsync(_testData.Org2Id, _testData.Org2Device1.ID, "1", _systemTime.Now, null);
+
+        Assert.AreEqual(2, await _service.CountRowsForOrganizationAsync(_testData.Org1Id, null));
+        Assert.AreEqual(1, await _service.CountRowsForOrganizationAsync(_testData.Org1Id, "device1"));
+        Assert.AreEqual(0, await _service.CountRowsForOrganizationAsync(_testData.Org1Id, "nope"));
+        Assert.AreEqual(0, await _service.CountRowsForOrganizationAsync("", null));
+    }
+
+    [TestMethod]
+    public async Task ForceRetryAsync_OrgScoped_RefusesCrossOrg()
+    {
+        var row = await _service.EnrolDeviceAsync(
+            _testData.Org1Id, _testData.Org1Device1.ID, "1.0.0", _systemTime.Now, "2.0.0");
+        // Burn one attempt so AttemptCount is non-zero, then verify the
+        // operator force-retry resets it.
+        Assert.IsTrue(await _service.TryReserveAsync(row.Id));
+        Assert.IsTrue(await _service.MarkInProgressAsync(row.Id));
+        Assert.IsTrue(await _service.MarkFailedAsync(row.Id, "boom"));
+
+        // Wrong org → refused, no mutation.
+        Assert.IsFalse(await _service.ForceRetryAsync(row.Id, _testData.Org2Id));
+        var unchanged = await GetRowAsync(row.Id);
+        Assert.AreEqual(1, unchanged.AttemptCount);
+
+        // Blank org → refused.
+        Assert.IsFalse(await _service.ForceRetryAsync(row.Id, ""));
+
+        // Right org → accepted, attempts reset, eligible now, error cleared.
+        Assert.IsTrue(await _service.ForceRetryAsync(row.Id, _testData.Org1Id));
+        var reset = await GetRowAsync(row.Id);
+        Assert.AreEqual(AgentUpgradeState.Pending, reset.State);
+        Assert.AreEqual(0, reset.AttemptCount);
+        Assert.IsNull(reset.LastAttemptError);
+        Assert.AreEqual(_systemTime.Now, reset.EligibleAt);
+    }
+
+    [TestMethod]
+    public async Task ForceRetryAsync_OrgScoped_UnknownIdReturnsFalse()
+    {
+        Assert.IsFalse(await _service.ForceRetryAsync(Guid.NewGuid(), _testData.Org1Id));
+    }
+
+    [TestMethod]
+    public async Task SetOptOutAsync_OrgScoped_RefusesCrossOrgAndInProgress()
+    {
+        var row = await _service.EnrolDeviceAsync(
+            _testData.Org1Id, _testData.Org1Device1.ID, "1.0.0", _systemTime.Now, "2.0.0");
+
+        // Wrong org → refused.
+        Assert.IsFalse(await _service.SetOptOutAsync(row.Id, _testData.Org2Id));
+        Assert.AreEqual(AgentUpgradeState.Pending, (await GetRowAsync(row.Id)).State);
+
+        // Right org while Pending → accepted.
+        Assert.IsTrue(await _service.SetOptOutAsync(row.Id, _testData.Org1Id));
+        Assert.AreEqual(AgentUpgradeState.SkippedOptOut, (await GetRowAsync(row.Id)).State);
+
+        // Force back to Pending → InProgress so the busy rail is exercised.
+        Assert.IsTrue(await _service.ForceRetryAsync(row.Id, _testData.Org1Id));
+        Assert.IsTrue(await _service.TryReserveAsync(row.Id));
+        Assert.IsTrue(await _service.MarkInProgressAsync(row.Id));
+        Assert.IsFalse(await _service.SetOptOutAsync(row.Id, _testData.Org1Id));
+        Assert.AreEqual(AgentUpgradeState.InProgress, (await GetRowAsync(row.Id)).State);
+
+        // Blank org → refused.
+        Assert.IsFalse(await _service.SetOptOutAsync(row.Id, ""));
+    }
+
     private async Task<AgentUpgradeStatus> GetRowAsync(Guid id)
     {
         using var db = _dbFactory.GetContext();

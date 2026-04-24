@@ -37,7 +37,7 @@ This roadmap is therefore organised in three bands:
 
 ## Band 1 — Rewrite & cut-over *(top priority)*
 
-### Current focus *(end of slice R1b / S4 / **M1 milestone complete (M1.1 + M1.2 + M1.3 + M1.4 + M1.5)** + M2 complete + **M3 service + orchestrator landed** — Apr 2026)*
+### Current focus *(end of slice R1b / S4 / **M1 milestone complete (M1.1 + M1.2 + M1.3 + M1.4 + M1.5)** + M2 complete + **M3 service + orchestrator landed** + **M4 admin dashboard shipped** — Apr 2026)*
 
 Module 0 (wire-protocol spec + JSON test-vector corpus), slice **R1a**
 (`cmremote-wire` JSON round-trip + redacting `Debug`), slice **R1b**
@@ -158,15 +158,15 @@ The next milestones are now:
    server over WebSocket and reconnects cleanly across restarts). Now
    unblocked — S4's fuzz + proptest coverage gates R2's new parser
    surfaces on the way in.
-2. **M3 dispatcher + M4 dashboard.** The M3 schema, state machine, and
+2. **M3 dispatcher + ~~M4 dashboard~~.** The M3 schema, state machine, and
    `AgentUpgradeOrchestrator` `IHostedService` have shipped (see the
    "M3 — Background agent-upgrade pipeline" section below). The
    remaining M3 work is the real `IAgentUpgradeDispatcher`
    implementation — the publisher manifest + signed-build fetch + the
    per-OS install ack — which lands together with slice **R6** /
-   **R8** so the Rust agent never sees an unsigned variant. **M4**
-   (admin "Agent upgrade" dashboard) layers on top of the same
-   `IAgentUpgradeService` surface that's already in the tree.
+   **R8** so the Rust agent never sees an unsigned variant. **M4
+   (admin "Agent upgrade" dashboard) is now shipped** — see the
+   "M4 — Admin 'Agent upgrade' dashboard" section below.
 3. **Live-Postgres integration coverage** for the concrete writers'
    `INSERT … ON CONFLICT` paths (the wizard import step exercises
    them through the runner; the missing piece is a CI job with a
@@ -777,12 +777,58 @@ requeuing with backoff, "no target available" rolling Scheduled back
 to Pending without consuming a retry, MaxConcurrency observed under
 load, and SweepBatchSize capping rows processed per sweep.
 
-**M4 — Admin "Agent upgrade" dashboard.**
-`/admin/agent-upgrade` shows totals (`Pending / Scheduled / InProgress /
-Succeeded / Failed / Skipped(Inactive) / Skipped(OptOut)`), a searchable
-device table with state + last error + last-online age, per-device
-*Retry* / *Skip* / *Force* actions, and a CSV export. The dashboard is
-read-mostly and is not on the critical path of any other admin task.
+**M4 — Admin "Agent upgrade" dashboard.** *(✅ shipped.)*
+[`/admin/agent-upgrade`](Server/Components/Pages/AgentUpgradeDashboard.razor)
+is an org-admin Razor page (gated by `OrganizationAdminRequired`)
+that surfaces the M3 pipeline to operators:
+
+- **Summary cards** for every `AgentUpgradeState` (`Pending / Scheduled
+  / InProgress / Succeeded / Failed / Skipped(Inactive) /
+  Skipped(OptOut)`), driven by
+  `IAgentUpgradeService.GetStateCountsAsync` so the dashboard cannot
+  drift from the orchestrator's view of the world.
+- **Searchable, paged device table** showing `DeviceName` + `DeviceId`,
+  current state badge, `FromVersion → ToVersion`, last-online age,
+  attempt count, and the most recent failure message. The table is
+  fed by the new
+  [`IAgentUpgradeService.GetRowsForOrganizationAsync`](Server/Services/AgentUpgrade/IAgentUpgradeService.cs)
+  + `CountRowsForOrganizationAsync` pair, which left-joins the
+  `Devices` table so a status row whose underlying device record has
+  been deleted still surfaces (with `DeviceName` / `LastOnline` left
+  null) instead of disappearing silently. Search is a case-insensitive
+  substring match on `DeviceId` and `DeviceName`; ordering is by
+  `CreatedAt` descending so the most recent enrolments surface first.
+- **Per-row Retry / Skip / Force actions** wired through the new
+  org-scoped overloads
+  [`ForceRetryAsync(statusId, organizationId)`](Server/Services/AgentUpgrade/IAgentUpgradeService.cs)
+  and `SetOptOutAsync(statusId, organizationId)`. The org check runs
+  in the same DB context as the mutation so an operator cannot reach
+  into another organisation's rows by guessing a status id, and the
+  refusal-while-busy rail (`Skip` refused while `InProgress`) is
+  preserved verbatim from the org-less overload.
+- **CSV export** at `/api/agent-upgrade/export.csv`
+  ([`AgentUpgradeExportController`](Server/API/AgentUpgradeExportController.cs)),
+  same auth + org scope as the page. UTF-8 with BOM (so Excel opens
+  it without the encoding wizard), RFC 4180 escaping for commas /
+  quotes / newlines, ISO 8601 `'u'` UTC timestamps, hard-capped at
+  50,000 rows per request to keep the response bounded.
+- **Nav menu** entry under the Admin section in
+  [`NavMenu.razor`](Server/Components/Layout/NavMenu.razor) so the
+  dashboard is one click away.
+
+**M4 tests.** Twelve new tests in
+[`AgentUpgradeServiceTests`](Tests/Server.Tests/AgentUpgradeServiceTests.cs)
+cover the listing query (org scoping, missing-device left-join,
+case-insensitive search across DeviceId + DeviceName, newest-first
+pagination, blank-org / non-positive-take guards), the count query
+(matches the listing's filter, blank-org guard), and the org-scoped
+operator action overloads (cross-org refused, blank-org refused,
+unknown-id refused, in-progress opt-out refused, happy-path resets
+attempts + clears LastAttemptError + stamps EligibleAt = now). Three
+new tests in
+[`AgentUpgradeExportControllerTests`](Tests/Server.Tests/AgentUpgradeExportControllerTests.cs)
+pin the CSV format: header line + UTF-8 BOM, RFC 4180 escaping of
+commas / quotes / newlines, and null-field empty rendering.
 
 **M5 — Tests & docs.**
 - `LegacyToV2ConverterTests` — golden-vector fixtures for the upstream
