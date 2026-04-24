@@ -140,6 +140,21 @@ pub enum MethodName {
     RunScript,
     /// Stub — keyboard shortcut injection (R7).
     InvokeCtrlAltDel,
+    /// `SendSdpOffer(viewerConnectionId, sessionId, …, sdp)` —
+    /// WebRTC negotiation (R7.g signalling surface). Until the
+    /// crypto-provider ADR
+    /// (`docs/decisions/0001-webrtc-crypto-provider.md`) is decided
+    /// and a real driver lands, the
+    /// `NotSupportedDesktopTransport` stub returns a structured
+    /// "not supported on `<host_os>`" failure.
+    SendSdpOffer,
+    /// `SendSdpAnswer(viewerConnectionId, sessionId, …, sdp)` —
+    /// WebRTC renegotiation (R7.g).
+    SendSdpAnswer,
+    /// `SendIceCandidate(viewerConnectionId, sessionId, …,
+    /// candidate, sdpMid, sdpMlineIndex)` — trickled ICE candidate
+    /// (R7.g).
+    SendIceCandidate,
     /// Stub — agent log deletion.
     DeleteLogs,
     /// Stub — agent log retrieval.
@@ -177,6 +192,9 @@ impl MethodName {
             "RestartScreenCaster" => Some(Self::RestartScreenCaster),
             "RunScript" => Some(Self::RunScript),
             "InvokeCtrlAltDel" => Some(Self::InvokeCtrlAltDel),
+            "SendSdpOffer" => Some(Self::SendSdpOffer),
+            "SendSdpAnswer" => Some(Self::SendSdpAnswer),
+            "SendIceCandidate" => Some(Self::SendIceCandidate),
             "DeleteLogs" => Some(Self::DeleteLogs),
             "GetLogs" => Some(Self::GetLogs),
             "InstallAgentUpdate" => Some(Self::InstallAgentUpdate),
@@ -381,6 +399,10 @@ mod tests {
             "InstallPackage",
             "ChangeWindowsSession",
             "RemoteControl",
+            // Slice R7.g — signalling allow-list entries.
+            "SendSdpOffer",
+            "SendSdpAnswer",
+            "SendIceCandidate",
         ];
         for m in &known {
             assert!(

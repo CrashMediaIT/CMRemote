@@ -24,6 +24,15 @@ async-trait = "0.1"
 # scope to the features cmremote-platform needs (process + io-util for
 # stdout/stderr capture, sync for tests, time for the exec timeout).
 tokio = { workspace = true }
+# Slice R6 HTTPS artifact downloader. rustls + aws-lc-rs only, no `ring`
+# (banned in `deny.toml`). The crypto provider is installed by the
+# agent binary at startup; this crate just publishes the trait impl.
+reqwest = { workspace = true }
+futures-util = { workspace = true }
+# Direct dep so we can install the `aws-lc-rs` crypto provider at
+# startup. The same version is pinned at the workspace level via
+# tokio-tungstenite's TLS feature set.
+rustls = { workspace = true }
 cmremote-wire = { path = "../cmremote-wire" }
 
 [dev-dependencies]

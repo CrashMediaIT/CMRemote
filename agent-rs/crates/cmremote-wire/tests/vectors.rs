@@ -7,8 +7,10 @@
 use std::path::{Path, PathBuf};
 
 use cmremote_wire::{
-    from_msgpack, to_msgpack, ConnectionInfo, HandshakeRequest, HandshakeResponse, HubClose,
-    HubCompletion, HubInvocation, HubPing, HubProtocol,
+    from_msgpack, to_msgpack, ChangeWindowsSessionRequest, ConnectionInfo, DesktopTransportResult,
+    HandshakeRequest, HandshakeResponse, HubClose, HubCompletion, HubInvocation, HubPing,
+    HubProtocol, IceCandidate, InvokeCtrlAltDelRequest, RemoteControlSessionRequest,
+    RestartScreenCasterRequest, SdpAnswer, SdpKind, SdpOffer,
 };
 
 /// Walk up from the crate's manifest directory until we find the
@@ -272,4 +274,229 @@ fn envelope_vectors_round_trip_through_msgpack() {
     assert_msgpack_round_trip::<HubPing>(&dir.join("ping.json"));
     assert_msgpack_round_trip::<HubClose>(&dir.join("close-shutdown.json"));
     assert_msgpack_round_trip::<HubClose>(&dir.join("close-quarantine.json"));
+}
+
+// -------------------------------------------------------------------------
+// Slice R7.d — Method-surface vectors for the four desktop-transport hub
+// methods. Each request / result vector must round-trip through both
+// JSON and MessagePack, and the deserialised value must keep its
+// PascalCase wire field names on re-serialisation so the .NET hub can
+// drive either agent fleet without a contract bump.
+// -------------------------------------------------------------------------
+
+const DESKTOP_VALID_SESSION_ID: &str = "11111111-2222-3333-4444-555555555555";
+const DESKTOP_VALID_ORG_ID: &str = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+
+#[test]
+fn method_surface_remote_control_request_vector_round_trips() {
+    let path = vectors_root()
+        .join("method-surface")
+        .join("remote-control")
+        .join("request.json");
+    let raw = read(&path);
+    let req: RemoteControlSessionRequest = serde_json::from_str(&raw).unwrap();
+    assert_eq!(req.session_id, DESKTOP_VALID_SESSION_ID);
+    assert_eq!(req.org_id, DESKTOP_VALID_ORG_ID);
+    let re = serde_json::to_string(&req).unwrap();
+    // PascalCase must survive the round-trip — this is the contract
+    // with the .NET hub.
+    assert!(re.contains("\"SessionId\""), "{re}");
+    assert!(re.contains("\"AccessKey\""), "{re}");
+    assert!(re.contains("\"OrgId\""), "{re}");
+    assert_msgpack_round_trip::<RemoteControlSessionRequest>(&path);
+}
+
+#[test]
+fn method_surface_remote_control_result_vectors_round_trip() {
+    let dir = vectors_root().join("method-surface").join("remote-control");
+
+    let ok: DesktopTransportResult =
+        serde_json::from_str(&read(&dir.join("result-success.json"))).unwrap();
+    assert!(ok.success);
+    assert_eq!(ok.session_id, DESKTOP_VALID_SESSION_ID);
+    // ErrorMessage is omitted from the on-wire form when None.
+    let re = serde_json::to_string(&ok).unwrap();
+    assert!(!re.contains("ErrorMessage"), "{re}");
+
+    let bad: DesktopTransportResult =
+        serde_json::from_str(&read(&dir.join("result-failure.json"))).unwrap();
+    assert!(!bad.success);
+    let msg = bad.error_message.as_deref().unwrap();
+    assert!(msg.contains("RemoteControl"), "{msg}");
+    // The result MUST NOT echo any access key — the failure-vector
+    // file was authored with this in mind, but the round-trip
+    // assertion pins it against future drift.
+    assert!(!msg.contains("REDACTED-IN-LOGS"), "{msg}");
+
+    assert_msgpack_round_trip::<DesktopTransportResult>(&dir.join("result-success.json"));
+    assert_msgpack_round_trip::<DesktopTransportResult>(&dir.join("result-failure.json"));
+}
+
+#[test]
+fn method_surface_restart_screen_caster_vectors_round_trip() {
+    let dir = vectors_root()
+        .join("method-surface")
+        .join("restart-screen-caster");
+
+    let req: RestartScreenCasterRequest =
+        serde_json::from_str(&read(&dir.join("request.json"))).unwrap();
+    assert_eq!(req.session_id, DESKTOP_VALID_SESSION_ID);
+    assert_eq!(req.viewer_ids.len(), 2);
+    let re = serde_json::to_string(&req).unwrap();
+    assert!(re.contains("\"ViewerIds\""), "{re}");
+
+    assert_msgpack_round_trip::<RestartScreenCasterRequest>(&dir.join("request.json"));
+    assert_msgpack_round_trip::<DesktopTransportResult>(&dir.join("result-success.json"));
+}
+
+#[test]
+fn method_surface_change_windows_session_vectors_round_trip() {
+    let dir = vectors_root()
+        .join("method-surface")
+        .join("change-windows-session");
+
+    let req: ChangeWindowsSessionRequest =
+        serde_json::from_str(&read(&dir.join("request.json"))).unwrap();
+    assert_eq!(req.session_id, DESKTOP_VALID_SESSION_ID);
+    assert_eq!(req.target_session_id, 1);
+    let re = serde_json::to_string(&req).unwrap();
+    assert!(re.contains("\"TargetSessionId\":1"), "{re}");
+
+    assert_msgpack_round_trip::<ChangeWindowsSessionRequest>(&dir.join("request.json"));
+    assert_msgpack_round_trip::<DesktopTransportResult>(&dir.join("result-success.json"));
+}
+
+#[test]
+fn method_surface_invoke_ctrl_alt_del_vectors_round_trip() {
+    let dir = vectors_root()
+        .join("method-surface")
+        .join("invoke-ctrl-alt-del");
+
+    // Request is a unit struct → JSON `null`.
+    let raw = read(&dir.join("request.json"));
+    assert_eq!(raw.trim(), "null");
+    let _: InvokeCtrlAltDelRequest = serde_json::from_str(&raw).unwrap();
+
+    let bad: DesktopTransportResult =
+        serde_json::from_str(&read(&dir.join("result-failure.json"))).unwrap();
+    assert!(!bad.success);
+    // No session id in the request type → the result echoes empty.
+    assert!(bad.session_id.is_empty());
+    assert!(bad
+        .error_message
+        .as_deref()
+        .unwrap()
+        .contains("InvokeCtrlAltDel"));
+
+    assert_msgpack_round_trip::<InvokeCtrlAltDelRequest>(&dir.join("request.json"));
+    assert_msgpack_round_trip::<DesktopTransportResult>(&dir.join("result-failure.json"));
+}
+
+// -------------------------------------------------------------------------
+// Slice R7.g — Signalling vectors. The .NET side will land its half of
+// the WebRTC negotiation surface against these byte-stable JSON shapes,
+// so each vector must round-trip through both JSON and MessagePack and
+// keep its PascalCase wire field names intact on re-serialisation.
+// -------------------------------------------------------------------------
+
+#[test]
+fn signalling_sdp_offer_vector_round_trips() {
+    let path = vectors_root()
+        .join("method-surface")
+        .join("signalling")
+        .join("sdp-offer.json");
+    let raw = read(&path);
+    let req: SdpOffer = serde_json::from_str(&raw).unwrap();
+    assert_eq!(req.session_id, DESKTOP_VALID_SESSION_ID);
+    assert_eq!(req.org_id, DESKTOP_VALID_ORG_ID);
+    assert_eq!(req.kind, SdpKind::Offer);
+    assert!(req.sdp.starts_with("v=0\r\n"), "{}", req.sdp);
+    let re = serde_json::to_string(&req).unwrap();
+    // PascalCase must survive — this is the contract with the .NET hub.
+    assert!(re.contains("\"ViewerConnectionId\""), "{re}");
+    assert!(re.contains("\"SessionId\""), "{re}");
+    assert!(re.contains("\"OrgId\""), "{re}");
+    assert!(re.contains("\"Kind\":\"Offer\""), "{re}");
+    assert!(re.contains("\"Sdp\""), "{re}");
+    assert_msgpack_round_trip::<SdpOffer>(&path);
+}
+
+#[test]
+fn signalling_sdp_answer_vector_round_trips() {
+    let path = vectors_root()
+        .join("method-surface")
+        .join("signalling")
+        .join("sdp-answer.json");
+    let raw = read(&path);
+    let req: SdpAnswer = serde_json::from_str(&raw).unwrap();
+    assert_eq!(req.session_id, DESKTOP_VALID_SESSION_ID);
+    assert_eq!(req.kind, SdpKind::Answer);
+    let re = serde_json::to_string(&req).unwrap();
+    assert!(re.contains("\"Kind\":\"Answer\""), "{re}");
+    assert_msgpack_round_trip::<SdpAnswer>(&path);
+}
+
+#[test]
+fn signalling_ice_candidate_vector_round_trips() {
+    let dir = vectors_root().join("method-surface").join("signalling");
+
+    let path = dir.join("ice-candidate.json");
+    let req: IceCandidate = serde_json::from_str(&read(&path)).unwrap();
+    assert_eq!(req.session_id, DESKTOP_VALID_SESSION_ID);
+    assert_eq!(req.sdp_mid.as_deref(), Some("0"));
+    assert_eq!(req.sdp_mline_index, Some(0));
+    let re = serde_json::to_string(&req).unwrap();
+    assert!(re.contains("\"Candidate\""), "{re}");
+    assert!(re.contains("\"SdpMid\":\"0\""), "{re}");
+    assert!(re.contains("\"SdpMlineIndex\":0"), "{re}");
+    assert_msgpack_round_trip::<IceCandidate>(&path);
+}
+
+#[test]
+fn signalling_ice_candidate_end_of_candidates_marker_vector_round_trips() {
+    let path = vectors_root()
+        .join("method-surface")
+        .join("signalling")
+        .join("ice-candidate-end-of-candidates.json");
+    let raw = read(&path);
+    let req: IceCandidate = serde_json::from_str(&raw).unwrap();
+    // RFC 8838 end-of-candidates: empty `candidate` line, no mid, no
+    // mline index. The .NET side detects the marker by absence of a
+    // value rather than by comparing against an empty string, so the
+    // round-trip must preserve `null` for both Option fields.
+    assert_eq!(req.candidate, "");
+    assert!(req.sdp_mid.is_none());
+    assert!(req.sdp_mline_index.is_none());
+    let re = serde_json::to_string(&req).unwrap();
+    assert!(re.contains("\"SdpMid\":null"), "{re}");
+    assert!(re.contains("\"SdpMlineIndex\":null"), "{re}");
+    assert_msgpack_round_trip::<IceCandidate>(&path);
+}
+
+#[test]
+fn signalling_result_vectors_round_trip() {
+    let dir = vectors_root().join("method-surface").join("signalling");
+
+    let ok: DesktopTransportResult =
+        serde_json::from_str(&read(&dir.join("result-success.json"))).unwrap();
+    assert!(ok.success);
+    assert_eq!(ok.session_id, DESKTOP_VALID_SESSION_ID);
+    let re = serde_json::to_string(&ok).unwrap();
+    // ErrorMessage is omitted from the on-wire form when None.
+    assert!(!re.contains("ErrorMessage"), "{re}");
+
+    let bad: DesktopTransportResult =
+        serde_json::from_str(&read(&dir.join("result-failure.json"))).unwrap();
+    assert!(!bad.success);
+    let msg = bad.error_message.as_deref().unwrap();
+    assert!(msg.contains("SendSdpOffer"), "{msg}");
+    // The failure vector deliberately mirrors the stub's
+    // OS-not-supported message; pin that it never carries a
+    // placeholder access key (no `RemoteControl` request shape would
+    // have one in this method, but pin it anyway against future
+    // drift in result-shape conventions).
+    assert!(!msg.contains("REDACTED-IN-LOGS"), "{msg}");
+
+    assert_msgpack_round_trip::<DesktopTransportResult>(&dir.join("result-success.json"));
+    assert_msgpack_round_trip::<DesktopTransportResult>(&dir.join("result-failure.json"));
 }

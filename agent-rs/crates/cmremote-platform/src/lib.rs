@@ -13,6 +13,7 @@
 //! Operating-system abstractions for the CMRemote agent.
 
 pub mod apps;
+pub mod desktop;
 #[cfg(target_os = "linux")]
 pub mod linux;
 #[cfg(target_os = "linux")]

@@ -1,0 +1,10 @@
+{
+  "ViewerConnectionId": "viewer-conn-1",
+  "SessionId": "11111111-2222-3333-4444-555555555555",
+  "RequesterName": "Alice Operator",
+  "OrgName": "Acme Corp",
+  "OrgId": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+  "Candidate": "candidate:1 1 UDP 2130706431 192.0.2.1 12345 typ host",
+  "SdpMid": "0",
+  "SdpMlineIndex": 0
+}

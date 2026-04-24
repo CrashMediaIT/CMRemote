@@ -1,0 +1,9 @@
+{
+  "ViewerConnectionId": "viewer-conn-1",
+  "SessionId": "11111111-2222-3333-4444-555555555555",
+  "RequesterName": "Alice Operator",
+  "OrgName": "Acme Corp",
+  "OrgId": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+  "Kind": "Answer",
+  "Sdp": "v=0\r\no=- 9876543210 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\na=group:BUNDLE 0\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\nc=IN IP4 0.0.0.0\r\na=ice-ufrag:zyxw\r\na=ice-pwd:9876543210abcdefghijklmnop\r\na=fingerprint:sha-256 FF:EE:DD:CC:BB:AA:99:88:77:66:55:44:33:22:11:00:FF:EE:DD:CC:BB:AA:99:88:77:66:55:44:33:22:11:00\r\na=setup:active\r\na=mid:0\r\na=recvonly\r\na=rtcp-mux\r\na=rtpmap:96 H264/90000\r\n"
+}

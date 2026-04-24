@@ -9,9 +9,12 @@
 
 use std::sync::Arc;
 
+use cmremote_platform::desktop::NotSupportedDesktopTransport;
 #[cfg(target_os = "linux")]
 use cmremote_platform::linux_apps::DpkgProvider;
-use cmremote_platform::packages::{CompositePackageProvider, RejectingDownloader};
+use cmremote_platform::packages::{
+    ArtifactDownloader, CompositePackageProvider, RejectingDownloader, ReqwestArtifactDownloader,
+};
 #[cfg(not(target_os = "linux"))]
 use cmremote_platform::stubs::NotSupportedAppsProvider;
 use cmremote_platform::{DeviceInfoProvider, StdDeviceInfoProvider};
@@ -62,27 +65,56 @@ pub async fn run(cli: CliArgs) -> Result<(), RuntimeError> {
     // provider's `can_handle` returns `false` so the composite still
     // surfaces a structured "not supported" failure (the providers
     // themselves return the same shape from `execute`). The downloader
-    // is the rejecting stub for now — the runtime will swap in the
-    // real reqwest-based client in a follow-up PR; until then MSI /
-    // Executable jobs fail loudly with "this agent is not configured
-    // to download package artifacts" rather than hanging.
+    // is the real `ReqwestArtifactDownloader` (rustls + aws-lc-rs, no
+    // `ring`, no `openssl-sys`); if its construction fails for any
+    // reason — e.g. the rustls stack failed to initialise — we fall
+    // back to the rejecting stub so MSI / Executable jobs surface a
+    // clean "this agent is not configured to download package
+    // artifacts" failure rather than panicking the whole agent on the
+    // download path.
     let cache_dir = std::env::temp_dir().join("cmremote-package-cache");
     let stage_dir = std::env::temp_dir().join("cmremote-update-stage");
     let server_host = info.normalized_host();
+    let downloader: Arc<dyn ArtifactDownloader> = match ReqwestArtifactDownloader::new() {
+        Ok(d) => Arc::new(d),
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "failed to construct HTTPS artifact downloader (rustls / aws-lc-rs init failed — \
+                 typically caused by a competing crypto provider already installed by another \
+                 library); falling back to RejectingDownloader so package + agent-update jobs \
+                 surface a clean structured failure instead of hanging",
+            );
+            Arc::new(RejectingDownloader)
+        }
+    };
     let mut composite = CompositePackageProvider::new();
-    composite.register_default_handlers(cache_dir, server_host, Arc::new(RejectingDownloader));
+    composite.register_default_handlers(cache_dir, server_host, downloader.clone());
     let packages = Arc::new(composite);
 
-    // Slice M3 (gated on R6): the agent self-update handler shares
-    // the same downloader as the package providers. The installer is
-    // platform-specific and not yet implemented; until then the stub
-    // installer surfaces a clean structured failure so the manifest
-    // dispatcher's audit trail is honest about the missing capability.
+    // Slice M3 (now lit up by R6): the agent self-update handler
+    // shares the same downloader as the package providers. The
+    // installer is platform-specific and not yet implemented; until
+    // then the stub installer surfaces a clean structured failure so
+    // the manifest dispatcher's audit trail is honest about the
+    // missing capability.
     let agent_update = Arc::new(crate::handlers::agent_update::AgentUpdateContext {
-        downloader: Arc::new(RejectingDownloader),
+        downloader,
         installer: Arc::new(crate::handlers::agent_update::StubAgentUpdateInstaller),
         stage_dir,
     });
+
+    // Slice R7 — desktop transport: until the WebRTC capture / encode
+    // driver lands, every request resolves to a structured "not
+    // supported on <OS>" failure. The stub is constructed with the
+    // agent's own organisation id so the slice R7.b cross-org guard
+    // refuses any hub invocation whose `org_id` does not match this
+    // device's organisation. Concrete drivers will register here
+    // alongside the package providers; the dispatch surface and
+    // wire-level result shape are already in place.
+    let desktop = Arc::new(NotSupportedDesktopTransport::for_current_host(
+        info.organization_id.clone(),
+    ));
 
     let handlers = Arc::new(AgentHandlers {
         connection_info: info.clone(),
@@ -90,6 +122,7 @@ pub async fn run(cli: CliArgs) -> Result<(), RuntimeError> {
         apps,
         packages,
         agent_update,
+        desktop,
     });
 
     // The shutdown channel is a single-producer / multi-consumer

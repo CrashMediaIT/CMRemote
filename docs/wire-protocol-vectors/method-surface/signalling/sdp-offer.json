@@ -1,0 +1,9 @@
+{
+  "ViewerConnectionId": "viewer-conn-1",
+  "SessionId": "11111111-2222-3333-4444-555555555555",
+  "RequesterName": "Alice Operator",
+  "OrgName": "Acme Corp",
+  "OrgId": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+  "Kind": "Offer",
+  "Sdp": "v=0\r\no=- 4611731400430051336 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\na=group:BUNDLE 0\r\na=msid-semantic: WMS\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\nc=IN IP4 0.0.0.0\r\na=rtcp:9 IN IP4 0.0.0.0\r\na=ice-ufrag:abcd\r\na=ice-pwd:efghijklmnopqrstuvwxyz0123\r\na=ice-options:trickle\r\na=fingerprint:sha-256 00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF\r\na=setup:actpass\r\na=mid:0\r\na=sendonly\r\na=rtcp-mux\r\na=rtpmap:96 H264/90000\r\n"
+}
