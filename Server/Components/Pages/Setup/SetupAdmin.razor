@@ -1,0 +1,204 @@
+@*
+    M1.4 — Admin bootstrap step. Creates the first organisation +
+    server-admin user when no users were imported in M1.3. Auto-skips
+    when the database already contains an organisation/user (i.e. when
+    the operator just imported a populated upstream database in M1.3).
+
+    See ROADMAP.md "M1 — First-boot setup wizard" step 4.
+*@
+
+@page "/setup/admin"
+@layout EmptyLayout
+@rendermode InteractiveServer
+
+@using Remotely.Server.Components.Layout
+@using Remotely.Server.Services
+@using Remotely.Server.Services.Setup
+@inject ISetupStateService SetupState
+@inject ISetupWizardProgressService Progress
+@inject IAdminBootstrapService Bootstrap
+@inject NavigationManager Navigation
+
+<PageTitle>CMRemote — Setup: Admin bootstrap</PageTitle>
+
+@if (_alreadyCompleted)
+{
+    <div class="container py-5">
+        <h1 class="display-5">Setup already complete</h1>
+        <p class="lead">Return to the <a href="/">main panel</a>.</p>
+    </div>
+}
+else if (_loading)
+{
+    <div class="container py-5">
+        <p>Checking whether an admin bootstrap is required…</p>
+    </div>
+}
+else
+{
+    <div class="container py-5">
+        <nav aria-label="breadcrumb" class="mb-3">
+            <ol class="breadcrumb">
+                <li class="breadcrumb-item"><a href="/setup">Setup</a></li>
+                <li class="breadcrumb-item"><a href="/setup/preflight">Preflight</a></li>
+                <li class="breadcrumb-item"><a href="/setup/database">Database connection</a></li>
+                <li class="breadcrumb-item"><a href="/setup/import">Import existing database</a></li>
+                <li class="breadcrumb-item active" aria-current="page">Admin bootstrap</li>
+            </ol>
+        </nav>
+
+        <h1 class="display-6">Admin bootstrap</h1>
+
+        @if (!_required)
+        {
+            <p class="lead">
+                Your database already contains an organisation and at least one user
+                — typically because the previous step imported them. There is nothing
+                to do here.
+            </p>
+            <button class="btn btn-primary" type="button" @onclick="SkipAndContinue">
+                Continue
+            </button>
+        }
+        else
+        {
+            <p class="text-muted">
+                Create the first organisation and a server-admin account. The
+                password is hashed with the same ASP.NET Identity hasher the rest
+                of the app uses; you can change it later from the user-management
+                screen.
+            </p>
+
+            <div class="row g-3 mb-3">
+                <div class="col-md-6">
+                    <label for="org-name" class="form-label">Organisation name</label>
+                    <input id="org-name" class="form-control" maxlength="25"
+                           @bind="_organizationName"
+                           placeholder="Acme IT" />
+                    <small class="text-muted">Up to 25 characters.</small>
+                </div>
+                <div class="col-md-6">
+                    <label for="admin-email" class="form-label">Admin email</label>
+                    <input id="admin-email" class="form-control" type="email"
+                           @bind="_email"
+                           placeholder="admin@example.com" />
+                </div>
+                <div class="col-md-6">
+                    <label for="admin-pass" class="form-label">Password</label>
+                    <input id="admin-pass" class="form-control" type="password"
+                           @bind="_password" />
+                </div>
+                <div class="col-md-6">
+                    <label for="admin-pass2" class="form-label">Confirm password</label>
+                    <input id="admin-pass2" class="form-control" type="password"
+                           @bind="_passwordConfirm" />
+                </div>
+            </div>
+
+            <button class="btn btn-primary"
+                    type="button"
+                    disabled="@(_busy || !FormLooksUsable())"
+                    @onclick="Create">
+                @(_busy ? "Creating…" : "Create admin and continue")
+            </button>
+
+            @if (_errors.Count > 0)
+            {
+                <div class="alert alert-danger mt-3" role="alert">
+                    <strong>Could not create admin:</strong>
+                    <ul class="mb-0">
+                        @foreach (var error in _errors)
+                        {
+                            <li>@error</li>
+                        }
+                    </ul>
+                </div>
+            }
+        }
+
+        @if (!string.IsNullOrEmpty(_unexpectedError))
+        {
+            <div class="alert alert-danger mt-3" role="alert">@_unexpectedError</div>
+        }
+    </div>
+}
+
+@code {
+    private bool _alreadyCompleted;
+    private bool _loading = true;
+    private bool _required;
+    private bool _busy;
+    private string? _unexpectedError;
+    private List<string> _errors = new();
+
+    private string _organizationName = string.Empty;
+    private string _email = string.Empty;
+    private string _password = string.Empty;
+    private string _passwordConfirm = string.Empty;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _alreadyCompleted = await SetupState.IsSetupCompletedAsync();
+        if (!_alreadyCompleted)
+        {
+            _required = await Bootstrap.IsRequiredAsync();
+        }
+        _loading = false;
+    }
+
+    private bool FormLooksUsable()
+    {
+        return !string.IsNullOrWhiteSpace(_organizationName)
+            && !string.IsNullOrWhiteSpace(_email)
+            && !string.IsNullOrWhiteSpace(_password)
+            && _password == _passwordConfirm;
+    }
+
+    private async Task Create()
+    {
+        if (_busy || !FormLooksUsable())
+        {
+            return;
+        }
+
+        _busy = true;
+        _errors = new();
+        _unexpectedError = null;
+
+        try
+        {
+            if (_password != _passwordConfirm)
+            {
+                _errors = new() { "Password and confirmation do not match." };
+                return;
+            }
+
+            var result = await Bootstrap.CreateInitialAdminAsync(
+                _organizationName, _email, _password);
+
+            if (!result.IsSuccess)
+            {
+                _errors = result.Errors.ToList();
+                return;
+            }
+
+            await Progress.SetCurrentStepAsync(SetupWizardStep.AdminBootstrap);
+            Navigation.NavigateTo("/setup/done");
+        }
+        catch (Exception ex)
+        {
+            _unexpectedError = $"Admin bootstrap failed: {ex.Message}";
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task SkipAndContinue()
+    {
+        if (_busy) return;
+        await Progress.SetCurrentStepAsync(SetupWizardStep.AdminBootstrap);
+        Navigation.NavigateTo("/setup/done");
+    }
+}

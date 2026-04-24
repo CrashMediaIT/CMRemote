@@ -1,11 +1,13 @@
 @*
-    First-boot setup wizard skeleton — see ROADMAP.md "M1 — First-boot
-    setup wizard" / "M1 scaffolding". This page is intentionally a
-    placeholder: it lays out the eventual five steps (welcome /
-    preflight, database connection, legacy import, admin bootstrap,
-    done) so subsequent slices have somewhere to land, and exposes a
-    single "Mark setup complete" action so an operator can dismiss the
-    wizard while the real wizard logic is still being built.
+    First-boot setup wizard entry page — see ROADMAP.md
+    "M1 — First-boot setup wizard". This page is the operator's
+    landing surface; it shows the five steps with their current state
+    and starts the wizard by routing to the first incomplete step.
+
+    Per-step pages (M1.1 preflight, M1.2 database, M1.3 import) live
+    alongside this file. The /setup root keeps the welcome copy and
+    the "Begin / Continue" button so an operator who reloads the
+    browser mid-install is not dumped back to step 1.
 
     No authorization: the wizard is only reachable while the
     CMRemote.Setup.Completed marker is unset. Once the marker is
@@ -20,7 +22,9 @@
 @using Microsoft.AspNetCore.Components
 @using Remotely.Server.Components.Layout
 @using Remotely.Server.Services
+@using Remotely.Server.Services.Setup
 @inject ISetupStateService SetupState
+@inject ISetupWizardProgressService Progress
 @inject NavigationManager Navigation
 
 <PageTitle>CMRemote — First-boot setup</PageTitle>
@@ -44,34 +48,41 @@ else
             getting CMRemote ready for production use.
         </p>
 
-        <div class="alert alert-info" role="alert">
-            <strong>Skeleton build.</strong> The interactive steps below are not yet
-            implemented — this PR ships only the routing skeleton and the
-            <code>CMRemote.Setup.Completed</code> marker so subsequent migration and
-            agent-upgrade slices have a place to land. Click <em>Mark setup complete</em>
-            to dismiss this wizard if you have already configured the deployment by
-            other means.
-        </div>
-
         <ol class="list-group list-group-numbered mb-4">
             @foreach (var step in _steps)
             {
                 <li class="list-group-item d-flex justify-content-between align-items-start">
                     <div class="ms-2 me-auto">
-                        <div class="fw-bold">@step.Title</div>
+                        <div class="fw-bold">
+                            @if (!string.IsNullOrEmpty(step.Href) && IsStepReachable(step.Step))
+                            {
+                                <a href="@step.Href">@step.Title</a>
+                            }
+                            else
+                            {
+                                @step.Title
+                            }
+                        </div>
                         @step.Description
                     </div>
-                    <span class="badge bg-secondary rounded-pill">@step.Status</span>
+                    <span class="badge @StatusBadgeClass(step.Step) rounded-pill">@StatusFor(step.Step)</span>
                 </li>
             }
         </ol>
 
-        <button class="btn btn-primary"
-                type="button"
-                disabled="@_marking"
-                @onclick="MarkComplete">
-            @(_marking ? "Marking…" : "Mark setup complete")
-        </button>
+        <div class="d-flex gap-2">
+            <button class="btn btn-primary"
+                    type="button"
+                    @onclick="ContinueWizard">
+                @ContinueButtonLabel()
+            </button>
+            <button class="btn btn-outline-secondary"
+                    type="button"
+                    disabled="@_marking"
+                    @onclick="MarkComplete">
+                @(_marking ? "Marking…" : "Mark setup complete (skip wizard)")
+            </button>
+        </div>
 
         @if (!string.IsNullOrEmpty(_error))
         {
@@ -84,29 +95,96 @@ else
     private bool _alreadyCompleted;
     private bool _marking;
     private string? _error;
+    private SetupWizardStep _currentStep = SetupWizardStep.Welcome;
 
-    private readonly (string Title, string Description, string Status)[] _steps =
+    private readonly (SetupWizardStep Step, string Title, string Description, string? Href)[] _steps =
     {
-        ("Welcome / preflight",
+        (SetupWizardStep.Preflight,
+         "Welcome / preflight",
          "Verify writable data directory, TLS certificates, and bind ports.",
-         "Pending (M1.1)"),
-        ("Database connection",
+         "/setup/preflight"),
+        (SetupWizardStep.Database,
+         "Database connection",
          "Postgres host / port / db / user / password / SSL-mode form with a live SELECT 1 round trip.",
-         "Pending (M1.2)"),
-        ("Import existing database",
+         "/setup/database"),
+        (SetupWizardStep.Import,
+         "Import existing database",
          "Optional. Reads the legacy upstream schema (SQLite / SQL Server / Postgres) and maps rows into the v2 schema.",
-         "Pending (M1.3 / M2)"),
-        ("Admin bootstrap",
+         "/setup/import"),
+        (SetupWizardStep.AdminBootstrap,
+         "Admin bootstrap",
          "Create the first organisation and server-admin account when no users were imported.",
-         "Pending (M1.4)"),
-        ("Done",
+         "/setup/admin"),
+        (SetupWizardStep.Done,
+         "Done",
          "Write the CMRemote.Setup.Completed marker, sign the operator into the main panel, and queue the agent-upgrade sweep (M3).",
-         "Pending (M1.5)"),
+         "/setup/done"),
     };
 
     protected override async Task OnInitializedAsync()
     {
         _alreadyCompleted = await SetupState.IsSetupCompletedAsync();
+        if (!_alreadyCompleted)
+        {
+            _currentStep = await Progress.GetCurrentStepAsync();
+        }
+    }
+
+    private bool IsStepReachable(SetupWizardStep step)
+    {
+        // The first step is always reachable. Each subsequent step is
+        // reachable iff the operator has completed the one before it,
+        // matching the wizard's linear flow.
+        return (int)step <= (int)_currentStep + 1;
+    }
+
+    private string StatusFor(SetupWizardStep step)
+    {
+        if (_currentStep >= step)
+        {
+            return "Completed";
+        }
+        if ((int)_currentStep + 1 == (int)step)
+        {
+            return "Next";
+        }
+        return "Pending";
+    }
+
+    private string StatusBadgeClass(SetupWizardStep step)
+    {
+        if (_currentStep >= step) return "bg-success";
+        if ((int)_currentStep + 1 == (int)step) return "bg-primary";
+        return "bg-secondary";
+    }
+
+    private string ContinueButtonLabel()
+    {
+        var nextStep = (SetupWizardStep)((int)_currentStep + 1);
+        return nextStep switch
+        {
+            SetupWizardStep.Preflight => "Begin: Preflight",
+            SetupWizardStep.Database => "Continue: Database connection",
+            SetupWizardStep.Import => "Continue: Import existing database",
+            SetupWizardStep.AdminBootstrap => "Continue: Admin bootstrap",
+            SetupWizardStep.Done => "Finish setup",
+            _ => "Continue",
+        };
+    }
+
+    private void ContinueWizard()
+    {
+        var nextStep = (SetupWizardStep)((int)_currentStep + 1);
+        var href = nextStep switch
+        {
+            SetupWizardStep.Preflight => "/setup/preflight",
+            SetupWizardStep.Database => "/setup/database",
+            SetupWizardStep.Import => "/setup/import",
+            SetupWizardStep.AdminBootstrap => "/setup/admin",
+            SetupWizardStep.Done => "/setup/done",
+            _ => "/setup",
+        };
+        Navigation.NavigateTo(href);
     }
 
     private async Task MarkComplete()

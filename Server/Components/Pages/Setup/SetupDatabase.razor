@@ -1,0 +1,216 @@
+@*
+    M1.2 — Database connection step. Renders a Postgres connection
+    form, lets the operator press "Test connection" to perform a live
+    SELECT 1 round trip, and on success writes the connection string
+    to appsettings.Production.json (file mode 0600 on Unix) and
+    advances the wizard.
+
+    See ROADMAP.md "M1 — First-boot setup wizard" step 2.
+*@
+
+@page "/setup/database"
+@layout EmptyLayout
+@rendermode InteractiveServer
+
+@using Npgsql
+@using Remotely.Server.Components.Layout
+@using Remotely.Server.Services
+@using Remotely.Server.Services.Setup
+@inject ISetupStateService SetupState
+@inject ISetupWizardProgressService Progress
+@inject IDatabaseConnectionTester Tester
+@inject IConnectionStringWriter Writer
+@inject NavigationManager Navigation
+
+<PageTitle>CMRemote — Setup: Database connection</PageTitle>
+
+@if (_alreadyCompleted)
+{
+    <div class="container py-5">
+        <h1 class="display-5">Setup already complete</h1>
+        <p class="lead">Return to the <a href="/">main panel</a>.</p>
+    </div>
+}
+else
+{
+    <div class="container py-5">
+        <nav aria-label="breadcrumb" class="mb-3">
+            <ol class="breadcrumb">
+                <li class="breadcrumb-item"><a href="/setup">Setup</a></li>
+                <li class="breadcrumb-item"><a href="/setup/preflight">Preflight</a></li>
+                <li class="breadcrumb-item active" aria-current="page">Database connection</li>
+            </ol>
+        </nav>
+
+        <h1 class="display-6">Database connection</h1>
+        <p class="text-muted">
+            CMRemote v2 is Postgres-only. Enter the connection details for the database
+            this server should use; the wizard will perform a live <code>SELECT 1</code>
+            round trip before saving.
+        </p>
+
+        <div class="row g-3 mb-3">
+            <div class="col-md-6">
+                <label for="db-host" class="form-label">Host</label>
+                <input id="db-host" class="form-control" @bind="_host" placeholder="postgres.example.internal" />
+            </div>
+            <div class="col-md-2">
+                <label for="db-port" class="form-label">Port</label>
+                <input id="db-port" class="form-control" type="number" min="1" max="65535" @bind="_port" />
+            </div>
+            <div class="col-md-4">
+                <label for="db-name" class="form-label">Database</label>
+                <input id="db-name" class="form-control" @bind="_database" placeholder="cmremote" />
+            </div>
+            <div class="col-md-6">
+                <label for="db-user" class="form-label">Username</label>
+                <input id="db-user" class="form-control" @bind="_username" />
+            </div>
+            <div class="col-md-6">
+                <label for="db-pass" class="form-label">Password</label>
+                <input id="db-pass" class="form-control" type="password" @bind="_password" />
+            </div>
+            <div class="col-md-6">
+                <label for="db-ssl" class="form-label">SSL mode</label>
+                <select id="db-ssl" class="form-select" @bind="_sslMode">
+                    @foreach (var mode in _sslModes)
+                    {
+                        <option value="@mode">@mode</option>
+                    }
+                </select>
+            </div>
+        </div>
+
+        <div class="d-flex gap-2 mb-3">
+            <button class="btn btn-outline-primary"
+                    type="button"
+                    disabled="@(_busy || string.IsNullOrWhiteSpace(_host))"
+                    @onclick="TestConnection">
+                @(_busy ? "Testing…" : "Test connection")
+            </button>
+            <button class="btn btn-primary"
+                    type="button"
+                    disabled="@(!_lastTestSucceeded || _busy)"
+                    @onclick="SaveAndContinue">
+                @(_busy ? "Saving…" : "Save and continue")
+            </button>
+        </div>
+
+        @if (_lastResult is not null)
+        {
+            <div class="alert @AlertClass(_lastResult.Outcome)" role="alert">
+                <strong>@_lastResult.Outcome:</strong> @_lastResult.Message
+            </div>
+        }
+
+        @if (!string.IsNullOrEmpty(_error))
+        {
+            <div class="alert alert-danger" role="alert">@_error</div>
+        }
+
+        <div class="text-muted small">
+            On save, the connection string is written to
+            <code>@Writer.TargetSettingsPath</code> with file mode <code>0600</code>
+            on Unix.
+        </div>
+    </div>
+}
+
+@code {
+    private bool _alreadyCompleted;
+    private bool _busy;
+    private bool _lastTestSucceeded;
+    private string? _error;
+    private ConnectionTestResult? _lastResult;
+
+    private string _host = string.Empty;
+    private int _port = 5432;
+    private string _database = "cmremote";
+    private string _username = string.Empty;
+    private string _password = string.Empty;
+    private string _sslMode = "Prefer";
+
+    private readonly string[] _sslModes =
+    {
+        "Disable",
+        "Allow",
+        "Prefer",
+        "Require",
+        "VerifyCA",
+        "VerifyFull",
+    };
+
+    protected override async Task OnInitializedAsync()
+    {
+        _alreadyCompleted = await SetupState.IsSetupCompletedAsync();
+    }
+
+    private string BuildConnectionString()
+    {
+        var builder = new NpgsqlConnectionStringBuilder
+        {
+            Host = _host,
+            Port = _port,
+            Database = _database,
+            Username = _username,
+            Password = _password,
+            // The select-list values map 1:1 to the SslMode enum
+            // member names; if the operator selected something
+            // unrecognised, fall back to Prefer.
+            SslMode = Enum.TryParse<SslMode>(_sslMode, ignoreCase: true, out var parsed)
+                ? parsed
+                : SslMode.Prefer,
+        };
+        return builder.ConnectionString;
+    }
+
+    private async Task TestConnection()
+    {
+        if (_busy) return;
+        _busy = true;
+        _error = null;
+        _lastTestSucceeded = false;
+        try
+        {
+            _lastResult = await Tester.TestPostgresAsync(BuildConnectionString());
+            _lastTestSucceeded = _lastResult.IsSuccess;
+        }
+        catch (Exception ex)
+        {
+            _error = $"Connection test crashed: {ex.Message}";
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task SaveAndContinue()
+    {
+        if (_busy || !_lastTestSucceeded) return;
+        _busy = true;
+        _error = null;
+        try
+        {
+            await Writer.WritePostgresConnectionAsync(BuildConnectionString());
+            await Progress.SetCurrentStepAsync(SetupWizardStep.Database);
+            Navigation.NavigateTo("/setup/import");
+        }
+        catch (Exception ex)
+        {
+            _error = $"Failed to save the connection string: {ex.Message}";
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private static string AlertClass(ConnectionTestOutcome outcome) => outcome switch
+    {
+        ConnectionTestOutcome.Success => "alert-success",
+        ConnectionTestOutcome.InvalidConnectionString => "alert-warning",
+        ConnectionTestOutcome.NetworkOrAuthFailure => "alert-danger",
+        _ => "alert-secondary",
+    };
+}

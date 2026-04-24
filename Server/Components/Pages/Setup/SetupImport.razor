@@ -1,0 +1,284 @@
+@*
+    M1.3 — Wizard import step. Lets the operator paste a legacy
+    upstream connection string (SQLite path / SQL Server / Postgres),
+    detect the schema, optionally run a dry-run, then run the real
+    import which streams every row through the same MigrationRunner
+    the headless cmremote-migrate CLI uses.
+
+    The target connection string is the one the operator just saved
+    in M1.2 — read from IConfiguration so the wizard's UI and the
+    runtime DbContext cannot drift.
+
+    The step is *optional*: the operator can skip it (e.g. greenfield
+    install) and proceed straight to the next step.
+
+    See ROADMAP.md "M1 — First-boot setup wizard" step 3 / "M1.3".
+*@
+
+@page "/setup/import"
+@layout EmptyLayout
+@rendermode InteractiveServer
+
+@using Remotely.Server.Components.Layout
+@using Remotely.Server.Services
+@using Remotely.Server.Services.Setup
+@inject ISetupStateService SetupState
+@inject ISetupWizardProgressService Progress
+@inject ISetupImportService Import
+@inject IConfiguration Configuration
+@inject NavigationManager Navigation
+
+<PageTitle>CMRemote — Setup: Import existing database</PageTitle>
+
+@if (_alreadyCompleted)
+{
+    <div class="container py-5">
+        <h1 class="display-5">Setup already complete</h1>
+        <p class="lead">Return to the <a href="/">main panel</a>.</p>
+    </div>
+}
+else
+{
+    <div class="container py-5">
+        <nav aria-label="breadcrumb" class="mb-3">
+            <ol class="breadcrumb">
+                <li class="breadcrumb-item"><a href="/setup">Setup</a></li>
+                <li class="breadcrumb-item"><a href="/setup/preflight">Preflight</a></li>
+                <li class="breadcrumb-item"><a href="/setup/database">Database connection</a></li>
+                <li class="breadcrumb-item active" aria-current="page">Import existing database</li>
+            </ol>
+        </nav>
+
+        <h1 class="display-6">Import existing database <small class="text-muted">(optional)</small></h1>
+        <p class="text-muted">
+            If you are upgrading from the upstream Docker image, paste a connection
+            string that points at the legacy database below. Supported sources:
+            SQLite (<code>Data Source=...</code>), SQL Server (<code>Server=...</code>),
+            Postgres (<code>Host=...</code>). Greenfield installs can skip this step.
+        </p>
+
+        @if (!_targetConfigured)
+        {
+            <div class="alert alert-warning" role="alert">
+                <strong>No target database configured.</strong>
+                The previous step (<a href="/setup/database">Database connection</a>)
+                must be completed before an import can run.
+            </div>
+        }
+
+        <div class="mb-3">
+            <label for="src-conn" class="form-label">Source connection string</label>
+            <input id="src-conn" class="form-control" @bind="_sourceConnectionString"
+                   placeholder="Data Source=/data/Remotely.db" />
+            <small class="text-muted">
+                Reads only — the import never writes back to the source database.
+            </small>
+        </div>
+
+        <div class="d-flex gap-2 mb-3">
+            <button class="btn btn-outline-info"
+                    type="button"
+                    disabled="@(_busy || string.IsNullOrWhiteSpace(_sourceConnectionString))"
+                    @onclick="Detect">
+                @(_busyAction == "detect" ? "Detecting…" : "Detect")
+            </button>
+            <button class="btn btn-outline-primary"
+                    type="button"
+                    disabled="@(_busy || string.IsNullOrWhiteSpace(_sourceConnectionString))"
+                    @onclick="DryRun">
+                @(_busyAction == "dry" ? "Running dry-run…" : "Dry-run import")
+            </button>
+            <button class="btn btn-primary"
+                    type="button"
+                    disabled="@(_busy || !_targetConfigured || string.IsNullOrWhiteSpace(_sourceConnectionString))"
+                    @onclick="RunReal">
+                @(_busyAction == "real" ? "Importing…" : "Run import")
+            </button>
+            <button class="btn btn-outline-secondary"
+                    type="button"
+                    disabled="@_busy"
+                    @onclick="SkipAndContinue">
+                Skip and continue
+            </button>
+        </div>
+
+        @if (_lastReport is not null)
+        {
+            <h2 class="h5">Last @(_lastReport.DryRun ? "dry-run" : "import") report</h2>
+            <dl class="row">
+                <dt class="col-sm-3">Detected schema</dt>
+                <dd class="col-sm-9"><code>@_lastReport.DetectedSchemaVersion</code></dd>
+                <dt class="col-sm-3">Started</dt>
+                <dd class="col-sm-9">@_lastReport.StartedAtUtc.ToString("u")</dd>
+                <dt class="col-sm-3">Completed</dt>
+                <dd class="col-sm-9">@(_lastReport.CompletedAtUtc?.ToString("u") ?? "(in flight)")</dd>
+                <dt class="col-sm-3">Totals</dt>
+                <dd class="col-sm-9">
+                    Read @_lastReport.TotalRowsRead /
+                    Converted @_lastReport.TotalRowsConverted /
+                    Wrote @_lastReport.TotalRowsWritten /
+                    Skipped @_lastReport.TotalRowsSkipped /
+                    Failed @_lastReport.TotalRowsFailed
+                </dd>
+            </dl>
+
+            @if (_lastReport.Entities.Count > 0)
+            {
+                <table class="table table-sm">
+                    <thead>
+                        <tr>
+                            <th>Entity</th>
+                            <th class="text-end">Read</th>
+                            <th class="text-end">Converted</th>
+                            <th class="text-end">Wrote</th>
+                            <th class="text-end">Skipped</th>
+                            <th class="text-end">Failed</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var entity in _lastReport.Entities)
+                        {
+                            <tr>
+                                <td>@entity.EntityName</td>
+                                <td class="text-end">@entity.RowsRead</td>
+                                <td class="text-end">@entity.RowsConverted</td>
+                                <td class="text-end">@entity.RowsWritten</td>
+                                <td class="text-end">@entity.RowsSkipped</td>
+                                <td class="text-end">@entity.RowsFailed</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            }
+
+            @if (_lastReport.HadFatalErrors)
+            {
+                <div class="alert alert-danger" role="alert">
+                    <strong>Fatal errors:</strong>
+                    <ul class="mb-0">
+                        @foreach (var error in _lastReport.FatalErrors)
+                        {
+                            <li>@error</li>
+                        }
+                    </ul>
+                </div>
+            }
+            else if (!_lastReport.DryRun && _lastReport.TotalRowsFailed == 0)
+            {
+                <div class="alert alert-success" role="alert">
+                    Import complete with no row failures. You can re-run it at any
+                    time — every writer is idempotent on primary key — or click
+                    <em>Continue</em> below.
+                </div>
+            }
+
+            <div class="d-flex gap-2">
+                <button class="btn btn-primary"
+                        type="button"
+                        disabled="@_busy"
+                        @onclick="ContinueAfterImport">
+                    Continue
+                </button>
+            </div>
+        }
+
+        @if (!string.IsNullOrEmpty(_error))
+        {
+            <div class="alert alert-danger mt-3" role="alert">@_error</div>
+        }
+    </div>
+}
+
+@code {
+    private bool _alreadyCompleted;
+    private bool _busy;
+    private string _busyAction = string.Empty;
+    private string? _error;
+    private string _sourceConnectionString = string.Empty;
+    private WizardImportReport? _lastReport;
+    private bool _targetConfigured;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _alreadyCompleted = await SetupState.IsSetupCompletedAsync();
+        _targetConfigured = !string.IsNullOrWhiteSpace(
+            Configuration.GetConnectionString("PostgreSQL"));
+    }
+
+    private string? GetTargetConnectionString()
+        => Configuration.GetConnectionString("PostgreSQL");
+
+    private async Task Detect()
+    {
+        await RunAction("detect", async () =>
+        {
+            _lastReport = await Import.DetectSourceAsync(_sourceConnectionString);
+        });
+    }
+
+    private async Task DryRun()
+    {
+        await RunAction("dry", async () =>
+        {
+            // Dry-run does not write anything; we still need a non-empty
+            // target string so the runner's option validation passes.
+            // Use the configured one if present; otherwise, a safe
+            // placeholder.
+            var target = GetTargetConnectionString()
+                         ?? "Host=dryrun.invalid;Database=cmremote;Username=dryrun;";
+            _lastReport = await Import.RunImportAsync(
+                _sourceConnectionString, target, dryRun: true);
+        });
+    }
+
+    private async Task RunReal()
+    {
+        var target = GetTargetConnectionString();
+        if (string.IsNullOrWhiteSpace(target))
+        {
+            _error = "No target connection string configured. Please complete the database step first.";
+            return;
+        }
+
+        await RunAction("real", async () =>
+        {
+            _lastReport = await Import.RunImportAsync(
+                _sourceConnectionString, target!, dryRun: false);
+        });
+    }
+
+    private async Task RunAction(string actionTag, Func<Task> body)
+    {
+        if (_busy) return;
+        _busy = true;
+        _busyAction = actionTag;
+        _error = null;
+        try
+        {
+            await body();
+        }
+        catch (Exception ex)
+        {
+            _error = $"Action failed: {ex.Message}";
+        }
+        finally
+        {
+            _busy = false;
+            _busyAction = string.Empty;
+        }
+    }
+
+    private async Task SkipAndContinue()
+    {
+        if (_busy) return;
+        await Progress.SetCurrentStepAsync(SetupWizardStep.Import);
+        Navigation.NavigateTo("/setup/admin");
+    }
+
+    private async Task ContinueAfterImport()
+    {
+        if (_busy) return;
+        await Progress.SetCurrentStepAsync(SetupWizardStep.Import);
+        Navigation.NavigateTo("/setup/admin");
+    }
+}

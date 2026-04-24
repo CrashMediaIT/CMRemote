@@ -60,6 +60,29 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Shared\Shared.csproj" />
+    <!--
+      The first-boot setup wizard's M1.3 import step
+      (Server/Components/Pages/Setup/SetupImport.razor +
+      Services/Setup/SetupImportService.cs) binds the same
+      MigrationRunner the headless `cmremote-migrate` CLI uses, so the
+      wizard and CLI cannot drift. ROADMAP.md "M1 — First-boot setup
+      wizard" / "M1.3".
+    -->
+    <!--
+      Aliased so the `Remotely.Migration` parent namespace introduced
+      by Migration.Legacy does not shadow
+      `Microsoft.EntityFrameworkCore.Migrations.Migration` inside the
+      auto-generated `Remotely.Server.Migrations.*` EF migration
+      classes (the bare `: Migration` base-class reference would
+      otherwise resolve to the now-existing `Remotely.Migration`
+      namespace and fail with CS0118). Code in Server that needs
+      Migration.Legacy types declares
+      `extern alias MigrationLegacy;` and reaches into them through
+      the `MigrationLegacy::` qualifier.
+    -->
+    <ProjectReference Include="..\Migration.Legacy\Migration.Legacy.csproj">
+      <Aliases>MigrationLegacy</Aliases>
+    </ProjectReference>
   </ItemGroup>
 
 </Project>
