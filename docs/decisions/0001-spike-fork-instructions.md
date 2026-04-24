@@ -58,6 +58,16 @@ Set-Location $Root
 git clone https://github.com/CrashMediaIT/webrtc-cmremote.git
 Set-Location .\webrtc-cmremote
 
+# Set the commit identity for this clone. Required because a fresh
+# Windows / PowerShell setup has no global `user.email` / `user.name`,
+# and `git commit` will otherwise fail with
+# "Author identity unknown … unable to auto-detect email address".
+# Use the email + name that match your GitHub account so commits are
+# attributed correctly. Drop `--local` (or use `--global`) if you want
+# the same identity reused across every repo on this machine.
+git config --local user.email "you@example.com"   # replace with your GitHub email
+git config --local user.name  "Your Name"         # replace with your GitHub name
+
 git remote add upstream https://github.com/webrtc-rs/dtls.git
 git fetch upstream --tags
 git checkout -b cmremote/v0.5.4-aws-lc-rs v0.5.4
