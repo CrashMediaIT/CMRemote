@@ -37,11 +37,13 @@ This roadmap is therefore organised in three bands:
 
 ## Band 1 — Rewrite & cut-over *(top priority)*
 
-### Current focus *(end of slice R1b / S4 / **M1 milestone complete (M1.1 + M1.2 + M1.3 + M1.4 + M1.5)** + M2 complete + **M3 service + orchestrator landed** + **M4 admin dashboard shipped** — Apr 2026)*
+### Current focus *(end of slice **R2** / S4 / **M1 milestone complete (M1.1 + M1.2 + M1.3 + M1.4 + M1.5)** + M2 complete + **M3 service + orchestrator landed** + **M4 admin dashboard shipped** — Apr 2026)*
 
 Module 0 (wire-protocol spec + JSON test-vector corpus), slice **R1a**
 (`cmremote-wire` JSON round-trip + redacting `Debug`), slice **R1b**
-(MessagePack codec + byte-stable corpus round-trip), the first
+(MessagePack codec + byte-stable corpus round-trip), slice **R2**
+(WebSocket connection / SignalR handshake / 15 s ping + 30 s
+idle-timeout heartbeat / jittered exponential reconnect), the first
 security-gate items **S1** (`SECURITY.md` + coordinated-disclosure
 policy), **S2** (supply-chain CI via `cargo-deny`, `cargo-audit`,
 `dependency-review`, OSSF Scorecard, Dependabot), **S3**
@@ -154,10 +156,10 @@ a follow-up integration job tracked separately.
 
 The next milestones are now:
 
-1. **R2 — Connection / heartbeat loop** (Rust agent connects to a dev
-   server over WebSocket and reconnects cleanly across restarts). Now
-   unblocked — S4's fuzz + proptest coverage gates R2's new parser
-   surfaces on the way in.
+1. **R2a — Hub dispatch surface** (turn the inbound record stream
+   from slice R2 into typed `HubInvocation` / `HubCompletion` /
+   `HubClose` calls; wire the .NET conformance runner against the
+   shared `docs/wire-protocol-vectors/` corpus).
 2. **M3 dispatcher + ~~M4 dashboard~~.** The M3 schema, state machine, and
    `AgentUpgradeOrchestrator` `IHostedService` have shipped (see the
    "M3 — Background agent-upgrade pipeline" section below). The
@@ -1072,7 +1074,7 @@ agent and the Rust agent can run side-by-side until parity.
 | **R0 — Workspace scaffold** ✅ | `agent-rs/Cargo.toml` workspace; crates `cmremote-wire`, `cmremote-platform`, `cmremote-agent`; structured logging (`tracing`); config loader for `ConnectionInfo.json` + CLI args; signal handling; CI (`cargo fmt`, `cargo clippy -D warnings`, `cargo test`). No network I/O yet. | Workspace builds clean on stable Rust. CI green. Provenance header on every file. |
 | **R1a — Wire types + JSON test vectors** ✅ *(shipped in PR #5)* | `cmremote-wire`: `ConnectionInfo`, hub envelopes (`HubInvocation` / `HubCompletion` / `HubPing` / `HubClose`), JSON round-trip, and a hand-written redacting `Debug` for `ConnectionInfo` so the verification token cannot leak via logs or panics. Corpus consumption via `tests/vectors.rs` (positive + negative connection-info, handshake, envelope). | All JSON vectors round-trip byte-for-byte; `cargo test` green on all three OSes. |
 | **R1b — MessagePack codec** ✅ | `rmp-serde` added to `cmremote-wire` with public `to_msgpack` / `from_msgpack` helpers funnelled through `WireError`. Every JSON vector in the corpus also round-trips byte-stably through MessagePack (`connection_info_valid_vectors_round_trip_through_msgpack`, `envelope_vectors_round_trip_through_msgpack`). Shipped alongside the Track S / S1–S2 security gates so the `cargo-deny` / `cargo-audit` / `dependency-review` stack caught the new dependency on the way in. Track S / S4 (fuzz targets + `proptest` suite + nightly workflow) followed in a separate PR and closed the slice R1 parser-hardening work. | All vectors round-trip byte-for-byte across both encodings; `cargo deny check` green on the new dep. |
-| **R2 — Connection / heartbeat loop** | WebSocket transport (`tokio-tungstenite`) speaking the SignalR JSON/MessagePack hub protocol re-derived from spec; reconnect with jittered backoff; heartbeat; graceful shutdown. | Agent stays connected to a CMRemote dev server for ≥ 24 h; reconnects across forced server restarts. |
+| **R2 — Connection / heartbeat loop** ✅ | WebSocket transport (`tokio-tungstenite` over `rustls` + `aws-lc-rs`, no `ring`) speaking the SignalR JSON/MessagePack hub protocol re-derived from spec; `wss://`-only floor enforced at request build time; `Authorization: Bearer <OrganizationToken>` + `X-Device-Id` + `X-Protocol-Version` + optional `X-Server-Verification` headers attached on every upgrade; `Sec-WebSocket-Protocol` negotiation pinned to `json` / `messagepack`; SignalR handshake (typed `HandshakeRequest` / `HandshakeResponse`) over the new `0x1E`-record / varint-length frame readers shared with the .NET conformance runner; 15 s ping + 30 s idle-timeout heartbeat with `1011` close + reconnect; jittered exponential backoff (base 1 s → cap 60 s, full jitter, reset on successful handshake); top-level `transport::run_until_shutdown` driver wired into `runtime::run` with cooperative shutdown via `tokio::sync::watch`. Coverage: 37 unit tests across `transport::backoff` / `transport::connect` / `transport::session` (URL builder, header redaction, `wss://` floor, sub-protocol negotiation, framing, heartbeat shape, jitter bounds + reset semantics) plus 5 end-to-end loopback integration tests in `tests/transport_loopback.rs` (handshake round-trip, inbound record + server-Close → reconnect, local shutdown, typed handshake-rejection path, ping/idle-window relationship). | `cargo test --workspace` green; `cargo clippy --workspace --all-targets -- -D warnings` clean; `cargo deny check` green on the new TLS dependency tree. |
 | **R3 — Device information** | Cross-platform device-info collector behind `cmremote-platform::DeviceInfoProvider`. Windows uses `windows-rs`; Linux reads `/proc` + `/etc/os-release`; macOS uses `sysctl`. Reports back over the hub. | Server displays a Rust-agent device with parity fields vs. .NET agent. |
 | **R4 — Process / script execution** | `argv`-only command execution (no shell). Per-OS shells: `pwsh`, `cmd`, `bash`, `zsh`. Output streamed back as chunked hub messages. **In-process PowerShell SDK is removed.** | All existing script tests pass against the Rust agent. |
 | **R5 — Installed-applications provider** | Rust impls of the PR A `IInstalledApplicationsProvider` contract: Windows registry (`HKLM\…\Uninstall` + Wow6432Node) + AppX (via `Get-AppxPackage` shell-out for now). Linux/macOS: `NotSupported` stub matching the .NET behaviour. | Per-device snapshot identical to .NET-agent output for a reference Windows VM. |

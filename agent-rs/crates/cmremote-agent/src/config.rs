@@ -141,6 +141,7 @@ mod tests {
             host: Some("https://from-file".into()),
             organization_id: Some("file-org".into()),
             server_verification_token: None,
+            organization_token: None,
         };
         let cli = CliArgs {
             host: Some("https://from-cli".into()),

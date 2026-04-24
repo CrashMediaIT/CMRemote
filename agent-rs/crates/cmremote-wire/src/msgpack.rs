@@ -54,6 +54,7 @@ mod tests {
             host: Some("https://example.com".into()),
             organization_id: Some("org".into()),
             server_verification_token: Some("tok".into()),
+            organization_token: Some("ot".into()),
         };
         let bytes = to_msgpack(&info).expect("encode");
         let back: ConnectionInfo = from_msgpack(&bytes).expect("decode");

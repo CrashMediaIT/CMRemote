@@ -7,7 +7,8 @@
 use std::path::{Path, PathBuf};
 
 use cmremote_wire::{
-    from_msgpack, to_msgpack, ConnectionInfo, HubClose, HubCompletion, HubInvocation, HubPing,
+    from_msgpack, to_msgpack, ConnectionInfo, HandshakeRequest, HandshakeResponse, HubClose,
+    HubCompletion, HubInvocation, HubPing, HubProtocol,
 };
 
 /// Walk up from the crate's manifest directory until we find the
@@ -93,9 +94,18 @@ fn connection_info_invalid_vectors_are_rejected() {
 #[test]
 fn handshake_request_round_trips() {
     let raw = read(&vectors_root().join("handshake").join("agent-request.json"));
+    // Generic-shape sanity check (preserves the previous assertion).
     let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
     assert_eq!(v["protocol"], "json");
     assert_eq!(v["version"], 1);
+
+    // Typed round-trip pins the wire shape to the public Rust type
+    // every transport now consumes (slice R2).
+    let req: HandshakeRequest = serde_json::from_str(&raw).unwrap();
+    assert_eq!(req.protocol, HubProtocol::Json);
+    assert_eq!(req.version, 1);
+    let re = serde_json::to_string(&req).unwrap();
+    assert!(re.contains("\"protocol\":\"json\""));
 }
 
 #[test]
@@ -104,6 +114,10 @@ fn handshake_server_ok_is_empty_object() {
     let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
     assert!(v.is_object());
     assert_eq!(v.as_object().unwrap().len(), 0);
+
+    let resp: HandshakeResponse = serde_json::from_str(&raw).unwrap();
+    assert!(resp.is_ok());
+    assert_eq!(serde_json::to_string(&resp).unwrap(), "{}");
 }
 
 #[test]
@@ -111,6 +125,10 @@ fn handshake_server_error_carries_error_field() {
     let raw = read(&vectors_root().join("handshake").join("server-error.json"));
     let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
     assert!(v["error"].is_string());
+
+    let resp: HandshakeResponse = serde_json::from_str(&raw).unwrap();
+    assert!(!resp.is_ok());
+    assert_eq!(resp.error.as_deref(), Some("protocol_version_unsupported"));
 }
 
 #[test]

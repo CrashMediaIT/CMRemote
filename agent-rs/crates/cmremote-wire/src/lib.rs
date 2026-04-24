@@ -18,9 +18,16 @@
 pub mod connection_info;
 pub mod envelope;
 pub mod error;
+pub mod framing;
+pub mod handshake;
 pub mod msgpack;
 
 pub use connection_info::ConnectionInfo;
 pub use envelope::{HubClose, HubCompletion, HubInvocation, HubMessageKind, HubPing};
 pub use error::WireError;
+pub use framing::{
+    write_json_record, write_msgpack_record, FramingError, JsonFrameReader, MsgPackFrameReader,
+    MAX_RECORD_BYTES, RECORD_SEPARATOR,
+};
+pub use handshake::{HandshakeRequest, HandshakeResponse, HubProtocol};
 pub use msgpack::{from_msgpack, to_msgpack};

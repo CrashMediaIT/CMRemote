@@ -56,14 +56,24 @@ fn host_url() -> impl Strategy<Value = Option<String>> {
 }
 
 fn arb_connection_info() -> impl Strategy<Value = ConnectionInfo> {
-    (ascii_token(), host_url(), opt_ascii(), opt_ascii()).prop_map(
-        |(device_id, host, organization_id, server_verification_token)| ConnectionInfo {
-            device_id,
-            host,
-            organization_id,
-            server_verification_token,
-        },
+    (
+        ascii_token(),
+        host_url(),
+        opt_ascii(),
+        opt_ascii(),
+        opt_ascii(),
     )
+        .prop_map(
+            |(device_id, host, organization_id, server_verification_token, organization_token)| {
+                ConnectionInfo {
+                    device_id,
+                    host,
+                    organization_id,
+                    server_verification_token,
+                    organization_token,
+                }
+            },
+        )
 }
 
 /// A JSON value we are prepared to ship as an invocation argument or
