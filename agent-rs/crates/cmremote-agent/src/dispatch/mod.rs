@@ -125,7 +125,10 @@ pub enum MethodName {
     RequestInstalledApplications,
     /// Server asks the agent to uninstall an application.
     UninstallApplication,
-    /// Stubs — not implemented until R6+.
+    /// Server asks the agent to install or uninstall a package
+    /// (slice R6 — wired to the package-provider composite; the
+    /// concrete fetch + install handlers land alongside the
+    /// signed-build pipeline in slice R8).
     InstallPackage,
     /// Stub — desktop session (R7).
     ChangeWindowsSession,

@@ -22,6 +22,7 @@ pub mod error;
 pub mod framing;
 pub mod handshake;
 pub mod msgpack;
+pub mod package;
 pub mod script;
 
 pub use connection_info::ConnectionInfo;
@@ -34,4 +35,7 @@ pub use framing::{
 };
 pub use handshake::{HandshakeRequest, HandshakeResponse, HubProtocol};
 pub use msgpack::{from_msgpack, to_msgpack};
+pub use package::{
+    PackageInstallAction, PackageInstallRequest, PackageInstallResult, PackageProvider,
+};
 pub use script::{ExecuteCommandArgs, ScriptResult, ScriptingShell};
