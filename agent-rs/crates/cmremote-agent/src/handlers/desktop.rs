@@ -110,6 +110,17 @@ mod tests {
     use cmremote_wire::HubMessageKind;
     use serde_json::json;
 
+    const VALID_SESSION_ID: &str = "11111111-2222-3333-4444-555555555555";
+    const VALID_ORG_ID: &str = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+
+    fn provider() -> NotSupportedDesktopTransport {
+        // Construct with the same org id every fixture uses so the
+        // slice R7.b cross-org guard accepts every valid request and
+        // exposes the underlying not-supported failure these tests
+        // are pinning.
+        NotSupportedDesktopTransport::new(HostOs::Linux, Some(VALID_ORG_ID.into()))
+    }
+
     fn invocation(target: &str, args: Vec<Value>) -> HubInvocation {
         HubInvocation {
             kind: HubMessageKind::Invocation as u8,
@@ -121,20 +132,20 @@ mod tests {
 
     #[tokio::test]
     async fn remote_control_routes_to_provider_and_serialises_result() {
-        let provider = NotSupportedDesktopTransport::new(HostOs::Linux);
+        let provider = provider();
         let inv = invocation(
             "RemoteControl",
             vec![json!({
-                "SessionId": "sess-1",
+                "SessionId": VALID_SESSION_ID,
                 "AccessKey": "ak",
                 "UserConnectionId": "v",
                 "RequesterName": "Alice",
                 "OrgName": "Acme",
-                "OrgId": "org",
+                "OrgId": VALID_ORG_ID,
             })],
         );
         let v = handle_remote_control(&inv, &provider).await.unwrap();
-        assert_eq!(v["SessionId"], "sess-1");
+        assert_eq!(v["SessionId"], VALID_SESSION_ID);
         assert_eq!(v["Success"], false);
         let msg = v["ErrorMessage"].as_str().unwrap();
         assert!(msg.contains("RemoteControl"), "{msg}");
@@ -146,50 +157,50 @@ mod tests {
 
     #[tokio::test]
     async fn restart_screen_caster_routes_and_includes_session_id() {
-        let provider = NotSupportedDesktopTransport::new(HostOs::Linux);
+        let provider = provider();
         let inv = invocation(
             "RestartScreenCaster",
             vec![json!({
                 "ViewerIds": ["v1", "v2"],
-                "SessionId": "sess-2",
+                "SessionId": VALID_SESSION_ID,
                 "AccessKey": "ak",
                 "UserConnectionId": "u",
                 "RequesterName": "r",
                 "OrgName": "o",
-                "OrgId": "i",
+                "OrgId": VALID_ORG_ID,
             })],
         );
         let v = handle_restart_screen_caster(&inv, &provider).await.unwrap();
-        assert_eq!(v["SessionId"], "sess-2");
+        assert_eq!(v["SessionId"], VALID_SESSION_ID);
         assert_eq!(v["Success"], false);
     }
 
     #[tokio::test]
     async fn change_windows_session_carries_target_session_id() {
-        let provider = NotSupportedDesktopTransport::new(HostOs::Linux);
+        let provider = provider();
         let inv = invocation(
             "ChangeWindowsSession",
             vec![json!({
                 "ViewerConnectionId": "v",
-                "SessionId": "sess-3",
+                "SessionId": VALID_SESSION_ID,
                 "AccessKey": "ak",
                 "UserConnectionId": "u",
                 "RequesterName": "r",
                 "OrgName": "o",
-                "OrgId": "i",
+                "OrgId": VALID_ORG_ID,
                 "TargetSessionId": 7,
             })],
         );
         let v = handle_change_windows_session(&inv, &provider)
             .await
             .unwrap();
-        assert_eq!(v["SessionId"], "sess-3");
+        assert_eq!(v["SessionId"], VALID_SESSION_ID);
         assert_eq!(v["Success"], false);
     }
 
     #[tokio::test]
     async fn invoke_ctrl_alt_del_takes_no_arguments() {
-        let provider = NotSupportedDesktopTransport::new(HostOs::Linux);
+        let provider = provider();
         let inv = invocation("InvokeCtrlAltDel", vec![]);
         let v = handle_invoke_ctrl_alt_del(&inv, &provider).await.unwrap();
         assert_eq!(v["Success"], false);
@@ -203,7 +214,7 @@ mod tests {
 
     #[tokio::test]
     async fn malformed_arguments_become_structured_failure() {
-        let provider = NotSupportedDesktopTransport::new(HostOs::Linux);
+        let provider = provider();
         // SessionId is required as a string — pass a number instead.
         let inv = invocation(
             "RemoteControl",
@@ -213,7 +224,7 @@ mod tests {
                 "UserConnectionId": "u",
                 "RequesterName": "r",
                 "OrgName": "o",
-                "OrgId": "i",
+                "OrgId": VALID_ORG_ID,
             })],
         );
         let v = handle_remote_control(&inv, &provider).await.unwrap();
@@ -225,15 +236,41 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn missing_arguments_default_to_empty_request() {
+    async fn missing_arguments_are_refused_by_the_security_guards() {
         // The .NET hub never sends an empty arguments array for
-        // RemoteControl, but a malformed peer might. Default values
-        // mean we synthesise a `success=false` result with the empty
-        // session id and the not-supported message — never panic.
-        let provider = NotSupportedDesktopTransport::new(HostOs::Linux);
+        // RemoteControl, but a malformed peer might. The default
+        // request has every field empty; the slice R7.b guards
+        // refuse it on the session-id format check (empty is not a
+        // canonical UUID), surfacing a structured failure with an
+        // empty session id rather than panicking.
+        let provider = provider();
         let inv = invocation("RemoteControl", vec![]);
         let v = handle_remote_control(&inv, &provider).await.unwrap();
         assert_eq!(v["Success"], false);
         assert_eq!(v["SessionId"], "");
+        assert!(v["ErrorMessage"].as_str().unwrap().contains("session_id"));
+    }
+
+    #[tokio::test]
+    async fn cross_org_remote_control_is_refused_at_the_handler() {
+        // Hub invocation carrying a foreign org id reaches the
+        // handler unchanged; the provider's guard refuses it before
+        // any "not supported on Linux" branch could run.
+        let provider = provider();
+        let inv = invocation(
+            "RemoteControl",
+            vec![json!({
+                "SessionId": VALID_SESSION_ID,
+                "AccessKey": "ak",
+                "UserConnectionId": "v",
+                "RequesterName": "Alice",
+                "OrgName": "Acme",
+                "OrgId": "ffffffff-ffff-ffff-ffff-ffffffffffff",
+            })],
+        );
+        let v = handle_remote_control(&inv, &provider).await.unwrap();
+        assert_eq!(v["Success"], false);
+        let msg = v["ErrorMessage"].as_str().unwrap();
+        assert!(msg.contains("organisation"), "{msg}");
     }
 }

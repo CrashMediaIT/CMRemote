@@ -106,10 +106,15 @@ pub async fn run(cli: CliArgs) -> Result<(), RuntimeError> {
 
     // Slice R7 — desktop transport: until the WebRTC capture / encode
     // driver lands, every request resolves to a structured "not
-    // supported on <OS>" failure. Concrete drivers will register here
+    // supported on <OS>" failure. The stub is constructed with the
+    // agent's own organisation id so the slice R7.b cross-org guard
+    // refuses any hub invocation whose `org_id` does not match this
+    // device's organisation. Concrete drivers will register here
     // alongside the package providers; the dispatch surface and
     // wire-level result shape are already in place.
-    let desktop = Arc::new(NotSupportedDesktopTransport::for_current_host());
+    let desktop = Arc::new(NotSupportedDesktopTransport::for_current_host(
+        info.organization_id.clone(),
+    ));
 
     let handlers = Arc::new(AgentHandlers {
         connection_info: info.clone(),
