@@ -1,7 +1,7 @@
 # ADR 0001 — Crypto provider for the agent-side WebRTC stack
 
-- **Status:** Proposed — awaiting maintainer decision
-- **Date:** 2026-04-24
+- **Status:** Accepted — Option B (fork `webrtc` onto `aws-lc-rs`)
+- **Date:** 2026-04-24 (proposed); 2026-04-24 (accepted)
 - **Slice:** R7.f (precedes R7's "remaining work" item 1)
 - **Deciders:** CMRemote maintainers, security reviewers
 - **Owners of the answer:** Whoever flips, or refuses to flip, the
@@ -36,11 +36,12 @@ in their DTLS / SRTP layer. Continuing to ship a desktop-transport
 *stub* (slice R7's current state) is fine; shipping a real driver
 forces a decision.
 
-This ADR documents the three options the maintainers can pick from,
-the questions that have to be answered before any of them is
-actionable, and the **non-decision** that this ADR itself represents.
-The `ring` ban stays in place; no `Cargo.toml` is touched in this
-slice.
+This ADR documents the three options the maintainers considered,
+records the answers to the questions that gated the decision, and
+captures the chosen direction: **Option B — fork `webrtc` onto
+`aws-lc-rs`.** The `ring` ban stays in place; no `Cargo.toml` and
+no `deny.toml` is touched in this slice. Subsequent slices land
+the feasibility spike and (if it succeeds) the driver itself.
 
 ## Decision drivers
 
@@ -190,72 +191,163 @@ data channel for input, one video track) on top of:
 
 ## Decision
 
-**No decision yet.** This ADR is the artifact slice R7.f produces;
-it deliberately does not pick a winner. The
-[`agent-rs/deny.toml`](../../agent-rs/deny.toml) ban on `ring` stays
-in place. Subsequent slices (the actual WebRTC driver) cannot
-proceed until the maintainers answer the questions in the next
-section and update this ADR's *Status* line.
+**Accepted — Option B: fork the upstream `webrtc` crate (and its
+`webrtc-dtls` / `webrtc-srtp` sub-crates) onto `aws-lc-rs`.**
 
-## Questions the maintainers must answer before any option is actionable
+The agent will continue to ship exactly one crypto provider
+(`aws-lc-rs`). The
+[`agent-rs/deny.toml`](../../agent-rs/deny.toml) ban on `ring`
+**stays in place** — that is the whole point of Option B. The
+WebRTC driver lands behind the existing
+[`DesktopTransportProvider`](../../agent-rs/crates/cmremote-platform/src/desktop/mod.rs)
+seam introduced in slices R7.a–R7.i, with the forked `webrtc`
+crate consumed via a `[patch.crates-io]` entry pointing at a
+pinned git ref in a CMRemote-org-owned repository, allow-listed
+under `[sources].allow-git` in `deny.toml`.
 
-1. **Crypto-provider single-source rule.** Is the project willing
-   to run two crypto providers in one process (Option A), or is
-   "one provider per process" a hard constraint (rules out Option
-   A, forces Option B or C)? This is a Track S call.
-2. **Licence policy on `ring`.** If Option A is picked: do we
-   widen `[licenses].allow` to cover `ring`'s notice, or add it as
-   an explicit `[licenses].exceptions` entry with a justification?
-   Either way the diff in `deny.toml` needs a CODEOWNERS sign-off.
-3. **Fork maintenance commitment.** If Option B is picked: who
-   owns the fork? What's the rebase cadence (per upstream release,
-   per CVE, both)? Where does the fork live (a CMRemote-org repo,
-   a fork in `agent-rs/vendor/`, a `[patch.crates-io]` entry
-   pointing at a git ref)?
-4. **Crypto review for bespoke SRTP.** If Option C is picked:
-   which external reviewer signs off on the SRTP transformer
-   before it ships? What does the threat model
-   ([`docs/threat-model.md`](../threat-model.md)) require us to
-   add about replay windows, rekeying cadence, and key-zeroisation?
-5. **Cross-compile coverage.** Does the chosen option still build
-   on all five targets in
-   [`agent-rs/deny.toml`](../../agent-rs/deny.toml#L22-L28)? In
-   particular, `ring`'s assembler dependency on Windows MSVC and
-   `aws-lc-rs`'s C-toolchain dependency on `aarch64-unknown-linux-gnu`
-   both have a history of rough edges; the PR that flips the
-   policy bit must include a CI run that actually builds for all
-   five.
-6. **Reversibility plan.** Whatever option we pick, what is the
-   exit strategy? Concretely: if option A is chosen and `ring`
-   becomes unmaintained or relicensed in five years, what is the
-   migration path? The plan should be one paragraph in *this* ADR
-   before we ship a driver against the chosen option.
-7. **Cut-over coordination.** The R7 acceptance bar
-   ([ROADMAP.md](../../ROADMAP.md)'s R7 row) requires the .NET
-   `IDesktopHubClient` side and the agent side to land together.
-   Which option lets the .NET side make progress against a stable
-   wire contract first? Slice **R7.g** (signalling DTOs and
-   provider hooks, no WebRTC dependency) is designed to be the
-   stable contract regardless of which option lands here, so
-   answering this question is not blocking R7.g — but it *is*
-   blocking the actual driver.
+### Decision rationale
+
+Option A was rejected on structural grounds, not cost grounds.
+Admitting `ring` would reverse a deliberate Track S decision
+(driver 1), introduce a non-SPDX-clean licence to the dependency
+graph (driver 4), and put two crypto providers in one process —
+permanently doubling the audit surface and complicating CVE
+triage. Reversibility (driver 6) is the killer: once operators
+have negotiated sessions against a `ring`-backed driver, swapping
+crypto providers is a coordinated migration, not a `Cargo.toml`
+edit. Picking the option with the worst exit cost for short-term
+velocity is the wrong trade for a product that is not yet in
+production.
+
+Option C was rejected on risk and schedule grounds. A bespoke
+SRTP transformer on top of `aws-lc-rs` AEAD primitives is exactly
+the class of code where replay-window handling, rekeying cadence,
+SDES-vs-DTLS-SRTP key derivation, and key zeroisation are easy to
+get subtly wrong (driver 5; see also Question 4 below). Interop
+debugging against the .NET viewer's browser-backed WebRTC stack
+would be a long-tail effort measured in quarters, pushing the R7
+acceptance bar (latency / FPS parity with the .NET Desktop client)
+out far past what the roadmap can absorb. Option C remains the
+documented fallback **iff** the Option B feasibility spike (see
+*Consequences* below) shows that the `ring` → `aws-lc-rs` symbol
+mapping is not tractable.
+
+Option B was chosen because its costs — a fork to rebase per
+upstream release, plus a one-time symbol-mapping spike — are
+real but **bounded and visible**, and because upstream `webrtc`
+is structured around the `dtls::Conn` / `srtp::Session` traits
+that make backend swaps mostly mechanical. Track S's
+single-crypto-provider posture survives intact (drivers 1, 4),
+the `deny.toml` ban stays authoritative without a licence
+carve-out (driver 4), CVE blast radius shrinks (driver 1), and
+the driver lands behind seams the slices R7.a–R7.i already
+shipped (driver 6).
+
+## Maintainer questions — answers of record
+
+The questions below were the gating items in the *Proposed*
+revision of this ADR. They are answered here as part of accepting
+Option B.
+
+1. **Crypto-provider single-source rule.** *One provider per
+   process is a hard constraint.* The agent ships `aws-lc-rs`
+   only. This is what disqualifies Option A; it is also what
+   forces the fork in Option B rather than consuming upstream
+   `webrtc` directly.
+2. **Licence policy on `ring`.** *No change to
+   `[licenses].allow` or `[licenses].exceptions`.* Because
+   Option B keeps `ring` out of the dependency graph entirely,
+   the existing licence allow-list remains authoritative as
+   written. If the fork ever pulls `ring` back in transitively
+   that is a fork bug, not a policy change, and `cargo deny`
+   will surface it via the existing `[bans].deny` entry.
+3. **Fork maintenance commitment.** *Owner:* the CMRemote
+   maintainers (CODEOWNERS for `agent-rs/`). *Location:* a
+   dedicated `CrashMediaIT/webrtc-cmremote` repository in the
+   CMRemote GitHub organisation, consumed via a
+   `[patch.crates-io]` entry in
+   [`agent-rs/Cargo.toml`](../../agent-rs/Cargo.toml) that pins
+   a tagged git ref, with the host added to
+   `[sources].allow-git` in `deny.toml`. *Rebase cadence:* on
+   every upstream `webrtc` minor release **and** on every
+   advisory affecting `aws-lc-rs` or the WebRTC RFC stack
+   (RFC 5763 / 5764 / 6347 / 6904 / 8261), whichever comes
+   first. A vendored copy under `agent-rs/vendor/` was
+   considered and rejected — it muddies provenance and makes
+   downstream consumption of upstream tags awkward.
+4. **Crypto review for bespoke SRTP.** *Not applicable to
+   Option B.* The fork inherits upstream `webrtc`'s SRTP /
+   DTLS state machines verbatim; only the AEAD / curve / hash
+   primitives are routed through `aws-lc-rs`. The crypto-review
+   commitment in this question only re-enters scope if we fall
+   back to Option C; in that case the requirement stands as
+   originally written and the threat model
+   ([`docs/threat-model.md`](../threat-model.md)) must be
+   amended before any bespoke-SRTP code ships.
+5. **Cross-compile coverage.** *All five targets in
+   [`agent-rs/deny.toml`](../../agent-rs/deny.toml#L22-L28) must
+   build green on the fork before the driver PR merges.* The
+   highest-risk leg is `aws-lc-rs` on
+   `aarch64-unknown-linux-gnu` (C-toolchain dependency); the
+   feasibility spike (see *Consequences*) is responsible for
+   demonstrating it. The PR that introduces the
+   `[patch.crates-io]` entry must include a CI run that actually
+   builds for all five triples; "it builds on x86_64" is not
+   sufficient evidence.
+6. **Reversibility plan.** *Exit path:* if upstream `webrtc`
+   ever grows a runtime-pluggable crypto backend (mirroring the
+   journey rustls took with `aws-lc-rs`), retire the fork and
+   consume upstream directly with the `aws-lc-rs` backend
+   selected. *Failure path:* if the fork becomes infeasible to
+   maintain (e.g. upstream restructures around a `ring`-only
+   primitive with no clean shim), this ADR is reopened and
+   Option C re-evaluated against the threat budget at that time.
+   In neither case does the agent fall back to Option A without
+   a fresh Track S decision and a new ADR.
+7. **Cut-over coordination.** *The .NET `IDesktopHubClient`
+   side proceeds against the slice R7.g signalling DTOs and
+   provider hooks, which are stable wire contract regardless of
+   the agent-side crypto choice.* Option B does not change R7.g's
+   shape; the .NET side is unblocked today. Agent-side driver
+   work is gated on the feasibility spike below; the R7
+   acceptance bar (latency / FPS parity) is met when both sides
+   land together against a stable build of the fork.
 
 ## Consequences
 
-- **Until this ADR is decided:** the
+- **Immediately (this ADR):** no `Cargo.toml`, no `deny.toml`,
+  and no source code under `agent-rs/` is changed. The
   [`NotSupportedDesktopTransport`](../../agent-rs/crates/cmremote-platform/src/desktop/mod.rs)
-  stub stays the only registered provider; every desktop hub
-  invocation continues to surface as a structured "not supported on
-  `<host_os>`" failure that the operator UI already handles.
-  The slice R7.b guards ensure that even in the stub state, hostile
-  requests are refused with a precise message.
-- **When this ADR is decided:** the maintainer who flips the bit
-  updates the *Status* line above to *Accepted — Option <X>*,
-  records the answers to the questions in the section above as
-  in-line edits to this file, and opens the follow-up PR that
-  changes [`agent-rs/deny.toml`](../../agent-rs/deny.toml) and adds
-  the chosen WebRTC crate (or fork). That PR — not this one — is
-  where the actual policy bit flips.
+  stub remains the only registered provider; every desktop hub
+  invocation continues to surface as a structured "not supported
+  on `<host_os>`" failure that the operator UI already handles,
+  and the slice R7.b guards continue to refuse hostile requests
+  with a precise message.
+- **Next step (gating the driver PR):** a **time-boxed
+  feasibility spike** — budgeted at roughly two engineer-weeks —
+  that enumerates every `ring` symbol called from
+  `webrtc-dtls` and `webrtc-srtp` and matches each to an
+  `aws-lc-rs` equivalent (or to a small shim). The spike output
+  is a short report appended to this ADR (or linked from it) and
+  a green CI run on all five target triples. If the spike
+  uncovers gaps that cannot be shimmed without re-implementing
+  cryptographic primitives, this ADR is reopened and Option C
+  is re-evaluated.
+- **After the spike succeeds:** a follow-up PR creates the
+  `CrashMediaIT/webrtc-cmremote` repository, adds the
+  `[patch.crates-io]` entry and the `[sources].allow-git`
+  allow-list entry to
+  [`agent-rs/deny.toml`](../../agent-rs/deny.toml), and lands the
+  WebRTC driver behind the existing
+  [`DesktopTransportProvider`](../../agent-rs/crates/cmremote-platform/src/desktop/mod.rs)
+  seam. The `[bans].deny` entry for `ring` is **not** touched in
+  that PR — its continued presence is the load-bearing assertion
+  that Option B is still being honoured.
+- **Ongoing:** every upstream `webrtc` minor release triggers a
+  fork-rebase task owned by the `agent-rs/` CODEOWNERS, with the
+  rebased fork re-pinned via the `[patch.crates-io]` git ref.
+  CVE notifications affecting `aws-lc-rs` or the relevant RFCs
+  trigger an out-of-band rebase regardless of upstream cadence.
 
 ## References
 
