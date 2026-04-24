@@ -335,7 +335,12 @@ Option B.
   is re-evaluated.
   - **Status (2026-04-24):** Spike **approved to proceed** — see
     [0001-spike-approval.md](0001-spike-approval.md) for gate #1
-    sign-off and deliverables.
+    sign-off and deliverables. Deliverable #1 (symbol mapping) is
+    landed at [0001-spike-report.md](0001-spike-report.md) with a
+    **GO** recommendation; deliverables #2 (PoC fork + green CI on
+    all five triples) and #3 (gate #2 acceptance) are tracked
+    out-of-band on the to-be-created `CrashMediaIT/webrtc-cmremote`
+    repository.
 - **After the spike succeeds:** a follow-up PR creates the
   `CrashMediaIT/webrtc-cmremote` repository, adds the
   `[patch.crates-io]` entry and the `[sources].allow-git`
@@ -363,3 +368,4 @@ Option B.
 - [CMRemote threat model](../threat-model.md)
 - [CMRemote roadmap — slice R7 row](../../ROADMAP.md)
 - [Feasibility spike approval — gate #1](0001-spike-approval.md)
+- [Feasibility spike report — `ring` → `aws-lc-rs` symbol mapping](0001-spike-report.md)

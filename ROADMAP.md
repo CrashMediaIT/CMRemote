@@ -99,7 +99,19 @@ that documents the trade-offs between admitting `ring`, forking
 `webrtc` onto `aws-lc-rs`, and writing a thinner SRTP / DTLS / SCTP
 stack on `aws-lc-rs` directly — and the security-review questions
 maintainers must answer before any of those options is actionable
-(the `deny.toml` ban on `ring` stays in place); **slice R7.g**
+(the `deny.toml` ban on `ring` stays in place); the ADR is now
+**Accepted — Option B (fork `webrtc` onto `aws-lc-rs`)** with the
+[feasibility-spike approval](docs/decisions/0001-spike-approval.md)
+filed under maintainer gate #1, and the spike's deliverable #1 — the
+[`ring` → `aws-lc-rs` symbol-mapping report](docs/decisions/0001-spike-report.md)
+— landed with a **GO** recommendation (16 direct symbols in
+`webrtc-dtls`, all 1:1 with `aws-lc-rs`; `webrtc-srtp` and
+`webrtc-sctp` carry zero direct `ring` usage), with deliverables #2
+(PoC fork + green CI on all five target triples) and #3 (gate #2
+acceptance) tracked out-of-band on the to-be-created
+`CrashMediaIT/webrtc-cmremote` repository — no `Cargo.toml`, no
+`deny.toml`, and no `agent-rs/` source code is changed by the report;
+**slice R7.g**
 adds the WebRTC signalling DTOs (`SdpOffer` / `SdpAnswer` /
 `IceCandidate` PascalCase shapes in
 [`cmremote-wire::desktop::signalling`](agent-rs/crates/cmremote-wire/src/desktop/signalling.rs)),

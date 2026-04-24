@@ -46,6 +46,13 @@ Upon spike completion:
 - If **successful**: Proceed to maintainer gate #2 (sign off spike report)
 - If **unsuccessful**: Reopen ADR 0001 and re-evaluate Option C
 
+**Status (2026-04-24):** Deliverable #1 (symbol mapping) is **complete**
+with a **GO** recommendation — see
+[0001-spike-report.md](0001-spike-report.md). Deliverables #2 (PoC fork +
+green CI on all five triples) and #3 (gate #2 acceptance) remain open and
+are tracked out-of-band on the to-be-created `CrashMediaIT/webrtc-cmremote`
+repository per ADR 0001 §"Consequences".
+
 ## Authority
 
 This approval constitutes maintainer gate #1 from ADR 0001 *Consequences* section.
