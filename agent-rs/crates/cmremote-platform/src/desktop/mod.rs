@@ -63,9 +63,19 @@ use cmremote_wire::{
 
 use crate::HostOs;
 
+pub mod consent;
 pub mod guards;
+pub mod input;
 pub mod media;
 
+pub use consent::{
+    ConsentDecision, ConsentPrompter, ConsentRequest, DenyAllConsentPrompter,
+    DEFAULT_CONSENT_TIMEOUT,
+};
+pub use input::{
+    Clipboard, DesktopInputError, KeyCode, KeyboardInput, MouseButton, MouseInput, NamedKey,
+    NotSupportedClipboard, NotSupportedKeyboardInput, NotSupportedMouseInput, ScrollAxis,
+};
 pub use media::{
     CapturedFrame, DesktopCapturer, DesktopMediaError, EncodedVideoChunk,
     NotSupportedDesktopCapturer, NotSupportedVideoEncoder, VideoEncoder,

@@ -99,7 +99,12 @@ fn is_canonical_lowercase_uuid(s: &str) -> bool {
 /// categories such as bidi overrides). Lone surrogates are
 /// impossible in `&str` (Rust's UTF-8 invariant excludes them) so
 /// rejecting them is automatic.
-fn validate_operator_string(field: &str, value: &str) -> Result<(), String> {
+///
+/// Public so other safety surfaces in this crate (notably the
+/// [`super::consent`] prompt builder, which renders the same
+/// operator-supplied strings on the host's screen) reuse exactly
+/// the same contract — keeping the security guarantee uniform.
+pub fn validate_operator_string(field: &str, value: &str) -> Result<(), String> {
     if value.is_empty() {
         return Err(format!("{field} must not be empty"));
     }
