@@ -333,6 +333,14 @@ else
     }
 }
 
+// Track S / S7 — Runtime security posture. Sets the CMRemote security
+// headers baseline (Content-Security-Policy, X-Content-Type-Options,
+// Referrer-Policy, Permissions-Policy, X-Frame-Options, COOP/CORP) on
+// every response. Registered before UseRouting so framework-short-circuit
+// responses (404s, redirects, the setup-redirect middleware's 503) all
+// pick up the headers.
+app.UseMiddleware<SecurityHeadersMiddleware>();
+
 app.UseSwagger();
 app.UseSwaggerUI();
 
