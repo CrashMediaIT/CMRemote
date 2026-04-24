@@ -25,6 +25,7 @@ public class AgentHub : Hub<IAgentHubClient>
     private readonly IMessenger _messenger;
     private readonly IRemoteControlSessionCache _remoteControlSessions;
     private readonly IAgentHubSessionCache _serviceSessionCache;
+    private readonly Remotely.Server.Services.AgentUpgrade.IAgentUpgradeService _agentUpgradeService;
     private readonly ISystemTime _systemTime;
     private readonly IHubContext<ViewerHub> _viewerHubContext;
 
@@ -38,6 +39,7 @@ public class AgentHub : Hub<IAgentHubClient>
         IMessenger messenger,
         IInstalledApplicationsService installedApplicationsService,
         IPackageInstallJobService packageInstallJobService,
+        Remotely.Server.Services.AgentUpgrade.IAgentUpgradeService agentUpgradeService,
         ISystemTime systemTime,
         ILogger<AgentHub> logger)
     {
@@ -50,6 +52,7 @@ public class AgentHub : Hub<IAgentHubClient>
         _messenger = messenger;
         _installedApplicationsService = installedApplicationsService;
         _packageInstallJobService = packageInstallJobService;
+        _agentUpgradeService = agentUpgradeService;
         _systemTime = systemTime;
         _logger = logger;
     }
@@ -194,6 +197,29 @@ public class AgentHub : Hub<IAgentHubClient>
             Device = result.Value;
 
             _serviceSessionCache.AddOrUpdateByConnectionId(Context.ConnectionId, Device);
+
+            // ROADMAP.md "M3 — Background agent-upgrade pipeline":
+            // on-connect path. Enrol the device into the pipeline if it
+            // isn't already, then flip a SkippedInactive row back to
+            // Pending so the orchestrator's next sweep dispatches the
+            // upgrade. We never block the connection on this — failures
+            // are swallowed + logged, the orchestrator will pick the
+            // device up on its own cadence.
+            try
+            {
+                await _agentUpgradeService.EnrolDeviceAsync(
+                    Device.OrganizationID,
+                    Device.ID,
+                    Device.AgentVersion,
+                    Device.LastOnline,
+                    targetVersion: null);
+                await _agentUpgradeService.MarkDeviceCameOnlineAsync(Device.ID);
+            }
+            catch (Exception upgradeEx)
+            {
+                _logger.LogWarning(upgradeEx,
+                    "Failed to update agent-upgrade row on connect for {deviceId}.", Device.ID);
+            }
 
             var userIDs = _circuitManager.Connections.Select(x => x.User.Id);
 

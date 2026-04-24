@@ -1,5 +1,6 @@
 ﻿using Remotely.Server.Hubs;
 using Remotely.Server.Services;
+using Remotely.Server.Services.AgentUpgrade;
 using Bitbound.SimpleMessenger;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.DependencyInjection;
@@ -48,6 +49,7 @@ public class AgentHubTests
             messenger.Object,
             new Mock<IInstalledApplicationsService>().Object,
             new Mock<IPackageInstallJobService>().Object,
+            new Mock<IAgentUpgradeService>().Object,
             new SystemTime(),
             logger.Object);
 
@@ -94,6 +96,7 @@ public class AgentHubTests
             messenger.Object,
             new Mock<IInstalledApplicationsService>().Object,
             new Mock<IPackageInstallJobService>().Object,
+            new Mock<IAgentUpgradeService>().Object,
             new SystemTime(),
             logger.Object);
 
