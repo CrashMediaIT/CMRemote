@@ -371,6 +371,20 @@ Option B.
   rebased fork re-pinned via the `[patch.crates-io]` git ref.
   CVE notifications affecting `aws-lc-rs` or the relevant RFCs
   trigger an out-of-band rebase regardless of upstream cadence.
+- **Slice R7.l (2026-04-24):** the spike's symbol mapping covered
+  `webrtc-dtls@v0.5.4` only. The
+  [`0001-webrtc-crate-graph-audit.md`](0001-webrtc-crate-graph-audit.md)
+  sibling document extends the audit to the full
+  `webrtc-rs/webrtc@v0.17.0` workspace, produces a per-sub-crate
+  verdict (four `needs-fork`: `webrtc`, `webrtc-dtls` (rebase),
+  `webrtc-stun`, `webrtc-turn`; one `clean *(policy gate)*`:
+  `webrtc-srtp`; ten `clean`), and feeds the matching Step-10+
+  entries in
+  [`0001-spike-fork-instructions.md`](0001-spike-fork-instructions.md).
+  The `[bans].deny` `ring` entry stays untouched; the audit slice
+  adds commented-out `[sources].allow-git` placeholder entries to
+  [`agent-rs/deny.toml`](../../agent-rs/deny.toml) but does not
+  enable them.
 
 ## References
 

@@ -121,3 +121,38 @@ allow-registry = ["https://github.com/rust-lang/crates.io-index"]
 # `cargo deny check sources` walks the resolved graph, so the URL
 # without the trailing `.git` is what shows up here.
 allow-git = ["https://github.com/CrashMediaIT/webrtc-cmremote"]
+# ---------------------------------------------------------------------------
+# Slice R7.l — placeholder allow-git entries for the rest of the
+# `webrtc-rs/webrtc@v0.17.0` crate graph.
+#
+# Slice R7.l (see `docs/decisions/0001-webrtc-crate-graph-audit.md`)
+# extended the ADR-0001 spike from `webrtc-dtls` alone to the full
+# `webrtc-rs/webrtc@v0.17.0` workspace and produced four `needs-fork`
+# verdicts: `webrtc` (umbrella), `webrtc-dtls` (rebase v0.5.4 → v0.17),
+# `webrtc-stun`, and `webrtc-turn`. The audit recommended Option L2
+# (one monorepo fork mirroring upstream's workspace layout), in which
+# case the existing `https://github.com/CrashMediaIT/webrtc-cmremote`
+# entry above is reused for all four `[patch.crates-io]` tags and
+# **no further `allow-git` entry is required**.
+#
+# The placeholders below are for Option L1 (one repo per sub-crate).
+# They are deliberately commented out so the production build is
+# byte-identical and `cargo deny check sources` keeps refusing
+# unknown git sources. A maintainer flipping to Option L1 would
+# uncomment the matching line(s) in the same PR that creates the
+# corresponding `CrashMediaIT/webrtc-cmremote-*` repository and
+# adds the `[patch.crates-io]` entry to `agent-rs/Cargo.toml`.
+#
+# The `[bans].deny` `ring` entry above is **not touched** by either
+# Option L1 or Option L2 — its continued presence is the
+# load-bearing assertion that ADR-0001 Option B is being honoured.
+# See `docs/decisions/0001-spike-fork-instructions.md` Steps 10–17
+# for the full runbook.
+#
+# allow-git = [
+#     "https://github.com/CrashMediaIT/webrtc-cmremote",          # webrtc-dtls (existing, v0.5.4-cmremote.1)
+#     "https://github.com/CrashMediaIT/webrtc-cmremote-webrtc",   # TODO(R7.m, Option L1): umbrella `webrtc` crate fork
+#     "https://github.com/CrashMediaIT/webrtc-cmremote-dtls-v17", # TODO(R7.m, Option L1): rebased `webrtc-dtls` v0.17 fork
+#     "https://github.com/CrashMediaIT/webrtc-cmremote-stun",     # TODO(R7.m, Option L1): `webrtc-stun` fork
+#     "https://github.com/CrashMediaIT/webrtc-cmremote-turn",     # TODO(R7.m, Option L1): `webrtc-turn` fork
+# ]
