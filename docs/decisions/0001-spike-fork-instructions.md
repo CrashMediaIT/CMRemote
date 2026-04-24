@@ -258,11 +258,252 @@ per its §"Consequences" failure path. Option C remains the
 documented fallback. Do **not** silently fall back to Option A
 (admitting `ring`) without a fresh Track S decision and a new ADR.
 
+---
+
+## Step 10+ — Fork the rest of the `webrtc-rs` crate graph (slice R7.l)
+
+Steps 1–9 cover **`webrtc-dtls@v0.5.4` only**, because that was the
+sole sub-crate the original feasibility spike audited. Slice R7.l
+extended the audit to the full `webrtc-rs/webrtc@v0.17.0` workspace
+and produced four `needs-fork` verdicts (see
+[`0001-webrtc-crate-graph-audit.md`](0001-webrtc-crate-graph-audit.md)
+§"Verdict table"): the umbrella `webrtc` crate plus
+`webrtc-dtls@v0.17.0` (rebase), `webrtc-stun`, and `webrtc-turn`.
+The remaining workspace members are either `clean` or `clean
+*(transitive only)*` and need no source changes.
+
+The audit document recommended **Option L2 — one monorepo fork
+mirroring upstream's workspace layout** (see audit doc §"Recommended
+fork repository layout"). Steps 10–14 below are written against
+Option L2; if a maintainer instead prefers Option L1 (one fork per
+sub-crate), apply the Step-2 / Step-3 / Step-5 bodies once per repo
+and rewrite each fork's `[workspace.dependencies]` to git deps.
+
+The `[bans].deny` entry on `ring` in
+[`agent-rs/deny.toml`](../../agent-rs/deny.toml) **continues to be
+untouched** at every step, exactly as for Step 8 of the dtls
+runbook.
+
+## Step 10 — Repurpose `CrashMediaIT/webrtc-cmremote` as a monorepo fork
+
+The dtls v0.5.4 fork lives on the `cmremote/v0.5.4-aws-lc-rs` branch
+of [`CrashMediaIT/webrtc-cmremote`](https://github.com/CrashMediaIT/webrtc-cmremote)
+and is tagged `v0.5.4-cmremote.1`. That branch and tag are kept
+**immutable** so the existing dormant `[patch.crates-io].webrtc-dtls`
+entry continues to resolve. The new monorepo fork lives on a
+**fresh branch** of the same repo:
+
+```bash
+git clone https://github.com/CrashMediaIT/webrtc-cmremote.git
+cd webrtc-cmremote
+git remote add upstream-monorepo https://github.com/webrtc-rs/webrtc.git
+git fetch upstream-monorepo --tags
+# v0.17.0 is the version pinned by the slice R7.l audit
+# (the final feature release of the Tokio-coupled API).
+git checkout -b cmremote/v0.17.0-aws-lc-rs v0.17.0
+```
+
+Note: the new branch shares **no commit history** with
+`cmremote/v0.5.4-aws-lc-rs`. That is intentional — upstream
+`webrtc-rs/dtls` and upstream `webrtc-rs/webrtc` are different
+repositories at the git level, and the monorepo branch needs the
+full upstream workspace tree, not a continuation of the old
+dtls-only branch.
+
+If the maintainer prefers Option L1 instead, repeat Step 1 four
+times to create four new repos
+(`webrtc-cmremote-webrtc`, `webrtc-cmremote-dtls-v0_17`,
+`webrtc-cmremote-stun`, `webrtc-cmremote-turn`) and seed each from
+the matching `webrtc-rs/webrtc@v0.17.0` sub-directory.
+
+## Step 11 — Rebase `dtls/` onto upstream `v0.17.0`
+
+The v0.5.4 → v0.17.0 upstream diff is non-trivial (almost two years
+of upstream changes), but the `ring` → `aws-lc-rs` substitution
+remains **mechanical and per-file**. Inside the new branch:
+
+```bash
+# Apply the same sed patch the v0.5.4 spike used, scoped to dtls/.
+git ls-files 'dtls/src/**/*.rs' | xargs sed -i \
+    -e 's|use ring::|use aws_lc_rs::|g' \
+    -e 's|ring::signature::|aws_lc_rs::signature::|g' \
+    -e 's|ring::rand::|aws_lc_rs::rand::|g' \
+    -e 's|ring::hmac::|aws_lc_rs::hmac::|g'
+# Sanity check: no ring references should remain in dtls/src/.
+! grep -rn '\bring\b' dtls/src/
+```
+
+In `dtls/Cargo.toml`:
+
+1. Remove `ring = "0.17.14"`; add `aws-lc-rs = "1"`.
+2. Change `rustls = { version = "0.23.27", default-features = false, features = ["std", "ring"] }`
+   to `rustls = { version = "0.23.27", default-features = false, features = ["std", "aws_lc_rs"] }`
+   (verify the exact rustls 0.23 feature name against the
+   manifest at the rebased upstream tag).
+3. Change `rcgen = "0.13"` to
+   `rcgen = { version = "0.13", default-features = false, features = ["aws_lc_rs", "pem"] }`
+   — the audit doc's verdict for `dtls` calls this out as a
+   feature-list change, not a code change.
+4. Re-run the v0.5.4 spike's symbol-mapping test plan (§"Step 5 —
+   Run the fork's own test suite") for the new tree:
+   `cargo test -p webrtc-dtls`. Expected: green.
+
+## Step 12 — Apply the substitution to `stun/`
+
+The audit doc's verdict for `webrtc-stun` is "uses `ring::hmac` for
+the RFC 5389 §15.4 message-integrity attribute; substitution is
+mechanical via `aws_lc_rs::hmac`". Same sed pattern, scoped to
+`stun/`:
+
+```bash
+git ls-files 'stun/src/**/*.rs' | xargs sed -i \
+    -e 's|use ring::|use aws_lc_rs::|g' \
+    -e 's|ring::hmac::|aws_lc_rs::hmac::|g'
+! grep -rn '\bring\b' stun/src/
+```
+
+In `stun/Cargo.toml`: remove `ring = "0.17.14"`; add
+`aws-lc-rs = "1"`. Run `cargo test -p webrtc-stun`.
+
+`aws_lc_rs::hmac::Key::new(HMAC_SHA1, …)` / `sign` / `verify_tag`
+are name-identical to the `ring::hmac` equivalents the upstream
+`stun` code calls; if any test fails, the substitution diverged
+from "mechanical" and Step 12 should be paused per the same
+"do not 'fix' tests" rule as Step 5.
+
+## Step 13 — Apply the substitution to `turn/`
+
+The audit doc's verdict for `webrtc-turn` is "uses `ring::hmac`
+for the RFC 5766 §10.2 long-term credential MESSAGE-INTEGRITY
+computation; same substitution as `stun`". Same sed pattern,
+scoped to `turn/`:
+
+```bash
+git ls-files 'turn/src/**/*.rs' | xargs sed -i \
+    -e 's|use ring::|use aws_lc_rs::|g' \
+    -e 's|ring::hmac::|aws_lc_rs::hmac::|g'
+! grep -rn '\bring\b' turn/src/
+```
+
+In `turn/Cargo.toml`: remove `ring = "0.17.14"`; add
+`aws-lc-rs = "1"`. Run `cargo test -p webrtc-turn`.
+
+## Step 14 — Apply the substitution to the umbrella `webrtc/` crate
+
+The audit doc's verdict for the umbrella crate is "direct
+`ring = "0.17.14"` line plus `rcgen 0.13` with the default crypto
+provider; substitution is the same sed pattern plus the rcgen
+feature-list swap". Same sed pattern, scoped to `webrtc/`:
+
+```bash
+git ls-files 'webrtc/src/**/*.rs' | xargs sed -i \
+    -e 's|use ring::|use aws_lc_rs::|g' \
+    -e 's|ring::signature::|aws_lc_rs::signature::|g' \
+    -e 's|ring::rand::|aws_lc_rs::rand::|g' \
+    -e 's|ring::hmac::|aws_lc_rs::hmac::|g' \
+    -e 's|ring::digest::|aws_lc_rs::digest::|g'
+! grep -rn '\bring\b' webrtc/src/
+```
+
+In `webrtc/Cargo.toml`:
+
+1. Remove `ring = "0.17.14"`; add `aws-lc-rs = "1"`.
+2. Change `rcgen = { version = "0.13", features = ["pem", "x509-parser"] }`
+   to `rcgen = { version = "0.13", default-features = false, features = ["aws_lc_rs", "pem", "x509-parser"] }`.
+3. Run `cargo test -p webrtc` (this exercises the dtls / stun / turn
+   forks transitively via `workspace = true` and is the
+   single-command end-to-end smoke check for the monorepo fork).
+
+## Step 15 — Cross-compile coverage on all five target triples
+
+Per Step 6 of the dtls runbook, but now scoped to the four
+forked workspace members at once. The matrix is identical:
+`x86_64-pc-windows-msvc`, `x86_64-unknown-linux-gnu`,
+`aarch64-unknown-linux-gnu` (the highest-risk leg), `x86_64-apple-darwin`,
+`aarch64-apple-darwin`. All five must be green on the fork's
+`cmremote/v0.17.0-aws-lc-rs` branch before Step 16 runs.
+
+## Step 16 — Tag the monorepo fork
+
+```bash
+git tag -a v0.17.0-cmremote.1 \
+    -m "CMRemote v0.17.0 monorepo fork: ring -> aws-lc-rs in webrtc/, dtls/, stun/, turn/"
+git push origin v0.17.0-cmremote.1
+```
+
+The naming convention (`v<upstream-version>-cmremote.<rev>`) is
+identical to the dtls runbook's Step 7. The monorepo tag stands
+alongside the existing `v0.5.4-cmremote.1` dtls tag; both remain
+addressable indefinitely.
+
+## Step 17 — Wire the monorepo fork into `agent-rs/` (the R7.m driver PR)
+
+The follow-up PR that lands the WebRTC driver against the
+[`DesktopTransportProvider`](../../agent-rs/crates/cmremote-platform/src/desktop/mod.rs)
+seam (slice R7.m) extends `agent-rs/Cargo.toml`'s
+`[patch.crates-io]` to point each forked crate at the same git tag
+but a different `path = "..."` sub-directory:
+
+```toml
+[patch.crates-io]
+# Existing dtls v0.5.4 entry (kept as-is for now; the R7.m PR
+# replaces it with the v0.17 monorepo entry below in the same
+# commit that adds the umbrella `webrtc` dep).
+# webrtc-dtls = { git = "https://github.com/CrashMediaIT/webrtc-cmremote.git", tag = "v0.5.4-cmremote.1" }
+
+# New monorepo entries (slice R7.m):
+webrtc       = { git = "https://github.com/CrashMediaIT/webrtc-cmremote.git", tag = "v0.17.0-cmremote.1", path = "webrtc" }
+webrtc-dtls  = { git = "https://github.com/CrashMediaIT/webrtc-cmremote.git", tag = "v0.17.0-cmremote.1", path = "dtls" }
+webrtc-stun  = { git = "https://github.com/CrashMediaIT/webrtc-cmremote.git", tag = "v0.17.0-cmremote.1", path = "stun" }
+webrtc-turn  = { git = "https://github.com/CrashMediaIT/webrtc-cmremote.git", tag = "v0.17.0-cmremote.1", path = "turn" }
+```
+
+The `[sources].allow-git` entry in
+[`agent-rs/deny.toml`](../../agent-rs/deny.toml) is **already**
+shaped to match the host (`https://github.com/CrashMediaIT/webrtc-cmremote`)
+and needs no further change for the four new patch entries — the
+git-host allow-list is per-host, not per-tag. The slice R7.l PR
+adds **commented-out placeholder entries** below the existing
+allow-list line so a maintainer flipping them on for Option L1
+(one repo per sub-crate) has the URLs at the ready; those
+placeholders stay commented out for Option L2.
+
+The slice R7.m PR also adds a `cargo tree -i openssl-sys
+--no-default-features` smoke check to the workspace CI to enforce
+the audit doc's policy gate on `webrtc-srtp`'s opt-in `openssl`
+feature (see audit doc §"Verdict table" → `srtp/` row).
+
+The `[bans].deny` `ring` entry in `agent-rs/deny.toml` is
+**still** untouched.
+
+## Step 18 — Document the rebase cadence (monorepo edition)
+
+The dtls runbook's Step 9 already specifies the per-fork
+maintenance contract. For the monorepo fork the cadence is
+unchanged but the trigger surface widens:
+
+- **Trigger 1:** every upstream `webrtc-rs/webrtc` minor release.
+  Rebase `cmremote/v<NEW>-aws-lc-rs` from upstream's tag, re-apply
+  the four sed patches from Steps 11–14, re-run
+  `cargo test --workspace`, tag `v<NEW>-cmremote.1`.
+- **Trigger 2:** every advisory affecting `aws-lc-rs`, `rustls`,
+  `rcgen`, or any of the WebRTC RFC stack (RFCs 5389 / 5763 /
+  5764 / 5766 / 6347 / 6904 / 8261). Out-of-band rebase regardless
+  of upstream cadence.
+- **Trigger 3:** an upstream `webrtc-rs/rtc` v0.20.x release —
+  re-run the slice R7.l audit against the new repo and decide
+  whether the v0.17 monorepo fork supersedes or coexists.
+- **Owner:** `agent-rs/` CMRemote CODEOWNERS, same as the dtls
+  fork.
+
 ## Cross-references
 
 - Parent ADR: [0001-webrtc-crypto-provider.md](0001-webrtc-crypto-provider.md)
 - Spike approval (gate #1): [0001-spike-approval.md](0001-spike-approval.md)
-- Spike report (deliverable #1): [0001-spike-report.md](0001-spike-report.md)
+- Spike report (deliverable #1, dtls v0.5.4):
+  [0001-spike-report.md](0001-spike-report.md)
+- Crate-graph supply-chain audit (slice R7.l, the input to
+  Step-10+): [0001-webrtc-crate-graph-audit.md](0001-webrtc-crate-graph-audit.md)
 - Spike PoC crate (deliverable #2 — running-code evidence):
   formerly at `agent-rs/crates/cmremote-webrtc-crypto-spike/`,
   deleted by Step 8 once the fork was wired in via
