@@ -11,6 +11,7 @@ use std::sync::Arc;
 
 #[cfg(target_os = "linux")]
 use cmremote_platform::linux_apps::DpkgProvider;
+use cmremote_platform::packages::CompositePackageProvider;
 #[cfg(not(target_os = "linux"))]
 use cmremote_platform::stubs::NotSupportedAppsProvider;
 use cmremote_platform::{DeviceInfoProvider, StdDeviceInfoProvider};
@@ -55,10 +56,19 @@ pub async fn run(cli: CliArgs) -> Result<(), RuntimeError> {
     #[cfg(not(target_os = "linux"))]
     let apps = Arc::new(NotSupportedAppsProvider);
 
+    // Slice R6: composite package provider with no concrete handlers
+    // registered yet. Every InstallPackage request will be answered
+    // with a structured "not supported" failure until the signed-build
+    // pipeline (slice R8) ships and registers the Chocolatey / MSI /
+    // Executable handlers — at which point only this construction
+    // line changes.
+    let packages = Arc::new(CompositePackageProvider::new());
+
     let handlers = Arc::new(AgentHandlers {
         connection_info: info.clone(),
         device_info,
         apps,
+        packages,
     });
 
     // The shutdown channel is a single-producer / multi-consumer

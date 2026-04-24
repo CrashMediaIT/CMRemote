@@ -37,7 +37,7 @@ This roadmap is therefore organised in three bands:
 
 ## Band 1 — Rewrite & cut-over *(top priority)*
 
-### Current focus *(end of slices **R2** · **R2a** · **R3** · **R4** · **R5** / S4 / **M1 milestone complete (M1.1 + M1.2 + M1.3 + M1.4 + M1.5)** + M2 complete + **M3 service + orchestrator landed** + **M4 admin dashboard shipped** — Apr 2026)*
+### Current focus *(end of slices **R2** · **R2a** · **R3** · **R4** · **R5** · **R6** / S4 / **M1 milestone complete (M1.1 + M1.2 + M1.3 + M1.4 + M1.5)** + M2 complete + **M3 service + orchestrator landed** + **M4 admin dashboard shipped** — Apr 2026)*
 
 Module 0 (wire-protocol spec + JSON test-vector corpus), slice **R1a**
 (`cmremote-wire` JSON round-trip + redacting `Debug`), slice **R1b**
@@ -55,7 +55,18 @@ hub handler, 5-minute timeout, stdout+stderr capture), slice **R5**
 (`InstalledApplicationsProvider` trait, `DpkgProvider` parsing
 `dpkg-query` + `rpm -qa`, `RequestInstalledApplications` and
 `UninstallApplication` hub handlers, `NotSupportedAppsProvider`
-stub for Windows/macOS), the first
+stub for Windows/macOS), slice **R6** (package-manager wire surface
++ [`PackageProviderHandler`](agent-rs/crates/cmremote-platform/src/packages.rs)
+trait + safety helpers — Chocolatey package-id / version
+allow-lists, OLE2 magic-byte check, SHA-256 verify with
+constant-time hex compare — `NotSupportedPackageProvider`,
+`CompositePackageProvider` router, and the `InstallPackage` hub
+handler wired through `AgentHandlers`; the composite ships with
+**no concrete handlers registered** so every request is answered
+with a structured "not supported" failure until the signed-build
+pipeline lands with slice R8 — operator sees a clean job-failed
+status rather than a hung job),
+the first
 security-gate items **S1** (`SECURITY.md` + coordinated-disclosure
 policy), **S2** (supply-chain CI via `cargo-deny`, `cargo-audit`,
 `dependency-review`, OSSF Scorecard, Dependabot), **S3**
@@ -168,10 +179,17 @@ a follow-up integration job tracked separately.
 
 The next milestones are now:
 
-1. **R6 — Package manager (Chocolatey + MSI + Exe)** — Re-implement
-   the `IPackageProvider` contract. `InstallPackage`, and stub-only
-   for now since signed-build pipeline hasn't shipped yet.
-2. **M3 dispatcher + ~~M4 dashboard~~.** (unchanged)
+1. **M3 dispatcher + ~~M4 dashboard~~.** (unchanged) The R6 wire
+   surface + safety helpers are now in place on the Rust agent so
+   the dispatcher's signed-build resolver lands against a stable
+   `PackageProviderHandler` trait.
+2. **R6 concrete handlers** — register a real
+   `ChocolateyPackageProvider` / `MsiPackageProvider` /
+   `ExecutablePackageProvider` against the
+   `CompositePackageProvider` once slice R8's signed-build URL
+   minter and the `reqwest` (or equivalent rustls-only) HTTP client
+   land. The wire shapes, dispatch wiring, allow-lists, OLE2
+   magic-byte check, and SHA-256 verifier already ship.
 3. **Live-Postgres integration coverage** (unchanged).
 
 ### 🟡 Track R — Rust agent + clean-room server *(now the lead track)*
@@ -191,7 +209,7 @@ below. Summary of the new tempo:
   is re-targeted at the clean-room codebase rather than added to the
   legacy one.
 
-### 🟡 Track S — Security & supply-chain baseline *(cross-cutting — S1 + S2 + S3 + S4 shipped)*
+### 🟡 Track S — Security & supply-chain baseline *(cross-cutting — S1 + S2 + S3 + S4 shipped; S6 partially shipped)*
 
 Security is called out as a top-priority, standalone track rather than
 being left as scattered mentions inside the Rust slices. Items here gate
@@ -302,20 +320,30 @@ Still queued under S2 (not yet shipped): `cargo-vet` audit set,
   and the agent-upgrade pipeline (M3) which already requires a
   SHA-256 match against the publisher manifest.
 
-**S6 — Secret-hygiene enforcement *(🔜, gated into CI)*.**
+**S6 — Secret-hygiene enforcement *(🟡 partially shipped)*.**
 
-- Add **gitleaks** as a PR gate (pre-commit hook + CI job) so
-  accidentally-committed tokens fail the build, not the audit log.
-- Add a unit test under `cmremote-platform` that asserts
-  `ConnectionInfo.json` is written with file-mode `0600` on Unix (the
-  spec already requires this; the test pins it) and an equivalent
-  ACL check on Windows.
-- Extend `ConnectionInfo`'s redacting `Debug` (shipped in slice R1a)
-  with a compile-time test (`trybuild` or a straight unit test) that
-  formatting the struct never contains the verification-token bytes.
-- Periodic **CodeQL** (already in the build workflow for .NET; extend
-  to Rust via the official action) scheduled weekly on `main` in
-  addition to per-PR runs.
+- ✅ **gitleaks** ([`.github/workflows/gitleaks.yml`](.github/workflows/gitleaks.yml))
+  runs as a PR gate (and weekly on `main`/`master`) so an
+  accidentally-committed token fails the build instead of polluting
+  the audit log; findings are also uploaded as SARIF into the
+  Security tab so they show up alongside CodeQL and Scorecard.
+- ✅ **CodeQL** ([`.github/workflows/codeql.yml`](.github/workflows/codeql.yml))
+  covers both `csharp` (the .NET solution built explicitly against
+  the .NET 8 SDK pinned in the csproj files) and `rust` (the
+  `agent-rs/` workspace) on every PR, on push to `main`/`master`,
+  and weekly on `main` so a new query published after a merge still
+  surfaces against already-merged code within seven days. Uses the
+  `security-extended` query pack.
+- ✅ Redacting-`Debug` regression test for `ConnectionInfo`
+  (`debug_redacts_server_verification_token` and
+  `debug_redacts_organization_token` in
+  [`crates/cmremote-wire/src/connection_info.rs`](agent-rs/crates/cmremote-wire/src/connection_info.rs))
+  — already shipped with slice R1a; pinned here as the S6 deliverable.
+- 🔜 Add a unit test under `cmremote-platform` that asserts
+  `ConnectionInfo.json` is written with file-mode `0600` on Unix and
+  an equivalent ACL check on Windows, once the agent's *write* path
+  for `ConnectionInfo.json` lands (today's runtime only reads the
+  file; writes will land with the enrolment slice).
 
 **S7 — Runtime security posture *(🔜, lands with server rewrite)*.**
 
@@ -1077,7 +1105,7 @@ agent and the Rust agent can run side-by-side until parity.
 | **R3 — Device information** ✅ | `DeviceSnapshot` (16 fields matching `DeviceClientDto`) replaces the R0 stub `HostDescriptor`; `DeviceInfoProvider::snapshot(device_id, org_id)` updated signature. `LinuxDeviceInfoProvider` (cfg `target_os = "linux"`) reads `/proc/meminfo` (total + used RAM), `/proc/stat` (CPU utilisation via two-sample delta), `/sys/class/net/*/address` (MAC addresses), `df -k` (drive list), `/etc/os-release` (OS description), `std::thread::available_parallelism()` (CPU count), hostname via `/etc/hostname` / env. `StdDeviceInfoProvider` delegates to `LinuxDeviceInfoProvider` on Linux. `TriggerHeartbeat` hub handler serialises the snapshot and sends it to the server. | `cargo test` green on Linux; smoke test confirms non-empty hostname + non-zero CPU count; `DeviceInfoProvider` trait object-safe. |
 | **R4 — Process / script execution** ✅ | `ExecuteCommandArgs` + `ScriptResult` + `ScriptingShell` DTOs in `cmremote-wire`; `tokio::process::Command` executor in `cmremote-agent::handlers::script`; per-OS shell map (`bash`, `sh`, `zsh`, `pwsh` — `cmd` returns `not_supported` on non-Windows); 5-minute timeout via `tokio::time::timeout`; stdout + stderr captured; `ExecuteCommand` hub handler wired into the dispatcher. `"process"` feature added to workspace `tokio` dep. | Unit tests cover shell resolution, successful echo execution, timeout enforcement, unknown-shell error path. |
 | **R5 — Installed-applications provider** ✅ | `InstalledApplicationsProvider` trait + `InstalledApp` DTO in `cmremote-platform`; `DpkgProvider` (cfg `target_os = "linux"`) runs `dpkg-query --show` and falls back to `rpm -qa`; `uninstall` calls `apt-get remove -y` or `rpm -e`; `NotSupportedAppsProvider` stub for Windows/macOS. `RequestInstalledApplications` and `UninstallApplication` hub handlers wired into the dispatcher. | Unit tests parse mock `dpkg-query` output; not-supported stub confirmed. |
-| **R6 — Package manager (Chocolatey + MSI + Exe)** | Re-implement the PR B `IPackageProvider` contract and the PR C1/C2 MSI/Exe installers. Streaming structured progress; SHA-256 verification on download; signed short-lived URLs honoured. | All `ChocolateyOutputParserTests` / job-state tests pass against the Rust agent in integration mode. |
+| **R6 — Package manager (Chocolatey + MSI + Exe)** *(🟡 wire surface + safety helpers shipped; concrete fetch/install handlers wait for R8)* | `cmremote-wire`: `PackageProvider` / `PackageInstallAction` / `PackageInstallRequest` / `PackageInstallResult` PascalCase wire types — defaults to `Unknown` so a malformed payload fails closed. `cmremote-platform::packages`: `PackageProviderHandler` async trait + safety helpers — `is_safe_chocolatey_package_id`, `is_safe_chocolatey_version`, `is_safe_msi_file_name`, `is_msi_magic_bytes` (OLE2 `D0 CF 11 E0 A1 B1 1A E1`), `compute_sha256_hex`, `ct_eq_hex` constant-time compare, `is_chocolatey_success_exit_code` matching `Shared.PackageManager.ChocolateyOutputParser.SuccessfulExitCodes` — plus `NotSupportedPackageProvider` and `CompositePackageProvider` router. `cmremote-agent::handlers::packages` decodes the `InstallPackage` invocation, dispatches through the composite, and serialises a `PackageInstallResult` back as the completion payload. The composite ships with **no concrete handlers registered** so every request is answered with a structured "not supported" failure — operator sees a clean job-failed status rather than a hung job. The concrete fetch + install handlers (Chocolatey via `choco.exe`, MSI via `msiexec.exe` after SHA-256 + OLE2 magic re-verification, Executable via SilentArgs) land alongside the signed-build pipeline (slice R8) so the agent never sees an unsigned variant. | Workspace builds clean on stable Rust; `cargo fmt --check` / `cargo clippy --workspace --all-targets -- -D warnings` / `cargo test --workspace --all-targets` all green; new `sha2` + `async-trait` deps clean against `cargo deny check`. |
 | **R7 — Desktop transport** | Last and largest. WebRTC capture/encode behind a thin trait so we can swap backends. Tracks Module 5's protocol doc. | Latency / FPS within 10 % of the .NET/Desktop client on a reference workload. |
 | **R8 — Installer wrappers** | Windows MSI (WiX or `cargo-wix`), Linux `.deb` / `.rpm` (`cargo-deb` / `cargo-generate-rpm`), macOS notarized `.pkg`. Replaces PR E's templated PowerShell installer for the Rust channel. | One-liner deploy URL produces a working agent on each OS without PowerShell. |
 

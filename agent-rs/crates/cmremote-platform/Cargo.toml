@@ -14,3 +14,12 @@ publish = false
 serde = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+sha2 = "0.10"
+
+# Async trait for the package provider so the orchestrator can plug
+# in async install paths once the signed-build pipeline lands.
+async-trait = "0.1"
+cmremote-wire = { path = "../cmremote-wire" }
+
+[dev-dependencies]
+tokio = { workspace = true }

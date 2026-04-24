@@ -17,6 +17,7 @@ pub mod apps;
 pub mod linux;
 #[cfg(target_os = "linux")]
 pub mod linux_apps;
+pub mod packages;
 pub mod stubs;
 
 use serde::{Deserialize, Serialize};

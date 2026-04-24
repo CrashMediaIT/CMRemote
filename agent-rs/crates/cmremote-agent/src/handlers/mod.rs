@@ -1,6 +1,6 @@
 // Source: CMRemote, clean-room implementation.
 
-//! Handler registry for hub invocations (slices R3–R5).
+//! Handler registry for hub invocations (slices R3–R6).
 //!
 //! [`AgentHandlers`] is the concrete struct holding all per-OS
 //! provider implementations and dispatching to them by
@@ -8,13 +8,16 @@
 
 pub mod apps;
 pub mod device_info;
+pub mod packages;
 pub mod script;
 
 use std::sync::Arc;
 
 use cmremote_wire::HubInvocation;
 
-use cmremote_platform::{apps::InstalledApplicationsProvider, DeviceInfoProvider};
+use cmremote_platform::{
+    apps::InstalledApplicationsProvider, packages::PackageProviderHandler, DeviceInfoProvider,
+};
 
 use crate::dispatch::MethodName;
 use cmremote_wire::ConnectionInfo;
@@ -24,6 +27,7 @@ pub struct AgentHandlers {
     pub(crate) connection_info: ConnectionInfo,
     pub(crate) device_info: Arc<dyn DeviceInfoProvider>,
     pub(crate) apps: Arc<dyn InstalledApplicationsProvider>,
+    pub(crate) packages: Arc<dyn PackageProviderHandler>,
 }
 
 impl AgentHandlers {
@@ -48,7 +52,10 @@ impl AgentHandlers {
             MethodName::UninstallApplication => {
                 apps::handle_uninstall_application(inv, &*self.apps)
             }
-            // R6–R8 stubs
+            MethodName::InstallPackage => {
+                packages::handle_install_package(inv, &*self.packages).await
+            }
+            // R7–R8 stubs
             _ => Err("not_implemented".to_string()),
         }
     }

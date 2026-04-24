@@ -1,0 +1,114 @@
+# Source: CMRemote, clean-room implementation.
+#
+# CodeQL — periodic + per-PR static security analysis. Roadmap
+# reference: Track S / S6 (Secret-hygiene + scheduled CodeQL).
+#
+# Covers both halves of the codebase:
+#   * `csharp` — `Server/`, `Agent/`, `Shared/`, and the `Tests/`
+#     projects (built via `dotnet build` against the .NET 8 SDK).
+#   * `rust`   — the `agent-rs/` workspace (clean-room Rust agent).
+#
+# Triggered on every PR, on push to `main`/`master`, and weekly on
+# `main` so an advisory or new query published after a merge still
+# fails CI within seven days. The CodeQL action publishes findings
+# into the Security tab.
+
+name: CodeQL
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  schedule:
+    # Weekly sweep against `main` so newly-published queries surface
+    # against already-merged code within seven days.
+    - cron: "23 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ${{ matrix.os }}
+    permissions:
+      # Upload findings into the Security tab.
+      security-events: write
+      # Required by the CodeQL action when it inspects the workflow
+      # file itself.
+      actions: read
+      contents: read
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # C# is built rather than autobuilt so we control the SDK
+          # version (the .NET 8 floor pinned by the csproj files).
+          - language: csharp
+            os: ubuntu-latest
+            build-mode: manual
+          # Rust is autobuilt; the CodeQL Rust pack drives `cargo`
+          # internally.
+          - language: rust
+            os: ubuntu-latest
+            build-mode: autobuild
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      # ----- C# build prerequisites ---------------------------------
+      - name: Install .NET SDK
+        if: matrix.language == 'csharp'
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      # ----- Rust build prerequisites -------------------------------
+      - name: Install Rust toolchain
+        if: matrix.language == 'rust'
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        if: matrix.language == 'rust'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            agent-rs/target
+          key: codeql-${{ runner.os }}-cargo-${{ hashFiles('agent-rs/**/Cargo.toml') }}
+
+      # ----- CodeQL init --------------------------------------------
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+          # Use the standard security-extended pack so we get coverage
+          # beyond the default query set without enabling every
+          # experimental query (which tend to be noisy).
+          queries: security-extended
+
+      # ----- C# build for CodeQL ------------------------------------
+      - name: Build .NET solution
+        if: matrix.language == 'csharp'
+        run: dotnet build Remotely.sln --configuration Release --nologo
+
+      # ----- Rust build is handled by autobuild ---------------------
+      - name: Autobuild (rust)
+        if: matrix.language == 'rust'
+        uses: github/codeql-action/autobuild@v3
+        with:
+          working-directory: agent-rs
+
+      # ----- CodeQL analyze -----------------------------------------
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: /language:${{ matrix.language }}
