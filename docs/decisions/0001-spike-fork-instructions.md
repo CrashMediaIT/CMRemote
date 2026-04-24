@@ -78,8 +78,22 @@ New-Item -ItemType Directory -Force -Path .github | Out-Null
 git add .github/CODEOWNERS
 git commit -m "Add CODEOWNERS (mirrors CMRemote agent-rs owners)"
 
-# First push: create main from this branch so branch protection has something to protect.
+# Step 1 already created `main` on the remote (initial commit + any
+# repo-setup files Copilot added). Our branch was cut from the upstream
+# `v0.5.4` tag and shares no history with that `main`, so a plain
+# `git push :refs/heads/main` would be rejected as non-fast-forward
+# (this is the failure you hit). Merge `origin/main` into the working
+# branch first — `--allow-unrelated-histories` is required because the
+# two roots have no common ancestor. After the merge the branch is a
+# strict descendant of `main`, so the publish push fast-forwards.
+git fetch origin
+git merge origin/main --allow-unrelated-histories `
+    -m "chore: incorporate repository setup into cmremote/v0.5.4-aws-lc-rs"
+
+# First push: publish the working branch.
 git push -u origin cmremote/v0.5.4-aws-lc-rs
+
+# Now fast-forward `main` to the working-branch tip.
 git push origin cmremote/v0.5.4-aws-lc-rs:refs/heads/main
 
 # Now apply branch protection on main (Step 1.4).
