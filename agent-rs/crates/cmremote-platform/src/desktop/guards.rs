@@ -31,9 +31,9 @@
 
 use cmremote_wire::{
     ChangeWindowsSessionRequest, DesktopTransportResult, IceCandidate, IceCredentialType,
-    IceServer, IceServerConfig, RemoteControlSessionRequest, RestartScreenCasterRequest, SdpAnswer,
-    SdpOffer, MAX_ICE_CREDENTIAL_LEN, MAX_ICE_SERVERS, MAX_ICE_URL_LEN, MAX_SDP_BYTES,
-    MAX_SIGNALLING_STRING_LEN, MAX_URLS_PER_ICE_SERVER,
+    IceServer, IceServerConfig, ProvideIceServersRequest, RemoteControlSessionRequest,
+    RestartScreenCasterRequest, SdpAnswer, SdpOffer, MAX_ICE_CREDENTIAL_LEN, MAX_ICE_SERVERS,
+    MAX_ICE_URL_LEN, MAX_SDP_BYTES, MAX_SIGNALLING_STRING_LEN, MAX_URLS_PER_ICE_SERVER,
 };
 
 /// Maximum byte length permitted for any operator-supplied string
@@ -593,6 +593,64 @@ pub fn check_ice_server_config(config: &IceServerConfig) -> Result<(), GuardReje
         }
         // `ice_transport_policy` is an enum with only safe variants;
         // nothing extra to validate.
+        Ok(())
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Slice R7.j — `ProvideIceServers` request guard.
+//
+// Wraps the slice R7.b operator-identity envelope check (cross-org,
+// canonical-UUID `session_id`, sanitised operator strings) and the
+// slice R7.i `IceServerConfig` check into one helper, so the
+// dispatch handler can refuse a hostile request with a single call
+// before the embedded URL list reaches any downstream parser.
+//
+// Note: the access_key field is intentionally NOT read by the guard
+// — its only role is to be matched against the per-session cache
+// the (future) WebRTC driver maintains. Refusing to read it here
+// guarantees the rejection message can never accidentally echo the
+// secret.
+// ---------------------------------------------------------------------------
+
+/// Run the security-contract guards against a
+/// [`ProvideIceServersRequest`]. Refuses cross-org / hostile
+/// operator strings / non-canonical session id at the same gate as
+/// the four method-surface methods, then delegates the embedded
+/// [`IceServerConfig`] to the same per-server checks
+/// [`check_ice_server_config`] applies (URL allow-list, length caps,
+/// TURN credential pairing, sensitive-credential redaction in the
+/// rejection message, and `Oauth` fail-closed).
+///
+/// The rejection's `session_id` is set only after the request's
+/// `session_id` has positively passed the canonical-UUID check —
+/// same shape every other guard in this module follows. The
+/// sensitive `access_key` is never read by the guard so a leaked
+/// rejection message cannot disclose it.
+pub fn check_provide_ice_servers(
+    request: &ProvideIceServersRequest,
+    expected_org_id: Option<&str>,
+) -> Result<(), GuardRejection> {
+    run(|s| {
+        validate_session_id(&request.session_id)?;
+        *s = request.session_id.clone();
+        validate_org(expected_org_id, &request.org_id)?;
+        validate_operator_string("viewer_connection_id", &request.viewer_connection_id)?;
+        validate_operator_string("requester_name", &request.requester_name)?;
+        validate_operator_string("org_name", &request.org_name)?;
+
+        // Per-config cap — same check `check_ice_server_config`
+        // applies, inlined so the rejection carries the
+        // `session_id` we have just validated (the standalone
+        // helper deliberately leaves it empty because it is
+        // called out-of-band).
+        let config = &request.ice_server_config;
+        if config.ice_servers.len() > MAX_ICE_SERVERS {
+            return Err(format!("ice_servers exceeds {MAX_ICE_SERVERS}-entry limit"));
+        }
+        for (idx, server) in config.ice_servers.iter().enumerate() {
+            validate_single_ice_server(idx, server)?;
+        }
         Ok(())
     })
 }
@@ -1228,5 +1286,147 @@ mod tests {
         cfg.ice_servers[0].urls[0] = "javascript:alert(1)".into();
         let r = check_ice_server_config(&cfg).unwrap_err();
         assert_eq!(r.session_id, "");
+    }
+
+    // -----------------------------------------------------------------
+    // Slice R7.j — `ProvideIceServers` request guard tests.
+    // -----------------------------------------------------------------
+
+    fn provide_ice_servers_req() -> ProvideIceServersRequest {
+        ProvideIceServersRequest {
+            viewer_connection_id: "viewer-1".into(),
+            session_id: VALID_SESSION_ID.into(),
+            access_key: "secret-access-key".into(),
+            requester_name: "Alice".into(),
+            org_name: "Acme".into(),
+            org_id: VALID_ORG_ID.into(),
+            ice_server_config: ok_ice_config(),
+        }
+    }
+
+    #[test]
+    fn happy_path_passes_for_provide_ice_servers() {
+        check_provide_ice_servers(&provide_ice_servers_req(), Some(VALID_ORG_ID))
+            .expect("happy path");
+    }
+
+    #[test]
+    fn provide_ice_servers_refuses_cross_org_request() {
+        let mut req = provide_ice_servers_req();
+        req.org_id = "ffffffff-ffff-ffff-ffff-ffffffffffff".into();
+        let r = check_provide_ice_servers(&req, Some(VALID_ORG_ID)).unwrap_err();
+        assert!(r.message.contains("organisation"), "{}", r.message);
+        // session_id failed the cross-org check after passing the
+        // UUID check, so it IS echoed back — the guard ran the
+        // session-id validator first.
+        assert_eq!(r.session_id, VALID_SESSION_ID);
+    }
+
+    #[test]
+    fn provide_ice_servers_refuses_non_canonical_session_id() {
+        let mut req = provide_ice_servers_req();
+        req.session_id = "NOT-A-UUID".into();
+        let r = check_provide_ice_servers(&req, Some(VALID_ORG_ID)).unwrap_err();
+        assert!(r.message.contains("session_id"), "{}", r.message);
+        // Malformed session id MUST NOT be reflected back into the
+        // failure result — same contract as every other guard here.
+        assert_eq!(r.session_id, "");
+    }
+
+    #[test]
+    fn provide_ice_servers_refuses_bidi_override_in_org_name() {
+        let mut req = provide_ice_servers_req();
+        req.org_name = "Acme\u{202E}".into();
+        let r = check_provide_ice_servers(&req, Some(VALID_ORG_ID)).unwrap_err();
+        assert!(r.message.contains("org_name"), "{}", r.message);
+        assert!(r.message.contains("bidi-override"), "{}", r.message);
+    }
+
+    #[test]
+    fn provide_ice_servers_refuses_control_in_viewer_connection_id() {
+        let mut req = provide_ice_servers_req();
+        req.viewer_connection_id = "viewer\u{0007}".into();
+        let r = check_provide_ice_servers(&req, Some(VALID_ORG_ID)).unwrap_err();
+        assert!(r.message.contains("viewer_connection_id"), "{}", r.message);
+        assert!(r.message.contains("non-printable"), "{}", r.message);
+    }
+
+    #[test]
+    fn provide_ice_servers_refuses_hostile_ice_url() {
+        let mut req = provide_ice_servers_req();
+        req.ice_server_config.ice_servers[0].urls[0] = "javascript:alert(1)".into();
+        let r = check_provide_ice_servers(&req, Some(VALID_ORG_ID)).unwrap_err();
+        assert!(r.message.contains("ice_servers[0]"), "{}", r.message);
+        assert!(r.message.contains("scheme"), "{}", r.message);
+        // The URL contents MUST NOT appear in the rejection
+        // message — only the field name and the policy that
+        // refused it.
+        assert!(!r.message.contains("javascript"), "{}", r.message);
+        assert!(!r.message.contains("alert"), "{}", r.message);
+    }
+
+    #[test]
+    fn provide_ice_servers_refuses_over_max_servers() {
+        let mut req = provide_ice_servers_req();
+        req.ice_server_config.ice_servers =
+            (0..(MAX_ICE_SERVERS + 1)).map(|_| stun_server()).collect();
+        let r = check_provide_ice_servers(&req, Some(VALID_ORG_ID)).unwrap_err();
+        assert!(r.message.contains("ice_servers"), "{}", r.message);
+        assert!(r.message.contains("limit"), "{}", r.message);
+    }
+
+    #[test]
+    fn provide_ice_servers_refuses_oauth_credential_type() {
+        let mut req = provide_ice_servers_req();
+        req.ice_server_config.ice_servers[1].credential_type = IceCredentialType::Oauth;
+        let r = check_provide_ice_servers(&req, Some(VALID_ORG_ID)).unwrap_err();
+        assert!(r.message.contains("Oauth"), "{}", r.message);
+        assert!(r.message.contains("not implemented"), "{}", r.message);
+    }
+
+    #[test]
+    fn provide_ice_servers_does_not_echo_access_key_in_any_rejection() {
+        // The guard MUST NOT read `access_key` under any branch, so
+        // a leaked rejection message can never disclose it. Pin
+        // that across every refusal path.
+        fn cross_org(r: &mut ProvideIceServersRequest) {
+            r.org_id = "ffffffff-ffff-ffff-ffff-ffffffffffff".into();
+        }
+        fn bad_session(r: &mut ProvideIceServersRequest) {
+            r.session_id = "not-a-uuid".into();
+        }
+        fn bidi_org(r: &mut ProvideIceServersRequest) {
+            r.org_name = "Acme\u{202E}".into();
+        }
+        fn bad_url(r: &mut ProvideIceServersRequest) {
+            r.ice_server_config.ice_servers[0].urls[0] = "javascript:alert(1)".into();
+        }
+        fn oauth(r: &mut ProvideIceServersRequest) {
+            r.ice_server_config.ice_servers[1].credential_type = IceCredentialType::Oauth;
+        }
+        let cases: [fn(&mut ProvideIceServersRequest); 5] =
+            [cross_org, bad_session, bidi_org, bad_url, oauth];
+        for mutate in cases {
+            let mut req = provide_ice_servers_req();
+            mutate(&mut req);
+            let r = check_provide_ice_servers(&req, Some(VALID_ORG_ID)).unwrap_err();
+            assert!(
+                !r.message.contains("secret-access-key"),
+                "access_key leaked in rejection: {}",
+                r.message
+            );
+        }
+    }
+
+    #[test]
+    fn provide_ice_servers_does_not_echo_turn_credential_in_any_rejection() {
+        // The TURN shared secret is sensitive too — the rejection
+        // for a hostile-bytes credential MUST cite only the field
+        // name, never the bytes themselves.
+        let mut req = provide_ice_servers_req();
+        req.ice_server_config.ice_servers[1].credential = Some("hunter2\u{202E}".into());
+        let r = check_provide_ice_servers(&req, Some(VALID_ORG_ID)).unwrap_err();
+        assert!(r.message.contains("credential"), "{}", r.message);
+        assert!(!r.message.contains("hunter2"), "{}", r.message);
     }
 }

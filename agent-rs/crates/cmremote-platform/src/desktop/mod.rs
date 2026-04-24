@@ -58,7 +58,8 @@
 use async_trait::async_trait;
 use cmremote_wire::{
     ChangeWindowsSessionRequest, DesktopTransportResult, IceCandidate, InvokeCtrlAltDelRequest,
-    RemoteControlSessionRequest, RestartScreenCasterRequest, SdpAnswer, SdpOffer,
+    ProvideIceServersRequest, RemoteControlSessionRequest, RestartScreenCasterRequest, SdpAnswer,
+    SdpOffer,
 };
 
 use crate::HostOs;
@@ -169,6 +170,38 @@ pub trait DesktopTransportProvider: Send + Sync {
         DesktopTransportResult::failed(
             request.session_id.clone(),
             "Desktop transport for \"SendIceCandidate\" is not implemented by this provider."
+                .to_string(),
+        )
+    }
+
+    // ---------------------------------------------------------------
+    // Slice R7.j — `ProvideIceServers` hook.
+    //
+    // Receives the per-session ICE / TURN configuration the .NET hub
+    // delivers before the viewer starts trickling candidates. The
+    // future WebRTC driver consumes the embedded `IceServerConfig`
+    // as its `RTCConfiguration::ice_servers` /
+    // `ice_transport_policy`. Until a driver lands, the default
+    // `NotSupportedDesktopTransport` runs the slice R7.b envelope
+    // guards plus the slice R7.i config guards before returning a
+    // structured "not supported on <host_os>" failure.
+    //
+    // Implementations MUST run `guards::check_provide_ice_servers`
+    // *before* reading the embedded config — same guard-first
+    // contract as the four method-surface methods above.
+    // ---------------------------------------------------------------
+
+    /// Service a `ProvideIceServers(iceServerConfig, sessionId, …)`
+    /// invocation. Default-impl provided so existing driver crates
+    /// (and downstream forks) compile without a churn step;
+    /// concrete drivers MUST override it.
+    async fn on_provide_ice_servers(
+        &self,
+        request: &ProvideIceServersRequest,
+    ) -> DesktopTransportResult {
+        DesktopTransportResult::failed(
+            request.session_id.clone(),
+            "Desktop transport for \"ProvideIceServers\" is not implemented by this provider."
                 .to_string(),
         )
     }
@@ -306,6 +339,27 @@ impl DesktopTransportProvider for NotSupportedDesktopTransport {
             return rejection.into_result();
         }
         DesktopTransportResult::failed(request.session_id.clone(), self.message("SendIceCandidate"))
+    }
+
+    // -----------------------------------------------------------------
+    // Slice R7.j — `ProvideIceServers` hook stub. Same guard-first
+    // ordering as every other method here: a hostile request never
+    // reaches the per-OS error path, the sensitive `access_key` is
+    // never read, and the embedded `IceServerConfig` is validated by
+    // the same per-server checks `check_ice_server_config` applies.
+    // -----------------------------------------------------------------
+
+    async fn on_provide_ice_servers(
+        &self,
+        request: &ProvideIceServersRequest,
+    ) -> DesktopTransportResult {
+        if let Err(rejection) = guards::check_provide_ice_servers(request, self.expected_org()) {
+            return rejection.into_result();
+        }
+        DesktopTransportResult::failed(
+            request.session_id.clone(),
+            self.message("ProvideIceServers"),
+        )
     }
 }
 
@@ -595,5 +649,127 @@ mod tests {
         let msg = r.error_message.unwrap();
         assert!(msg.contains("SendIceCandidate"), "{msg}");
         assert!(msg.contains("Linux"), "{msg}");
+    }
+
+    // -----------------------------------------------------------------
+    // Slice R7.j — `ProvideIceServers` stub behaviour. Mirror the
+    // signalling-hook tests above: guards run *before* the OS-not-
+    // supported branch, the sensitive `access_key` is never echoed
+    // into the failure message, and a hostile embedded ICE config
+    // is refused at the same gate as a hostile envelope.
+    // -----------------------------------------------------------------
+
+    fn provide_ice_servers_req() -> cmremote_wire::ProvideIceServersRequest {
+        cmremote_wire::ProvideIceServersRequest {
+            viewer_connection_id: "viewer-1".into(),
+            session_id: VALID_SESSION_ID.into(),
+            access_key: "secret-access-key".into(),
+            requester_name: "Alice".into(),
+            org_name: "Acme".into(),
+            org_id: VALID_ORG_ID.into(),
+            ice_server_config: cmremote_wire::IceServerConfig {
+                ice_servers: vec![cmremote_wire::IceServer {
+                    urls: vec!["stun:stun.example.org:3478".into()],
+                    username: None,
+                    credential: None,
+                    credential_type: cmremote_wire::IceCredentialType::Password,
+                }],
+                ice_transport_policy: cmremote_wire::IceTransportPolicy::All,
+            },
+        }
+    }
+
+    #[tokio::test]
+    async fn not_supported_provide_ice_servers_is_structured_failure_naming_method_and_os() {
+        let p = NotSupportedDesktopTransport::new(HostOs::Linux, Some(VALID_ORG_ID.into()));
+        let r = p.on_provide_ice_servers(&provide_ice_servers_req()).await;
+        assert!(!r.success);
+        assert_eq!(r.session_id, VALID_SESSION_ID);
+        let msg = r.error_message.unwrap();
+        assert!(msg.contains("ProvideIceServers"), "{msg}");
+        assert!(msg.contains("Linux"), "{msg}");
+    }
+
+    #[tokio::test]
+    async fn not_supported_provide_ice_servers_does_not_leak_access_key() {
+        let p = NotSupportedDesktopTransport::new(HostOs::Linux, Some(VALID_ORG_ID.into()));
+        let r = p.on_provide_ice_servers(&provide_ice_servers_req()).await;
+        let msg = r.error_message.unwrap();
+        assert!(
+            !msg.contains("secret-access-key"),
+            "access_key leaked into result: {msg}",
+        );
+    }
+
+    #[tokio::test]
+    async fn cross_org_provide_ice_servers_is_refused_before_os_check() {
+        let p = NotSupportedDesktopTransport::new(HostOs::Linux, Some(VALID_ORG_ID.into()));
+        let mut req = provide_ice_servers_req();
+        req.org_id = "ffffffff-ffff-ffff-ffff-ffffffffffff".into();
+        let r = p.on_provide_ice_servers(&req).await;
+        assert!(!r.success);
+        let msg = r.error_message.unwrap();
+        assert!(msg.contains("organisation"), "{msg}");
+        // OS-not-supported branch did not run — the cross-org guard
+        // refused the request first.
+        assert!(!msg.contains("Linux"), "{msg}");
+    }
+
+    #[tokio::test]
+    async fn hostile_ice_url_in_provide_ice_servers_is_refused_before_os_check() {
+        let p = NotSupportedDesktopTransport::new(HostOs::Linux, Some(VALID_ORG_ID.into()));
+        let mut req = provide_ice_servers_req();
+        req.ice_server_config.ice_servers[0].urls[0] = "javascript:alert(1)".into();
+        let r = p.on_provide_ice_servers(&req).await;
+        assert!(!r.success);
+        let msg = r.error_message.unwrap();
+        assert!(msg.contains("ice_servers[0]"), "{msg}");
+        assert!(msg.contains("scheme"), "{msg}");
+        // The URL contents MUST NOT appear in the rejection message.
+        assert!(!msg.contains("javascript"), "{msg}");
+    }
+
+    /// The default trait method (i.e. without the `NotSupported*`
+    /// override) carries a fixed "not implemented by this provider"
+    /// message — pin that so a future driver crate that forgets to
+    /// override the hook surfaces a clear error rather than silently
+    /// succeeding.
+    #[tokio::test]
+    async fn default_trait_provide_ice_servers_returns_not_implemented_message() {
+        struct Bare;
+        #[async_trait]
+        impl DesktopTransportProvider for Bare {
+            async fn remote_control(
+                &self,
+                _: &RemoteControlSessionRequest,
+            ) -> DesktopTransportResult {
+                DesktopTransportResult::failed(String::new(), "n/a".to_string())
+            }
+            async fn restart_screen_caster(
+                &self,
+                _: &RestartScreenCasterRequest,
+            ) -> DesktopTransportResult {
+                DesktopTransportResult::failed(String::new(), "n/a".to_string())
+            }
+            async fn change_windows_session(
+                &self,
+                _: &ChangeWindowsSessionRequest,
+            ) -> DesktopTransportResult {
+                DesktopTransportResult::failed(String::new(), "n/a".to_string())
+            }
+            async fn invoke_ctrl_alt_del(
+                &self,
+                _: &InvokeCtrlAltDelRequest,
+            ) -> DesktopTransportResult {
+                DesktopTransportResult::failed(String::new(), "n/a".to_string())
+            }
+        }
+        let r = Bare
+            .on_provide_ice_servers(&provide_ice_servers_req())
+            .await;
+        assert!(!r.success);
+        let msg = r.error_message.unwrap();
+        assert!(msg.contains("ProvideIceServers"), "{msg}");
+        assert!(msg.contains("not implemented"), "{msg}");
     }
 }

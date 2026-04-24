@@ -89,6 +89,14 @@ impl AgentHandlers {
             MethodName::SendIceCandidate => {
                 desktop::handle_send_ice_candidate(inv, &*self.desktop).await
             }
+            // Slice R7.j — per-session ICE / TURN configuration.
+            // Same dispatch shape as the signalling family; the
+            // stub provider runs the slice R7.b envelope guards
+            // plus the slice R7.i config guards before returning a
+            // structured "not supported on <OS>" failure.
+            MethodName::ProvideIceServers => {
+                desktop::handle_provide_ice_servers(inv, &*self.desktop).await
+            }
             // R8 stubs (RunScript / DeleteLogs / GetLogs /
             // ReinstallAgent / UninstallAgent / WakeDevice /
             // TransferFileFromBrowserToAgent) — fall through to the

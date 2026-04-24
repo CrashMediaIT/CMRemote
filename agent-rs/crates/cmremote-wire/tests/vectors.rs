@@ -10,8 +10,8 @@ use cmremote_wire::{
     from_msgpack, to_msgpack, ChangeWindowsSessionRequest, ConnectionInfo, DesktopTransportResult,
     HandshakeRequest, HandshakeResponse, HubClose, HubCompletion, HubInvocation, HubPing,
     HubProtocol, IceCandidate, IceCredentialType, IceServerConfig, IceTransportPolicy,
-    InvokeCtrlAltDelRequest, RemoteControlSessionRequest, RestartScreenCasterRequest, SdpAnswer,
-    SdpKind, SdpOffer,
+    InvokeCtrlAltDelRequest, ProvideIceServersRequest, RemoteControlSessionRequest,
+    RestartScreenCasterRequest, SdpAnswer, SdpKind, SdpOffer,
 };
 
 /// Walk up from the crate's manifest directory until we find the
@@ -556,4 +556,77 @@ fn ice_config_relay_only_vector_round_trips() {
     let re = serde_json::to_string(&cfg).unwrap();
     assert!(re.contains("\"IceTransportPolicy\":\"Relay\""), "{re}");
     assert_msgpack_round_trip::<IceServerConfig>(&path);
+}
+
+// -------------------------------------------------------------------------
+// Slice R7.j — `ProvideIceServers` request + result vectors. Pin the wire
+// shape the .NET hub uses to deliver the per-session ICE / TURN
+// configuration to the agent before SDP negotiation begins, so the .NET
+// side can land its half against frozen vectors. The request envelope
+// mirrors `SdpOffer` / `SdpAnswer` verbatim plus a nested
+// `IceServerConfig` object — pin that the PascalCase rename cascades
+// through both the envelope and the embedded config.
+// -------------------------------------------------------------------------
+
+#[test]
+fn provide_ice_servers_request_vector_round_trips() {
+    let path = vectors_root()
+        .join("method-surface")
+        .join("provide-ice-servers")
+        .join("request.json");
+    let raw = read(&path);
+    let req: ProvideIceServersRequest = serde_json::from_str(&raw).unwrap();
+    assert_eq!(req.session_id, DESKTOP_VALID_SESSION_ID);
+    assert_eq!(req.org_id, DESKTOP_VALID_ORG_ID);
+    assert_eq!(req.viewer_connection_id, "viewer-conn-1");
+    assert_eq!(req.ice_server_config.ice_servers.len(), 2);
+    assert_eq!(
+        req.ice_server_config.ice_transport_policy,
+        IceTransportPolicy::All
+    );
+    let stun = &req.ice_server_config.ice_servers[0];
+    assert!(stun.urls[0].starts_with("stun:"));
+    assert!(stun.username.is_none());
+    assert!(stun.credential.is_none());
+    let turn = &req.ice_server_config.ice_servers[1];
+    assert_eq!(turn.username.as_deref(), Some("agent-bob"));
+    assert!(turn.credential.is_some());
+    assert_eq!(turn.credential_type, IceCredentialType::Password);
+
+    let re = serde_json::to_string(&req).unwrap();
+    // Envelope PascalCase wire field names — the contract with the
+    // .NET hub.
+    assert!(
+        re.contains("\"ViewerConnectionId\":\"viewer-conn-1\""),
+        "{re}"
+    );
+    assert!(re.contains("\"SessionId\":"), "{re}");
+    assert!(re.contains("\"AccessKey\":"), "{re}");
+    assert!(re.contains("\"OrgId\":"), "{re}");
+    // The nested config keeps its PascalCase shape — the slice R7.i
+    // contract — when carried inside the slice R7.j request.
+    assert!(re.contains("\"IceServerConfig\":{"), "{re}");
+    assert!(re.contains("\"IceServers\":"), "{re}");
+    assert!(re.contains("\"IceTransportPolicy\":\"All\""), "{re}");
+    assert!(re.contains("\"CredentialType\":\"Password\""), "{re}");
+
+    assert_msgpack_round_trip::<ProvideIceServersRequest>(&path);
+}
+
+#[test]
+fn provide_ice_servers_result_failure_vector_round_trips() {
+    let path = vectors_root()
+        .join("method-surface")
+        .join("provide-ice-servers")
+        .join("result-failure.json");
+    let raw = read(&path);
+    let res: DesktopTransportResult = serde_json::from_str(&raw).unwrap();
+    assert!(!res.success);
+    assert_eq!(res.session_id, DESKTOP_VALID_SESSION_ID);
+    let msg = res.error_message.as_deref().unwrap();
+    // The fixture mirrors the stub's "not supported on Linux"
+    // message — pin it as the canonical failure shape so the .NET
+    // side can match against a known string when wiring its half.
+    assert!(msg.contains("ProvideIceServers"), "{msg}");
+    assert_msgpack_round_trip::<DesktopTransportResult>(&path);
 }

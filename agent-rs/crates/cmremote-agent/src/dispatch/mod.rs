@@ -155,6 +155,15 @@ pub enum MethodName {
     /// candidate, sdpMid, sdpMlineIndex)` — trickled ICE candidate
     /// (R7.g).
     SendIceCandidate,
+    /// `ProvideIceServers(iceServerConfig, sessionId, accessKey, …)`
+    /// — per-session ICE / TURN configuration delivered by the .NET
+    /// hub before the agent emits its first SDP offer (R7.j).
+    /// Until a real WebRTC driver lands, the
+    /// `NotSupportedDesktopTransport` stub runs the slice R7.b
+    /// envelope guards plus the slice R7.i config guards before
+    /// returning a structured "not supported on `<host_os>`"
+    /// failure.
+    ProvideIceServers,
     /// Stub — agent log deletion.
     DeleteLogs,
     /// Stub — agent log retrieval.
@@ -195,6 +204,7 @@ impl MethodName {
             "SendSdpOffer" => Some(Self::SendSdpOffer),
             "SendSdpAnswer" => Some(Self::SendSdpAnswer),
             "SendIceCandidate" => Some(Self::SendIceCandidate),
+            "ProvideIceServers" => Some(Self::ProvideIceServers),
             "DeleteLogs" => Some(Self::DeleteLogs),
             "GetLogs" => Some(Self::GetLogs),
             "InstallAgentUpdate" => Some(Self::InstallAgentUpdate),
@@ -403,6 +413,8 @@ mod tests {
             "SendSdpOffer",
             "SendSdpAnswer",
             "SendIceCandidate",
+            // Slice R7.j — `ProvideIceServers` allow-list entry.
+            "ProvideIceServers",
         ];
         for m in &known {
             assert!(

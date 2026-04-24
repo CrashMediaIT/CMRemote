@@ -57,7 +57,9 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 
-use super::guards::validate_operator_string;
+use cmremote_wire::{DesktopTransportResult, RemoteControlSessionRequest};
+
+use super::guards::{validate_operator_string, GuardRejection};
 #[cfg(test)]
 use super::guards::MAX_OPERATOR_STRING_LEN;
 
