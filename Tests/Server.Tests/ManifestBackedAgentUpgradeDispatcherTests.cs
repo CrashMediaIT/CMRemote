@@ -1,11 +1,16 @@
+using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
+using Moq;
 using Remotely.Server.Data;
+using Remotely.Server.Hubs;
+using Remotely.Server.Services;
 using Remotely.Server.Services.AgentUpgrade;
 using Remotely.Shared.Entities;
 using Remotely.Shared.Enums;
+using Remotely.Shared.Interfaces;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -42,7 +47,10 @@ public class ManifestBackedAgentUpgradeDispatcherTests
     private ManifestBackedAgentUpgradeDispatcher NewDispatcher(
         Dictionary<string, string>? manifestUrls = null,
         bool requireSignature = false,
-        string defaultChannel = "stable")
+        string defaultChannel = "stable",
+        IAgentHubSessionCache? sessionCache = null,
+        FakeAgentHub? agentHub = null,
+        TimeSpan? versionWatchInterval = null)
     {
         var opts = MsOptions.Create(new AgentUpgradeManifestOptions
         {
@@ -52,9 +60,14 @@ public class ManifestBackedAgentUpgradeDispatcherTests
             },
             RequireSignature = requireSignature,
             DefaultChannel = defaultChannel,
+            VersionWatchInterval = versionWatchInterval ?? TimeSpan.FromMilliseconds(20),
         });
         return new ManifestBackedAgentUpgradeDispatcher(
-            _provider, _dbFactory, opts,
+            _provider,
+            _dbFactory,
+            sessionCache ?? new AgentHubSessionCache(),
+            (agentHub ?? new FakeAgentHub()).HubContext,
+            opts,
             NullLogger<ManifestBackedAgentUpgradeDispatcher>.Instance);
     }
 
@@ -319,21 +332,154 @@ public class ManifestBackedAgentUpgradeDispatcherTests
         Assert.AreEqual("3.0.0-rc.1", target!.Version);
     }
 
-    // ---- DispatchAsync (deferred handler is explicit failure) ----
+    // ---- DispatchAsync ----
 
     [TestMethod]
-    public async Task Dispatch_BeforeR6Handler_ReturnsExplicitFailure()
+    public async Task Dispatch_DeviceOffline_ReturnsRecoverableFailure()
     {
-        var dispatcher = NewDispatcher();
+        // Empty session cache → device is offline. Must fail-fast (the
+        // orchestrator's on-connect path will requeue when the device
+        // reconnects).
+        var sessionCache = new AgentHubSessionCache();
+        var agentHub = new FakeAgentHub();
+        var dispatcher = NewDispatcher(sessionCache: sessionCache, agentHub: agentHub);
         var target = new AgentUpgradeTarget("2.0.0", new string('a', 64),
             new Uri("https://cdn.example.com/cmremote/stable/cmremote-agent.deb"));
+
         var result = await dispatcher.DispatchAsync(
             StatusFor(_testData.Org1Device1.ID), target, CancellationToken.None);
+
         Assert.IsFalse(result.Succeeded);
-        Assert.IsNotNull(result.Error);
-        // The failure must be explicit so the orchestrator records it
-        // as a real Failed transition rather than a silent success.
-        StringAssert.Contains(result.Error!, "R6", StringComparison.OrdinalIgnoreCase);
+        StringAssert.Contains(result.Error!, "offline", StringComparison.OrdinalIgnoreCase);
+        Assert.AreEqual(0, agentHub.InstallAgentUpdateCalls.Count,
+            "Hub method must NOT be invoked for an offline device.");
+    }
+
+    [TestMethod]
+    public async Task Dispatch_PushesHubMethodAndSucceedsOnVersionBump()
+    {
+        var device = new Device
+        {
+            ID = _testData.Org1Device1.ID,
+            AgentVersion = "1.9.0",
+            Platform = "Linux/Ubuntu 22.04",
+            OSArchitecture = Architecture.X64,
+        };
+        var sessionCache = new AgentHubSessionCache();
+        sessionCache.AddOrUpdateByConnectionId("conn-1", device);
+        var agentHub = new FakeAgentHub();
+        var dispatcher = NewDispatcher(sessionCache: sessionCache, agentHub: agentHub);
+        var target = new AgentUpgradeTarget("2.0.0", new string('a', 64),
+            new Uri("https://cdn.example.com/cmremote/stable/cmremote-agent.deb"));
+
+        // Simulate the agent restarting + heartbeating with the new
+        // version after a tick or two.
+        _ = Task.Run(async () =>
+        {
+            await Task.Delay(50);
+            sessionCache.AddOrUpdateByConnectionId("conn-1", new Device
+            {
+                ID = device.ID,
+                AgentVersion = "2.0.0",
+                Platform = device.Platform,
+                OSArchitecture = device.OSArchitecture,
+            });
+        });
+
+        var result = await dispatcher.DispatchAsync(
+            StatusFor(_testData.Org1Device1.ID), target, CancellationToken.None);
+
+        Assert.IsTrue(result.Succeeded, $"Expected success but got: {result.Error}");
+        Assert.AreEqual(1, agentHub.InstallAgentUpdateCalls.Count);
+        var (connId, url, ver, sha) = agentHub.InstallAgentUpdateCalls[0];
+        Assert.AreEqual("conn-1", connId);
+        Assert.AreEqual(target.DownloadUri.ToString(), url);
+        Assert.AreEqual(target.Version, ver);
+        Assert.AreEqual(target.Sha256, sha);
+    }
+
+    [TestMethod]
+    public async Task Dispatch_NoVersionBumpBeforeTimeout_ThrowsOperationCancelled()
+    {
+        var device = new Device
+        {
+            ID = _testData.Org1Device1.ID,
+            AgentVersion = "1.9.0",
+            Platform = "Linux/Ubuntu 22.04",
+            OSArchitecture = Architecture.X64,
+        };
+        var sessionCache = new AgentHubSessionCache();
+        sessionCache.AddOrUpdateByConnectionId("conn-1", device);
+        var agentHub = new FakeAgentHub();
+        var dispatcher = NewDispatcher(
+            sessionCache: sessionCache, agentHub: agentHub,
+            versionWatchInterval: TimeSpan.FromMilliseconds(10));
+        var target = new AgentUpgradeTarget("2.0.0", new string('a', 64),
+            new Uri("https://cdn.example.com/cmremote/stable/cmremote-agent.deb"));
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(150));
+        // The orchestrator translates the OperationCanceledException
+        // (TaskCanceledException is the concrete subtype Task.Delay
+        // raises) into a "Dispatch timed out" failure, so we just need
+        // to assert the dispatch loop honours the token.
+        await Assert.ThrowsExceptionAsync<TaskCanceledException>(async () =>
+            await dispatcher.DispatchAsync(
+                StatusFor(_testData.Org1Device1.ID), target, cts.Token));
+        Assert.AreEqual(1, agentHub.InstallAgentUpdateCalls.Count,
+            "Hub method must be invoked exactly once even when the watch loop times out.");
+    }
+
+    [TestMethod]
+    public async Task Dispatch_RefusesNonHttpsUri()
+    {
+        var device = new Device
+        {
+            ID = _testData.Org1Device1.ID,
+            AgentVersion = "1.9.0",
+            Platform = "Linux/Ubuntu 22.04",
+            OSArchitecture = Architecture.X64,
+        };
+        var sessionCache = new AgentHubSessionCache();
+        sessionCache.AddOrUpdateByConnectionId("conn-1", device);
+        var agentHub = new FakeAgentHub();
+        var dispatcher = NewDispatcher(sessionCache: sessionCache, agentHub: agentHub);
+        // http (not https) — must be refused before any hub call fires.
+        var target = new AgentUpgradeTarget("2.0.0", new string('a', 64),
+            new Uri("http://cdn.example.com/cmremote/stable/cmremote-agent.deb"));
+
+        var result = await dispatcher.DispatchAsync(
+            StatusFor(_testData.Org1Device1.ID), target, CancellationToken.None);
+
+        Assert.IsFalse(result.Succeeded);
+        StringAssert.Contains(result.Error!, "scheme", StringComparison.OrdinalIgnoreCase);
+        Assert.AreEqual(0, agentHub.InstallAgentUpdateCalls.Count);
+    }
+
+    [TestMethod]
+    public async Task Dispatch_HubCallThrows_ReturnsFailureWithoutBlocking()
+    {
+        var device = new Device
+        {
+            ID = _testData.Org1Device1.ID,
+            AgentVersion = "1.9.0",
+            Platform = "Linux/Ubuntu 22.04",
+            OSArchitecture = Architecture.X64,
+        };
+        var sessionCache = new AgentHubSessionCache();
+        sessionCache.AddOrUpdateByConnectionId("conn-1", device);
+        var agentHub = new FakeAgentHub
+        {
+            ThrowOnInstallAgentUpdate = new InvalidOperationException("transport closed"),
+        };
+        var dispatcher = NewDispatcher(sessionCache: sessionCache, agentHub: agentHub);
+        var target = new AgentUpgradeTarget("2.0.0", new string('a', 64),
+            new Uri("https://cdn.example.com/cmremote/stable/cmremote-agent.deb"));
+
+        var result = await dispatcher.DispatchAsync(
+            StatusFor(_testData.Org1Device1.ID), target, CancellationToken.None);
+
+        Assert.IsFalse(result.Succeeded);
+        StringAssert.Contains(result.Error!, "transport closed", StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>
@@ -351,5 +497,50 @@ public class ManifestBackedAgentUpgradeDispatcherTests
 
         public Task<PublisherManifest?> GetAsync(string channel, CancellationToken cancellationToken) =>
             Task.FromResult(_byChannel.TryGetValue(channel, out var m) ? m : null);
+    }
+
+    /// <summary>
+    /// Tracking double for <see cref="IHubContext{THub, TClient}"/> over
+    /// <see cref="AgentHub"/> + <see cref="IAgentHubClient"/>. Records
+    /// every <see cref="IAgentHubClient.InstallAgentUpdate"/> call (along
+    /// with which connection ID it was routed to) so the dispatch tests
+    /// can assert exactly what hit the wire. Throws
+    /// <see cref="ThrowOnInstallAgentUpdate"/> when set, so the
+    /// transport-failure path can be exercised.
+    /// </summary>
+    internal sealed class FakeAgentHub
+    {
+        public List<(string ConnectionId, string DownloadUrl, string Version, string Sha256)> InstallAgentUpdateCalls { get; } = new();
+        public Exception? ThrowOnInstallAgentUpdate { get; set; }
+
+        public IHubContext<AgentHub, IAgentHubClient> HubContext { get; }
+
+        public FakeAgentHub()
+        {
+            var clients = new Mock<IHubClients<IAgentHubClient>>(MockBehavior.Strict);
+            clients
+                .Setup(c => c.Client(It.IsAny<string>()))
+                .Returns<string>(connId =>
+                {
+                    var client = new Mock<IAgentHubClient>(MockBehavior.Loose);
+                    client
+                        .Setup(c => c.InstallAgentUpdate(
+                            It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()))
+                        .Returns<string, string, string>((url, ver, sha) =>
+                        {
+                            InstallAgentUpdateCalls.Add((connId, url, ver, sha));
+                            if (ThrowOnInstallAgentUpdate is not null)
+                            {
+                                throw ThrowOnInstallAgentUpdate;
+                            }
+                            return Task.CompletedTask;
+                        });
+                    return client.Object;
+                });
+
+            var ctx = new Mock<IHubContext<AgentHub, IAgentHubClient>>(MockBehavior.Strict);
+            ctx.Setup(c => c.Clients).Returns(clients.Object);
+            HubContext = ctx.Object;
+        }
     }
 }

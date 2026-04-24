@@ -48,6 +48,15 @@ public class AgentUpgradeManifestOptions
     /// once Track S / S5 lands the cosign verifier on the agent side.
     /// </summary>
     public bool RequireSignature { get; set; }
+
+    /// <summary>
+    /// How often the dispatcher polls the agent-hub session cache for
+    /// the device's <c>AgentVersion</c> to flip to the target version
+    /// after pushing the upgrade. Defaults to 5 seconds. The outer
+    /// <see cref="AgentUpgradeOrchestratorOptions.DispatchTimeout"/>
+    /// caps the total wait.
+    /// </summary>
+    public TimeSpan VersionWatchInterval { get; set; } = TimeSpan.FromSeconds(5);
 }
 
 /// <summary>

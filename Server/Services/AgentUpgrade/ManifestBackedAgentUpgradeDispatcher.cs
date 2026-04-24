@@ -1,6 +1,10 @@
+using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Options;
 using Remotely.Server.Data;
+using Remotely.Server.Hubs;
+using Remotely.Server.Services;
 using Remotely.Shared.Entities;
+using Remotely.Shared.Interfaces;
 
 namespace Remotely.Server.Services.AgentUpgrade;
 
@@ -35,17 +39,23 @@ public class ManifestBackedAgentUpgradeDispatcher : IAgentUpgradeDispatcher
 {
     private readonly IPublisherManifestProvider _manifestProvider;
     private readonly IAppDbFactory _dbFactory;
+    private readonly IAgentHubSessionCache _sessionCache;
+    private readonly IHubContext<AgentHub, IAgentHubClient> _agentHub;
     private readonly AgentUpgradeManifestOptions _options;
     private readonly ILogger<ManifestBackedAgentUpgradeDispatcher> _logger;
 
     public ManifestBackedAgentUpgradeDispatcher(
         IPublisherManifestProvider manifestProvider,
         IAppDbFactory dbFactory,
+        IAgentHubSessionCache sessionCache,
+        IHubContext<AgentHub, IAgentHubClient> agentHub,
         IOptions<AgentUpgradeManifestOptions> options,
         ILogger<ManifestBackedAgentUpgradeDispatcher> logger)
     {
         _manifestProvider = manifestProvider;
         _dbFactory = dbFactory;
+        _sessionCache = sessionCache;
+        _agentHub = agentHub;
         _options = options.Value;
         _logger = logger;
     }
@@ -149,25 +159,94 @@ public class ManifestBackedAgentUpgradeDispatcher : IAgentUpgradeDispatcher
         return new AgentUpgradeTarget(build.AgentVersion, build.Sha256, downloadUri);
     }
 
-    public Task<AgentUpgradeDispatchResult> DispatchAsync(
+    public async Task<AgentUpgradeDispatchResult> DispatchAsync(
         AgentUpgradeStatus status,
         AgentUpgradeTarget target,
         CancellationToken cancellationToken)
     {
-        // The actual dispatch (push the resolved URL to the device's
-        // AgentHub connection, await the heartbeat with the new
-        // version) lives in the AgentHub-facing M3 wiring that arrives
-        // alongside R6's concrete fetch handlers. The resolver is the
-        // unblock; until that ships the dispatcher reports an
-        // explicit "dispatcher pipeline not yet wired" failure rather
-        // than silently flipping rows to Succeeded.
-        _logger.LogInformation(
-            "ManifestBackedAgentUpgradeDispatcher resolved target {version} ({sha256}) for DeviceId={deviceId}, " +
-            "but the agent-side fetch handler (slice R6) is not yet wired; reporting dispatch failure.",
-            target.Version, target.Sha256, status.DeviceId);
+        if (status is null || string.IsNullOrWhiteSpace(status.DeviceId))
+        {
+            return AgentUpgradeDispatchResult.Fail("Status has no DeviceId.");
+        }
 
-        return Task.FromResult(AgentUpgradeDispatchResult.Fail(
-            "Manifest resolved a target build but the agent-side fetch handler is not yet wired (slice R6)."));
+        // Defence in depth — the resolver should have caught these but
+        // we re-check so a misbehaving caller cannot push an unverified
+        // URL into the agent.
+        if (target is null ||
+            string.IsNullOrWhiteSpace(target.Version) ||
+            string.IsNullOrWhiteSpace(target.Sha256) ||
+            target.DownloadUri is null)
+        {
+            return AgentUpgradeDispatchResult.Fail("Resolved target is incomplete.");
+        }
+
+        // Refuse anything that didn't come back as an absolute https URL —
+        // the agent must not trust an http URL for a binary it's about to
+        // install with elevated privileges.
+        if (!target.DownloadUri.IsAbsoluteUri ||
+            (target.DownloadUri.Scheme != Uri.UriSchemeHttps &&
+             target.DownloadUri.Scheme != Uri.UriSchemeFile))
+        {
+            return AgentUpgradeDispatchResult.Fail(
+                $"Refusing to dispatch upgrade — download URI scheme '{target.DownloadUri.Scheme}' is not allowed.");
+        }
+
+        if (!_sessionCache.TryGetConnectionId(status.DeviceId, out var connectionId))
+        {
+            // Device offline — the orchestrator's on-connect path will
+            // requeue the row when the device next handshakes, so this
+            // is a recoverable failure.
+            return AgentUpgradeDispatchResult.Fail("Device is offline; will retry when it reconnects.");
+        }
+
+        try
+        {
+            await _agentHub.Clients.Client(connectionId).InstallAgentUpdate(
+                target.DownloadUri.ToString(),
+                target.Version,
+                target.Sha256);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "Pushing InstallAgentUpdate to DeviceId={deviceId} (ConnectionId={connectionId}) failed.",
+                status.DeviceId, connectionId);
+            return AgentUpgradeDispatchResult.Fail($"InstallAgentUpdate hub call failed: {ex.Message}");
+        }
+
+        // Wait for the device's heartbeat to report the new AgentVersion.
+        // The orchestrator gives us its DispatchTimeout via the
+        // CancellationToken, so we just poll until the cache flips or
+        // the token cancels.
+        var pollInterval = _options.VersionWatchInterval > TimeSpan.Zero
+            ? _options.VersionWatchInterval
+            : TimeSpan.FromSeconds(5);
+
+        try
+        {
+            while (true)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                if (_sessionCache.TryGetByDeviceId(status.DeviceId, out var device) &&
+                    !string.IsNullOrWhiteSpace(device.AgentVersion) &&
+                    string.Equals(device.AgentVersion, target.Version, StringComparison.Ordinal))
+                {
+                    _logger.LogInformation(
+                        "Agent upgrade succeeded for DeviceId={deviceId} → version {version}.",
+                        status.DeviceId, target.Version);
+                    return AgentUpgradeDispatchResult.Ok();
+                }
+
+                await Task.Delay(pollInterval, cancellationToken);
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // Translated by the orchestrator into either the
+            // dispatch-timeout failure or the host-shutdown rethrow.
+            throw;
+        }
     }
 
     private Uri? ResolveDownloadUri(string channel, string file)
