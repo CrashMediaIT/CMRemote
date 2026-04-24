@@ -157,6 +157,11 @@ PublishScripts/
 **/packages/*
 # except build/, which is used as an MSBuild target.
 !**/packages/build/
+# The Rust agent has a Rust module called `packages` (cmremote-platform's
+# package-installer providers); explicitly un-ignore it so the
+# NuGet-targeted glob above doesn't drop the source files.
+!agent-rs/crates/*/src/packages/
+!agent-rs/crates/*/src/packages/**
 # Uncomment if necessary however generally it will be regenerated when needed
 #!**/packages/repositories.config
 # NuGet v3's project.json files produces more ignoreable files

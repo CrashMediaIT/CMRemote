@@ -6,6 +6,7 @@
 //! provider implementations and dispatching to them by
 //! [`MethodName`].
 
+pub mod agent_update;
 pub mod apps;
 pub mod device_info;
 pub mod packages;
@@ -28,6 +29,7 @@ pub struct AgentHandlers {
     pub(crate) device_info: Arc<dyn DeviceInfoProvider>,
     pub(crate) apps: Arc<dyn InstalledApplicationsProvider>,
     pub(crate) packages: Arc<dyn PackageProviderHandler>,
+    pub(crate) agent_update: Arc<agent_update::AgentUpdateContext>,
 }
 
 impl AgentHandlers {
@@ -54,6 +56,9 @@ impl AgentHandlers {
             }
             MethodName::InstallPackage => {
                 packages::handle_install_package(inv, &*self.packages).await
+            }
+            MethodName::InstallAgentUpdate => {
+                agent_update::handle_install_agent_update(inv, &self.agent_update).await
             }
             // R7–R8 stubs
             _ => Err("not_implemented".to_string()),

@@ -33,12 +33,27 @@
 //! providers compose without further wire/contract churn.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use cmremote_wire::{PackageInstallRequest, PackageInstallResult, PackageProvider};
 use sha2::{Digest, Sha256};
 
 use crate::HostOs;
+
+pub mod chocolatey;
+pub mod download;
+pub mod executable;
+pub mod msi;
+pub mod process;
+
+pub use chocolatey::ChocolateyPackageProvider;
+pub use download::{
+    ArtifactDownloader, DownloadError, DownloadRequest, DownloadedArtifact, RejectingDownloader,
+};
+pub use executable::ExecutablePackageProvider;
+pub use msi::UploadedMsiPackageProvider;
+pub use process::{ProcessCommand, ProcessOutcome, ProcessRunner, TokioProcessRunner};
 
 /// First eight bytes of every OLE2 / Compound File Binary (CFB)
 /// document, of which an MSI is one. The .NET `MsiFileValidator`
@@ -257,6 +272,78 @@ impl CompositePackageProvider {
             "PackageProvider::Unknown must never have a handler"
         );
         self.handlers.insert(provider, handler);
+        self
+    }
+
+    /// Register the default per-OS handler set for slice R6:
+    ///
+    /// * On Windows: [`ChocolateyPackageProvider`] (always),
+    ///   [`UploadedMsiPackageProvider`] and [`ExecutablePackageProvider`]
+    ///   (gated on a downloader being supplied).
+    /// * On every other OS: nothing — install jobs continue to fall
+    ///   through to the structured "not supported" fallback. This is
+    ///   intentional: `choco.exe` and `msiexec.exe` are Windows-only
+    ///   and the `Executable` lane assumes the agent runs on the
+    ///   target host as a privileged installer.
+    ///
+    /// `cache_dir` is the directory the MSI / Executable providers
+    /// stage downloads into. The runtime is responsible for creating
+    /// it (chmod 0700 on Unix). `server_host` is the URL the
+    /// downloader hits to fetch artifacts; it comes from
+    /// `ConnectionInfo::host`. `downloader` is the HTTPS client used
+    /// for fetches; pass an [`Arc<RejectingDownloader>`] until the
+    /// real reqwest-based client is wired (the providers' download
+    /// step then refuses with a clean "this agent is not configured
+    /// to download package artifacts" message).
+    pub fn register_default_handlers(
+        &mut self,
+        cache_dir: std::path::PathBuf,
+        server_host: Option<String>,
+        downloader: Arc<dyn ArtifactDownloader>,
+    ) -> &mut Self {
+        // Chocolatey ships unconditionally on every OS. The
+        // [`StdChocolateyEnvironment`] returns `None` for `choco.exe`
+        // on non-Windows hosts so `can_handle` is `false`; the
+        // execute path returns a structured failure for the same
+        // reason. This lets the registration code stay
+        // platform-agnostic.
+        self.register(
+            PackageProvider::Chocolatey,
+            Box::new(ChocolateyPackageProvider::new()),
+        );
+
+        let msi_env = Arc::new(msi::StdMsiEnvironment::new(
+            cache_dir.clone(),
+            server_host.clone(),
+        ));
+        self.register(
+            PackageProvider::UploadedMsi,
+            Box::new(UploadedMsiPackageProvider::new_with(
+                msi_env,
+                Arc::new(TokioProcessRunner),
+                downloader.clone(),
+                msi::MSI_DOWNLOAD_TIMEOUT,
+                msi::MSIEXEC_TIMEOUT,
+                msi::MAX_MSI_BYTES,
+            )),
+        );
+
+        let exe_env = Arc::new(executable::StdExecutableEnvironment::new(
+            cache_dir,
+            server_host,
+        ));
+        self.register(
+            PackageProvider::Executable,
+            Box::new(ExecutablePackageProvider::new_with(
+                exe_env,
+                Arc::new(TokioProcessRunner),
+                downloader,
+                executable::EXECUTABLE_DOWNLOAD_TIMEOUT,
+                executable::EXECUTABLE_TIMEOUT,
+                executable::MAX_EXECUTABLE_BYTES,
+            )),
+        );
+
         self
     }
 }
