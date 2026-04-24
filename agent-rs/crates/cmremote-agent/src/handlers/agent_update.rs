@@ -249,11 +249,16 @@ fn is_lower_hex_sha256(s: &str) -> bool {
 }
 
 fn is_safe_version(v: &str) -> bool {
+    // SemVer 2.0 character set: ASCII alphanumerics, dot, hyphen, plus.
+    // We deliberately do NOT allow underscores so this matches the
+    // shape produced by the publisher manifest's signed-build pipeline
+    // and stays consistent with `is_safe_chocolatey_version` over in
+    // `cmremote-platform::packages`.
     if v.is_empty() || v.len() > 64 {
         return false;
     }
     v.bytes()
-        .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-' || b == b'+' || b == b'_')
+        .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-' || b == b'+')
 }
 
 fn translate_download_error(e: &DownloadError) -> AgentUpdateError {
