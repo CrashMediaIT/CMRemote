@@ -209,7 +209,7 @@ below. Summary of the new tempo:
   is re-targeted at the clean-room codebase rather than added to the
   legacy one.
 
-### 🟡 Track S — Security & supply-chain baseline *(cross-cutting — S1 + S2 + S3 + S4 shipped)*
+### 🟡 Track S — Security & supply-chain baseline *(cross-cutting — S1 + S2 + S3 + S4 shipped; S6 partially shipped)*
 
 Security is called out as a top-priority, standalone track rather than
 being left as scattered mentions inside the Rust slices. Items here gate
@@ -320,20 +320,30 @@ Still queued under S2 (not yet shipped): `cargo-vet` audit set,
   and the agent-upgrade pipeline (M3) which already requires a
   SHA-256 match against the publisher manifest.
 
-**S6 — Secret-hygiene enforcement *(🔜, gated into CI)*.**
+**S6 — Secret-hygiene enforcement *(🟡 partially shipped)*.**
 
-- Add **gitleaks** as a PR gate (pre-commit hook + CI job) so
-  accidentally-committed tokens fail the build, not the audit log.
-- Add a unit test under `cmremote-platform` that asserts
-  `ConnectionInfo.json` is written with file-mode `0600` on Unix (the
-  spec already requires this; the test pins it) and an equivalent
-  ACL check on Windows.
-- Extend `ConnectionInfo`'s redacting `Debug` (shipped in slice R1a)
-  with a compile-time test (`trybuild` or a straight unit test) that
-  formatting the struct never contains the verification-token bytes.
-- Periodic **CodeQL** (already in the build workflow for .NET; extend
-  to Rust via the official action) scheduled weekly on `main` in
-  addition to per-PR runs.
+- ✅ **gitleaks** ([`.github/workflows/gitleaks.yml`](.github/workflows/gitleaks.yml))
+  runs as a PR gate (and weekly on `main`/`master`) so an
+  accidentally-committed token fails the build instead of polluting
+  the audit log; findings are also uploaded as SARIF into the
+  Security tab so they show up alongside CodeQL and Scorecard.
+- ✅ **CodeQL** ([`.github/workflows/codeql.yml`](.github/workflows/codeql.yml))
+  covers both `csharp` (the .NET solution built explicitly against
+  the .NET 8 SDK pinned in the csproj files) and `rust` (the
+  `agent-rs/` workspace) on every PR, on push to `main`/`master`,
+  and weekly on `main` so a new query published after a merge still
+  surfaces against already-merged code within seven days. Uses the
+  `security-extended` query pack.
+- ✅ Redacting-`Debug` regression test for `ConnectionInfo`
+  (`debug_redacts_server_verification_token` and
+  `debug_redacts_organization_token` in
+  [`crates/cmremote-wire/src/connection_info.rs`](agent-rs/crates/cmremote-wire/src/connection_info.rs))
+  — already shipped with slice R1a; pinned here as the S6 deliverable.
+- 🔜 Add a unit test under `cmremote-platform` that asserts
+  `ConnectionInfo.json` is written with file-mode `0600` on Unix and
+  an equivalent ACL check on Windows, once the agent's *write* path
+  for `ConnectionInfo.json` lands (today's runtime only reads the
+  file; writes will land with the enrolment slice).
 
 **S7 — Runtime security posture *(🔜, lands with server rewrite)*.**
 

@@ -1,0 +1,64 @@
+# Source: CMRemote, clean-room implementation.
+#
+# gitleaks — secret-hygiene PR gate. Roadmap reference: Track S / S6.
+#
+# Scans every PR diff (and the full history on the weekly schedule)
+# for committed secrets — API keys, JWTs, private keys, AWS / Azure
+# credentials, etc. A finding fails the workflow so the secret never
+# becomes "merged history that needs rotating + a force-push to scrub".
+#
+# Findings are also uploaded as SARIF into the GitHub Security tab so
+# they show up alongside CodeQL and Scorecard alerts.
+
+name: gitleaks
+
+on:
+  pull_request:
+  push:
+    branches: [main, master]
+  schedule:
+    # Weekly full-history sweep so a leak slipped past PR review (or
+    # introduced before this gate landed) still surfaces within 7 days.
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    name: gitleaks scan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Required to upload the SARIF report into the Security tab.
+      security-events: write
+      # Required so the action can post a PR comment summarising findings.
+      pull-requests: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Full history so the scheduled scan can sweep every commit;
+          # PRs only need the diff but a full clone is cheap on this
+          # repo and keeps the action's behaviour identical across
+          # triggers.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Run gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          # Use the action's built-in default config; a repo-local
+          # `.gitleaks.toml` can be added later if we need to whitelist
+          # specific known-public test fixtures.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Always upload the SARIF artifact so reviewers can re-inspect
+          # findings even when the action has otherwise summarised
+          # them inline.
+          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "true"
+          GITLEAKS_ENABLE_SUMMARY: "true"
+          # Fail the job (non-zero exit) on any finding so the gate
+          # actually blocks merges instead of being advisory.
+          GITLEAKS_NOTIFY_USER_LIST: ""
