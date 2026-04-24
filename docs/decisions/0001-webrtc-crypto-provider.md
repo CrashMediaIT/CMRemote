@@ -335,7 +335,19 @@ Option B.
   is re-evaluated.
   - **Status (2026-04-24):** Spike **approved to proceed** — see
     [0001-spike-approval.md](0001-spike-approval.md) for gate #1
-    sign-off and deliverables.
+    sign-off and deliverables. Deliverable #1 (symbol mapping) is
+    landed at [0001-spike-report.md](0001-spike-report.md) with a
+    **GO** recommendation. Deliverable #2 (PoC with green CI
+    demonstrating the substitution works) is landed as the
+    [`cmremote-webrtc-crypto-spike`](../../agent-rs/crates/cmremote-webrtc-crypto-spike/)
+    workspace member: 11/11 tests pass against real `aws-lc-rs`
+    1.16.x, exercising every distinct symbol from the report.
+    **Maintainer gate #2 is hereby ACCEPTED (2026-04-24)** on the
+    basis of those two deliverables — proceed to creating the
+    `CrashMediaIT/webrtc-cmremote` repository per the runbook at
+    [0001-spike-fork-instructions.md](0001-spike-fork-instructions.md)
+    and to opening the follow-up agent-side PR that wires
+    `[patch.crates-io]` and adds the `[sources].allow-git` entry.
 - **After the spike succeeds:** a follow-up PR creates the
   `CrashMediaIT/webrtc-cmremote` repository, adds the
   `[patch.crates-io]` entry and the `[sources].allow-git`
@@ -363,3 +375,6 @@ Option B.
 - [CMRemote threat model](../threat-model.md)
 - [CMRemote roadmap — slice R7 row](../../ROADMAP.md)
 - [Feasibility spike approval — gate #1](0001-spike-approval.md)
+- [Feasibility spike report — `ring` → `aws-lc-rs` symbol mapping](0001-spike-report.md)
+- [Spike PoC crate — `agent-rs/crates/cmremote-webrtc-crypto-spike/`](../../agent-rs/crates/cmremote-webrtc-crypto-spike/)
+- [Fork-creation runbook for `CrashMediaIT/webrtc-cmremote`](0001-spike-fork-instructions.md)
