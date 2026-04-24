@@ -266,6 +266,21 @@ services.AddScoped<IInstalledApplicationsService, InstalledApplicationsService>(
 services.AddScoped<IPackageService, PackageService>();
 services.AddScoped<IPackageInstallJobService, PackageInstallJobService>();
 services.AddScoped<IUploadedMsiService, UploadedMsiService>();
+// Background agent-upgrade pipeline (ROADMAP.md "M3 — Background
+// agent-upgrade pipeline"). Service holds the state machine; the
+// orchestrator is the IHostedService that sweeps eligible rows and
+// dispatches upgrades through IAgentUpgradeDispatcher. The default
+// dispatcher is a no-op until the publisher manifest + signed-build
+// pipeline (slice R6 / R8) is wired; replace the registration below
+// with the real dispatcher when that lands.
+services.AddScoped<Remotely.Server.Services.AgentUpgrade.IAgentUpgradeService,
+    Remotely.Server.Services.AgentUpgrade.AgentUpgradeService>();
+services.AddScoped<Remotely.Server.Services.AgentUpgrade.IAgentUpgradeDispatcher,
+    Remotely.Server.Services.AgentUpgrade.NoopAgentUpgradeDispatcher>();
+services.Configure<Remotely.Server.Services.AgentUpgrade.AgentUpgradeOrchestratorOptions>(
+    builder.Configuration.GetSection(
+        Remotely.Server.Services.AgentUpgrade.AgentUpgradeOrchestratorOptions.SectionName));
+services.AddHostedService<Remotely.Server.Services.AgentUpgrade.AgentUpgradeOrchestrator>();
 // First-boot setup wizard skeleton (ROADMAP.md "M1 — First-boot setup wizard").
 services.AddScoped<ISetupStateService, SetupStateService>();
 // First-boot setup wizard — M1.1 (preflight) / M1.2 (DB connection) /

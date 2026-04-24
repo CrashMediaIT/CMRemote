@@ -46,6 +46,7 @@ public class AppDb : IdentityDbContext
     public DbSet<ScriptSchedule> ScriptSchedules { get; set; }
     public DbSet<SharedFile> SharedFiles { get; set; }
     public DbSet<UploadedMsi> UploadedMsis { get; set; }
+    public DbSet<AgentUpgradeStatus> AgentUpgradeStatuses { get; set; }
     public new DbSet<RemotelyUser> Users { get; set; }
 
     protected override void OnConfiguring(DbContextOptionsBuilder options)
@@ -263,6 +264,20 @@ public class AppDb : IdentityDbContext
 
         builder.Entity<UploadedMsi>()
             .HasIndex(x => x.Sha256);
+
+        // ROADMAP.md "M3 — Background agent-upgrade pipeline":
+        // one row per device, indexed for the orchestrator's "next batch
+        // of eligible work" sweep + for the on-connect dispatch lookup
+        // by DeviceId.
+        builder.Entity<AgentUpgradeStatus>()
+            .HasIndex(x => x.DeviceId)
+            .IsUnique();
+
+        builder.Entity<AgentUpgradeStatus>()
+            .HasIndex(x => new { x.State, x.EligibleAt });
+
+        builder.Entity<AgentUpgradeStatus>()
+            .HasIndex(x => x.OrganizationID);
 
         builder.Entity<DeviceGroup>()
             .HasMany(x => x.Devices)

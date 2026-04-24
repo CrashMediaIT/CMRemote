@@ -37,7 +37,7 @@ This roadmap is therefore organised in three bands:
 
 ## Band 1 — Rewrite & cut-over *(top priority)*
 
-### Current focus *(end of slice R1b / S4 / **M1 milestone complete (M1.1 + M1.2 + M1.3 + M1.4 + M1.5)** + M2 complete — Apr 2026)*
+### Current focus *(end of slice R1b / S4 / **M1 milestone complete (M1.1 + M1.2 + M1.3 + M1.4 + M1.5)** + M2 complete + **M3 service + orchestrator landed** — Apr 2026)*
 
 Module 0 (wire-protocol spec + JSON test-vector corpus), slice **R1a**
 (`cmremote-wire` JSON round-trip + redacting `Debug`), slice **R1b**
@@ -50,13 +50,22 @@ and parser hardening — `proptest` suite on stable + `cargo-fuzz`
 targets under `agent-rs/crates/cmremote-wire/fuzz/` seeded from the
 corpus + nightly scheduled workflow
 [`fuzz.yml`](.github/workflows/fuzz.yml)), the **complete M2
-milestone**, and the **complete M1 milestone** (scaffolding +
+milestone**, the **complete M1 milestone** (scaffolding +
 all five operator-facing wizard steps — Welcome / Preflight,
 Database connection with live `SELECT 1`, optional legacy import
 wired to the M2 `MigrationRunner`, first-organisation +
 server-admin bootstrap, and Done step that writes the
 `CMRemote.Setup.Completed` marker and routes the operator to
-sign-in) are merged.
+sign-in), and the **M3 service + orchestrator scaffolding**
+(`AgentUpgradeStatus` table + EF migrations for SQLite / SQL Server
+/ PostgreSQL, full `IAgentUpgradeService` state machine with
+exponential-backoff retries + 60-day inactivity cut-off + on-connect
+reactivation hook wired through `AgentHub.DeviceCameOnline`,
+`AgentUpgradeOrchestrator` `IHostedService` with bounded-concurrency
+queue + refusal-while-busy rail + per-dispatch timeout, and a
+pluggable `IAgentUpgradeDispatcher` abstraction registered with a
+no-op default until the publisher manifest + signed-build pipeline
+ships) are merged.
 
 **M2 — Schema converter library + CLI** is shipped end-to-end across
 this PR's progressive slices:
@@ -149,12 +158,15 @@ The next milestones are now:
    server over WebSocket and reconnects cleanly across restarts). Now
    unblocked — S4's fuzz + proptest coverage gates R2's new parser
    surfaces on the way in.
-2. **M3 — Background agent-upgrade pipeline.** With M1 now complete
-   end-to-end (the wizard's M1.5 step references M3 as the post-setup
-   hook to schedule), M3 is the logical next slice: the
-   `AgentUpgradeOrchestrator` `IHostedService`, the
-   `AgentUpgradeStatus` table, and the per-device upgrade state
-   machine described in the M3 section below.
+2. **M3 dispatcher + M4 dashboard.** The M3 schema, state machine, and
+   `AgentUpgradeOrchestrator` `IHostedService` have shipped (see the
+   "M3 — Background agent-upgrade pipeline" section below). The
+   remaining M3 work is the real `IAgentUpgradeDispatcher`
+   implementation — the publisher manifest + signed-build fetch + the
+   per-OS install ack — which lands together with slice **R6** /
+   **R8** so the Rust agent never sees an unsigned variant. **M4**
+   (admin "Agent upgrade" dashboard) layers on top of the same
+   `IAgentUpgradeService` surface that's already in the tree.
 3. **Live-Postgres integration coverage** for the concrete writers'
    `INSERT … ON CONFLICT` paths (the wizard import step exercises
    them through the runner; the missing piece is a CI job with a
@@ -664,26 +676,44 @@ verification for now, with live-DB integration coverage tracked as
 part of the M1.3 wizard work which already needs a Postgres test
 container.
 
-**M3 — Background agent-upgrade pipeline.** Once the operator is in the
-main panel, an `IHostedService`
-(`AgentUpgradeOrchestrator`) drives the fleet upgrade asynchronously.
+**M3 — Background agent-upgrade pipeline.** *(🟡 service + orchestrator
+shipped; real dispatcher waits for slice R6/R8.)* Once the operator is
+in the main panel, an `IHostedService`
+([`AgentUpgradeOrchestrator`](Server/Services/AgentUpgrade/AgentUpgradeOrchestrator.cs))
+drives the fleet upgrade asynchronously.
 
 - A new `AgentUpgradeStatus` table tracks every device:
   `DeviceId, FromVersion, ToVersion, State, LastAttemptAt,
    LastAttemptError, AttemptCount, EligibleAt, CompletedAt`.
   States: `Pending → Skipped(Inactive) | Skipped(OptOut) | Scheduled
-  → InProgress → Succeeded | Failed → (retry) Pending`.
+  → InProgress → Succeeded | Failed → (retry) Pending`. Shipped:
+  [`AgentUpgradeStatus`](Shared/Entities/AgentUpgradeStatus.cs) +
+  [`AgentUpgradeState`](Shared/Enums/AgentUpgradeState.cs) +
+  EF migrations for SQLite / SQL Server / PostgreSQL with a unique
+  index on `DeviceId` and a `(State, EligibleAt)` index that the
+  orchestrator's "next batch of eligible work" sweep uses.
 - **60-day inactivity cut-off.** On enrolment into the pipeline, any
   device whose `LastOnline` is older than `UtcNow − 60 days` is moved
   straight to `Skipped(Inactive)` and **not contacted**. The state is
-  re-evaluated when the device next reconnects (see below).
+  re-evaluated when the device next reconnects (see below). Shipped
+  in
+  [`AgentUpgradeService.EnrolDeviceAsync`](Server/Services/AgentUpgrade/AgentUpgradeService.cs)
+  with the cut-off pinned by `IAgentUpgradeService.InactivityCutoff`.
 - **Online devices** are upgraded in a bounded-concurrency queue
-  (default 5 in flight per server, tunable). The upgrade itself reuses
+  (default 5 in flight per server, tunable via
+  `AgentUpgrade:MaxConcurrency`). The upgrade itself reuses
   the **existing** PR E installer surface — the server publishes the
   new agent build, the running legacy agent fetches it over the
   authenticated hub, swaps binary + service definition, and reconnects.
   Success is observed when the device next sends a heartbeat tagged
-  with the new agent version.
+  with the new agent version. Shipped: the bounded-concurrency sweep
+  (`AgentUpgradeOrchestrator.SweepOnceAsync`) runs against an
+  `IAgentUpgradeDispatcher` abstraction that's currently bound to a
+  no-op default
+  ([`NoopAgentUpgradeDispatcher`](Server/Services/AgentUpgrade/IAgentUpgradeDispatcher.cs))
+  until the publisher manifest + signed-build fetch lands with slice
+  R6 / R8; the rest of the state machine is exercised end-to-end
+  against the no-op today.
 - **Offline devices** are not contacted while offline. The
   `AgentHub.OnConnectedAsync` path checks the device's
   `AgentUpgradeStatus`: if the row is `Pending` *and* `LastOnline`
@@ -691,16 +721,61 @@ main panel, an `IHostedService`
   instant the device connects**, before any user-facing job is
   delivered to it. If the row is `Skipped(Inactive)` and the device
   has now re-appeared, the row is flipped back to `Pending` and the
-  same on-connect dispatch fires.
+  same on-connect dispatch fires. Shipped:
+  [`AgentHub.DeviceCameOnline`](Server/Hubs/AgentHub.cs) calls
+  `EnrolDeviceAsync` + `MarkDeviceCameOnlineAsync` on every connect
+  inside a try/catch that never blocks the connection on a pipeline
+  hiccup.
 - **Failure handling.** Failed upgrades are retried with exponential
-  backoff (max 5 attempts, capped at 24 h). After exhaustion the row
-  stays `Failed` and surfaces in the admin **Agent upgrade** dashboard
-  with the device id, last error, and a "Retry" button.
+  backoff (1 min → 2 min → 4 min → 8 min → … capped at 24 h, max 5
+  attempts). After exhaustion the row stays `Failed` and surfaces in
+  the admin **Agent upgrade** dashboard with the device id, last
+  error, and a "Retry" button. Shipped: backoff math is
+  `IAgentUpgradeService.ComputeBackoff`, the cap is
+  `IAgentUpgradeService.MaxBackoff`, and exhaustion is enforced by
+  `IAgentUpgradeService.MaxAttempts` — the `MarkFailedAsync` path
+  drives Failed → Pending while incrementing `AttemptCount`.
 - **Safety rails.** The orchestrator refuses to dispatch an upgrade
   while the device has an in-flight `PackageInstallJob`,
   `BundleRunJob`, script, or remote-control session. It also refuses
   to dispatch if the target build's SHA-256 / signature does not match
-  the manifest written by the publisher.
+  the manifest written by the publisher. Shipped: the "in-flight
+  PackageInstallJob" rail is enforced by
+  `IAgentUpgradeService.HasInFlightJobAsync` + the orchestrator's
+  pre-dispatch check (which leaves the row `Pending` so it's retried
+  on the next sweep without burning a retry slot). The
+  signature/SHA-256 rail is part of the dispatcher contract; the
+  no-op default trivially satisfies it because it never resolves a
+  target. The remaining script / remote-control / bundle rails land
+  with the real dispatcher.
+
+**M3 tests.** Two new MSTest classes under
+[`Tests/Server.Tests/`](Tests/Server.Tests/) — 35 tests in total —
+exercise the state machine, the orchestrator sweep, and the safety
+rails:
+[`AgentUpgradeServiceTests`](Tests/Server.Tests/AgentUpgradeServiceTests.cs)
+covers the pure transition predicate (every legal/illegal pair), the
+backoff math (first retry, doubling, cap, zero/negative input), 60-day
+cut-off classification at enrolment, idempotent re-enrolment, on-connect
+reactivation (SkippedInactive → Pending; SkippedOptOut left alone;
+unknown device returns null), the reservation race
+(`TryReserveAsync` refuses a second concurrent caller and refuses when
+EligibleAt is in the future), terminal stamping (CompletedAt +
+LastAttemptError clearance), the full retry-then-exhaust loop driven
+through a virtual clock, operator overrides (ForceRetry resets attempts
+even from terminal Failed; SetOptOut refused mid-InProgress), the
+in-flight-job rail (Queued + Running detected, terminal jobs ignored,
+blank input safe), the dashboard aggregate (every enum present, zero
+buckets included), and the eligible-rows query (ordered by EligibleAt,
+respects limit and zero-limit short-circuit).
+[`AgentUpgradeOrchestratorTests`](Tests/Server.Tests/AgentUpgradeOrchestratorTests.cs)
+drives `SweepOnceAsync` against a stub dispatcher: happy-path dispatch,
+SkippedInactive devices not contacted, the on-connect reactivation
+loop reaching dispatch on the next sweep, the in-flight-job rail
+short-circuiting without burning a retry slot, dispatcher failure
+requeuing with backoff, "no target available" rolling Scheduled back
+to Pending without consuming a retry, MaxConcurrency observed under
+load, and SweepBatchSize capping rows processed per sweep.
 
 **M4 — Admin "Agent upgrade" dashboard.**
 `/admin/agent-upgrade` shows totals (`Pending / Scheduled / InProgress /
