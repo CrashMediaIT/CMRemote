@@ -19,8 +19,8 @@
 use cmremote_platform::desktop::DesktopTransportProvider;
 use cmremote_wire::{
     ChangeWindowsSessionRequest, DesktopTransportResult, HubInvocation, IceCandidate,
-    InvokeCtrlAltDelRequest, RemoteControlSessionRequest, RestartScreenCasterRequest, SdpAnswer,
-    SdpOffer,
+    InvokeCtrlAltDelRequest, ProvideIceServersRequest, RemoteControlSessionRequest,
+    RestartScreenCasterRequest, SdpAnswer, SdpOffer,
 };
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -154,6 +154,28 @@ pub async fn handle_send_ice_candidate(
         }
     };
     let r = provider.on_ice_candidate(&req).await;
+    result_to_json(&r)
+}
+
+// ---------------------------------------------------------------------
+// Slice R7.j — `ProvideIceServers` handler. Same single-arg decode +
+// structured failure shape as the other signalling handlers above.
+// ---------------------------------------------------------------------
+
+/// Handler for `ProvideIceServers(iceServerConfig, sessionId,
+/// accessKey, …)`.
+pub async fn handle_provide_ice_servers(
+    inv: &HubInvocation,
+    provider: &dyn DesktopTransportProvider,
+) -> Result<Value, String> {
+    let req: ProvideIceServersRequest = match decode_single_arg(inv) {
+        Ok(r) => r,
+        Err(e) => {
+            let r = DesktopTransportResult::failed(String::new(), e);
+            return result_to_json(&r);
+        }
+    };
+    let r = provider.on_provide_ice_servers(&req).await;
     result_to_json(&r)
 }
 
@@ -422,6 +444,108 @@ mod tests {
         args["SessionId"] = json!(12345);
         let inv = invocation("SendSdpOffer", vec![args]);
         let v = handle_send_sdp_offer(&inv, &provider).await.unwrap();
+        assert_eq!(v["Success"], false);
+        assert!(v["ErrorMessage"]
+            .as_str()
+            .unwrap()
+            .contains("invalid arguments"));
+    }
+
+    // -----------------------------------------------------------------
+    // Slice R7.j — `ProvideIceServers` handler tests. Mirror the R7.g
+    // signalling-handler tests above: routes, serialises, refuses
+    // cross-org / hostile config / malformed argument shapes, and
+    // never echoes the sensitive `access_key`.
+    // -----------------------------------------------------------------
+
+    fn provide_ice_servers_args() -> Value {
+        json!({
+            "ViewerConnectionId": "viewer-1",
+            "SessionId": VALID_SESSION_ID,
+            "AccessKey": "secret-access-key",
+            "RequesterName": "Alice",
+            "OrgName": "Acme",
+            "OrgId": VALID_ORG_ID,
+            "IceServerConfig": {
+                "IceServers": [
+                    {
+                        "Urls": ["stun:stun.example.org:3478"],
+                        "Username": null,
+                        "Credential": null,
+                        "CredentialType": "Password",
+                    },
+                    {
+                        "Urls": [
+                            "turn:turn.example.org:3478?transport=udp",
+                            "turns:turn.example.org:5349?transport=tcp",
+                        ],
+                        "Username": "agent-bob",
+                        "Credential": "hunter2",
+                        "CredentialType": "Password",
+                    },
+                ],
+                "IceTransportPolicy": "All",
+            },
+        })
+    }
+
+    #[tokio::test]
+    async fn provide_ice_servers_routes_and_serialises_result() {
+        let provider = provider();
+        let inv = invocation("ProvideIceServers", vec![provide_ice_servers_args()]);
+        let v = handle_provide_ice_servers(&inv, &provider).await.unwrap();
+        assert_eq!(v["SessionId"], VALID_SESSION_ID);
+        assert_eq!(v["Success"], false);
+        let msg = v["ErrorMessage"].as_str().unwrap();
+        assert!(msg.contains("ProvideIceServers"), "{msg}");
+        assert!(msg.contains("Linux"), "{msg}");
+        // Sensitive: access key MUST never appear in the completion
+        // payload, and neither MUST the TURN credential.
+        assert!(
+            !msg.contains("secret-access-key"),
+            "access_key leaked into result: {msg}",
+        );
+        assert!(
+            !msg.contains("hunter2"),
+            "TURN credential leaked into result: {msg}",
+        );
+    }
+
+    #[tokio::test]
+    async fn cross_org_provide_ice_servers_is_refused_at_the_handler() {
+        let provider = provider();
+        let mut args = provide_ice_servers_args();
+        args["OrgId"] = json!("ffffffff-ffff-ffff-ffff-ffffffffffff");
+        let inv = invocation("ProvideIceServers", vec![args]);
+        let v = handle_provide_ice_servers(&inv, &provider).await.unwrap();
+        assert_eq!(v["Success"], false);
+        let msg = v["ErrorMessage"].as_str().unwrap();
+        assert!(msg.contains("organisation"), "{msg}");
+    }
+
+    #[tokio::test]
+    async fn hostile_ice_url_in_provide_ice_servers_is_refused_at_the_handler() {
+        let provider = provider();
+        let mut args = provide_ice_servers_args();
+        args["IceServerConfig"]["IceServers"][0]["Urls"][0] = json!("javascript:alert(1)");
+        let inv = invocation("ProvideIceServers", vec![args]);
+        let v = handle_provide_ice_servers(&inv, &provider).await.unwrap();
+        assert_eq!(v["Success"], false);
+        let msg = v["ErrorMessage"].as_str().unwrap();
+        assert!(msg.contains("ice_servers[0]"), "{msg}");
+        assert!(msg.contains("scheme"), "{msg}");
+        // The URL contents MUST NOT appear in the rejection message.
+        assert!(!msg.contains("javascript"), "{msg}");
+    }
+
+    #[tokio::test]
+    async fn malformed_provide_ice_servers_arguments_become_structured_failure() {
+        let provider = provider();
+        // SessionId is required as a string — pass a number.
+        let mut args = provide_ice_servers_args();
+        args["SessionId"] = json!(12345);
+        let inv = invocation("ProvideIceServers", vec![args]);
+        let v = handle_provide_ice_servers(&inv, &provider).await.unwrap();
         assert_eq!(v["Success"], false);
         assert!(v["ErrorMessage"]
             .as_str()

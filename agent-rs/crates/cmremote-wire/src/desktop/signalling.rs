@@ -332,6 +332,62 @@ pub struct IceServerConfig {
     pub ice_transport_policy: IceTransportPolicy,
 }
 
+// ---------------------------------------------------------------------------
+// Slice R7.j — `ProvideIceServers` hub-method request.
+//
+// R7.i shipped the `IceServerConfig` DTO and its guards but
+// deliberately deferred the dispatch wiring. R7.j wires the
+// dedicated hub method the .NET server uses to deliver an
+// `IceServerConfig` to the agent before the WebRTC peer connection
+// starts gathering candidates. The request carries the same
+// operator-identity envelope the four method-surface methods carry
+// so the agent can refuse cross-org / hostile-string requests at
+// the same gate before the embedded `IceServerConfig` is parsed.
+// ---------------------------------------------------------------------------
+
+/// Request payload for the
+/// `ProvideIceServers(iceServerConfig, sessionId, accessKey, …)`
+/// hub method (slice R7.j). The `.NET` hub invokes this once per
+/// session, before the agent emits its first SDP offer or trickled
+/// ICE candidate. The agent treats the embedded
+/// [`IceServerConfig`] as the authoritative
+/// [`RTCConfiguration::ice_servers`] / `ice_transport_policy` for
+/// the matching session.
+///
+/// The envelope fields mirror [`SdpOffer`] verbatim so the
+/// agent-side guards can be reused without a special case; in
+/// particular the sensitive `access_key` is carried here too so a
+/// race between the .NET server and the agent's session-state cache
+/// can be resolved against the same authenticator the matching
+/// `RemoteControl` request used.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "PascalCase")]
+pub struct ProvideIceServersRequest {
+    /// SignalR connection id of the viewer the configuration is
+    /// destined for.
+    pub viewer_connection_id: String,
+    /// Existing remote-control session UUID — same shape as
+    /// [`crate::RemoteControlSessionRequest::session_id`].
+    pub session_id: String,
+    /// Sensitive one-shot access key paired with `session_id`.
+    /// **MUST NOT** be logged.
+    pub access_key: String,
+    /// Operator display name, surfaced in the audit trail when the
+    /// configuration is accepted (or refused).
+    pub requester_name: String,
+    /// Operator organisation name.
+    pub org_name: String,
+    /// Operator organisation UUID — checked by the agent against
+    /// its own [`crate::ConnectionInfo::organization_id`] before the
+    /// configuration is honoured.
+    pub org_id: String,
+    /// The actual ICE / TURN server set the agent's WebRTC peer
+    /// connection should use for this session. The credential
+    /// inside any `turn(s):` entry is sensitive (see
+    /// [`IceServer::credential`]).
+    pub ice_server_config: IceServerConfig,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -634,5 +690,70 @@ mod tests {
         assert_eq!(MAX_URLS_PER_ICE_SERVER, 4);
         assert_eq!(MAX_ICE_URL_LEN, 512);
         assert_eq!(MAX_ICE_CREDENTIAL_LEN, 512);
+    }
+
+    // -----------------------------------------------------------------
+    // Slice R7.j — `ProvideIceServers` request DTO tests.
+    // -----------------------------------------------------------------
+
+    fn provide_ice_servers_req() -> ProvideIceServersRequest {
+        ProvideIceServersRequest {
+            viewer_connection_id: "viewer-1".into(),
+            session_id: "11111111-2222-3333-4444-555555555555".into(),
+            access_key: "ak".into(),
+            requester_name: "Alice".into(),
+            org_name: "Acme".into(),
+            org_id: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee".into(),
+            ice_server_config: ice_config(),
+        }
+    }
+
+    #[test]
+    fn provide_ice_servers_request_round_trip_pascal_case() {
+        let req = provide_ice_servers_req();
+        let json = serde_json::to_string(&req).unwrap();
+        // PascalCase wire field names must survive — the contract
+        // with the .NET hub.
+        assert!(
+            json.contains("\"ViewerConnectionId\":\"viewer-1\""),
+            "{json}"
+        );
+        assert!(json.contains("\"SessionId\":"), "{json}");
+        assert!(json.contains("\"AccessKey\":\"ak\""), "{json}");
+        assert!(json.contains("\"RequesterName\":\"Alice\""), "{json}");
+        assert!(json.contains("\"OrgName\":\"Acme\""), "{json}");
+        assert!(json.contains("\"OrgId\":"), "{json}");
+        // The embedded config is a nested PascalCase object — pin
+        // that the rename cascades through `IceServerConfig`.
+        assert!(json.contains("\"IceServerConfig\":{"), "{json}");
+        assert!(json.contains("\"IceServers\":"), "{json}");
+        assert!(json.contains("\"IceTransportPolicy\":\"All\""), "{json}");
+        let back: ProvideIceServersRequest = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, req);
+    }
+
+    #[test]
+    fn provide_ice_servers_request_round_trips_through_msgpack() {
+        let req = provide_ice_servers_req();
+        let bytes = to_msgpack(&req).unwrap();
+        let back: ProvideIceServersRequest = from_msgpack(&bytes).unwrap();
+        assert_eq!(back, req);
+    }
+
+    #[test]
+    fn provide_ice_servers_default_fails_closed_with_empty_strings() {
+        // The .NET hub never legitimately sends a request with no
+        // session id; defaulting to empty strings means a malformed
+        // payload that omits required fields deserialises into a
+        // struct the agent's guards refuse rather than panicking.
+        let r: ProvideIceServersRequest = Default::default();
+        assert!(r.session_id.is_empty());
+        assert!(r.access_key.is_empty());
+        assert!(r.org_id.is_empty());
+        assert!(r.ice_server_config.ice_servers.is_empty());
+        assert_eq!(
+            r.ice_server_config.ice_transport_policy,
+            IceTransportPolicy::All
+        );
     }
 }
