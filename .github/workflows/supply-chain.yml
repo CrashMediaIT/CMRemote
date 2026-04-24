@@ -109,6 +109,7 @@ jobs:
             Unicode-DFS-2016,
             Zlib,
             CC0-1.0,
-            MPL-2.0
+            MPL-2.0,
+            CDLA-Permissive-2.0
           fail-on-severity: moderate
           comment-summary-in-pr: on-failure

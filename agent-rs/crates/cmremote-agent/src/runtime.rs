@@ -16,7 +16,7 @@ use cmremote_platform::stubs::NotSupportedAppsProvider;
 use cmremote_platform::{DeviceInfoProvider, StdDeviceInfoProvider};
 use cmremote_wire::ConnectionInfo;
 use tokio::sync::watch;
-use tracing::{info, warn};
+use tracing::info;
 
 use crate::cli::CliArgs;
 use crate::handlers::AgentHandlers;
@@ -104,6 +104,7 @@ async fn wait_for_shutdown() {
     #[cfg(unix)]
     {
         use tokio::signal::unix::{signal, SignalKind};
+        use tracing::warn;
         let mut sigterm = match signal(SignalKind::terminate()) {
             Ok(s) => s,
             Err(e) => {

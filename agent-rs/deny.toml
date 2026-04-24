@@ -61,6 +61,12 @@ allow = [
     "Zlib",
     "CC0-1.0",
     "MPL-2.0",
+    # Community Data License Agreement — Permissive 2.0. Used by
+    # `webpki-roots`, which embeds Mozilla's CA root certificate set
+    # (data, not code). Reviewed and accepted: it is a permissive
+    # data licence with no copyleft obligations on the consuming
+    # software. See https://cdla.dev/permissive-2-0/.
+    "CDLA-Permissive-2.0",
 ]
 confidence-threshold = 0.92
 
