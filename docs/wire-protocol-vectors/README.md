@@ -17,7 +17,9 @@ wire-protocol-vectors/
 │   ├── valid/        # ConnectionInfo.json files an agent must accept
 │   └── invalid/      # ConnectionInfo.json files an agent must reject
 ├── handshake/        # SignalR handshake request/response records
-└── envelope/         # Hub-message envelopes (invocation, completion, …)
+├── envelope/         # Hub-message envelopes (invocation, completion, …)
+└── method-surface/   # Per-method request + result DTOs (slice R7.d
+                      # locks the four desktop-transport methods).
 ```
 
 Files are intentionally one-shape-per-file so that test failures

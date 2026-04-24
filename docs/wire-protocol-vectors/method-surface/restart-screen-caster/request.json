@@ -1,0 +1,9 @@
+{
+  "ViewerIds": ["viewer-conn-1", "viewer-conn-2"],
+  "SessionId": "11111111-2222-3333-4444-555555555555",
+  "AccessKey": "REDACTED-IN-LOGS",
+  "UserConnectionId": "viewer-conn-1",
+  "RequesterName": "Alice Operator",
+  "OrgName": "Acme Corp",
+  "OrgId": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+}

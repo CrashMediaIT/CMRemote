@@ -1,0 +1,5 @@
+{
+  "SessionId": "",
+  "Success": false,
+  "ErrorMessage": "Desktop transport for \"InvokeCtrlAltDel\" is not supported on Linux."
+}

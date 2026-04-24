@@ -115,11 +115,22 @@ fn validate_operator_string(field: &str, value: &str) -> Result<(), String> {
         if c.is_control() {
             return Err(format!("{field} contains a non-printable character"));
         }
-        // U+200E LEFT-TO-RIGHT MARK / U+200F RIGHT-TO-LEFT MARK and
-        // the U+202A..U+202E + U+2066..U+2069 bidi-override range
-        // are the well-known "Trojan Source" vectors. Refuse them so
-        // a hostile org name cannot disguise itself in the on-host
-        // consent prompt.
+        // Refuse the Unicode directional-formatting code points that
+        // make up the "Trojan Source" attack family
+        // (https://trojansource.codes/). Concretely:
+        //   U+200E LEFT-TO-RIGHT MARK
+        //   U+200F RIGHT-TO-LEFT MARK
+        //   U+202A LEFT-TO-RIGHT EMBEDDING
+        //   U+202B RIGHT-TO-LEFT EMBEDDING
+        //   U+202C POP DIRECTIONAL FORMATTING
+        //   U+202D LEFT-TO-RIGHT OVERRIDE
+        //   U+202E RIGHT-TO-LEFT OVERRIDE
+        //   U+2066 LEFT-TO-RIGHT ISOLATE
+        //   U+2067 RIGHT-TO-LEFT ISOLATE
+        //   U+2068 FIRST STRONG ISOLATE
+        //   U+2069 POP DIRECTIONAL ISOLATE
+        // A hostile org name containing any of these can disguise
+        // itself in the on-host consent prompt or audit log.
         if matches!(
             c,
             '\u{200E}' | '\u{200F}'
