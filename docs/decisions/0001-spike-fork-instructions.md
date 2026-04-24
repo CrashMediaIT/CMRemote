@@ -50,28 +50,57 @@ A maintainer with `CrashMediaIT` org admin rights:
 
 ## Step 2 — Seed the fork from `webrtc-rs/dtls@v0.5.4`
 
-In a working clone of the new repository:
+Set `$Root` to the parent folder where the clone will be created, then run
+the block below from a PowerShell session that has `git` and `gh` on `$PATH`:
 
-```bash
+```powershell
+Set-Location $Root
 git clone https://github.com/CrashMediaIT/webrtc-cmremote.git
-cd webrtc-cmremote
+Set-Location .\webrtc-cmremote
+
 git remote add upstream https://github.com/webrtc-rs/dtls.git
 git fetch upstream --tags
-# v0.5.4 is the version pinned by the symbol report.
 git checkout -b cmremote/v0.5.4-aws-lc-rs v0.5.4
-# Incorporate the repository setup commits that already exist on main
-# (initial commit + any Copilot-added config files from Step 1).
-# --allow-unrelated-histories is required because the upstream tag and
-# the repo's initial commit have no common ancestor.
-git merge origin/main --allow-unrelated-histories \
-    -m "chore: incorporate repository setup into cmremote/v0.5.4-aws-lc-rs"
-```
 
-Verify the merge consumed all of `origin/main`:
+# Add the dual licence files upstream uses (matches "MIT/Apache-2.0").
+# webrtc-rs/dtls already ships these at v0.5.4, so this is usually a no-op.
+git ls-files | Select-String -Pattern '^LICENSE'
 
-```bash
-# Should produce no output — the branch must be ahead of or equal to main.
-git log --oneline cmremote/v0.5.4-aws-lc-rs..origin/main
+# Add CODEOWNERS (Step 1.5). Replace the team handle with the actual
+# CMRemote agent-rs CODEOWNERS team — check
+# https://github.com/CrashMediaIT/CMRemote/blob/main/.github/CODEOWNERS
+# (or wherever your CODEOWNERS lives) and reuse the same handle.
+New-Item -ItemType Directory -Force -Path .github | Out-Null
+@'
+* @CrashMediaIT/cmremote-maintainers
+'@ | Set-Content -Encoding utf8 .github/CODEOWNERS
+
+git add .github/CODEOWNERS
+git commit -m "Add CODEOWNERS (mirrors CMRemote agent-rs owners)"
+
+# First push: create main from this branch so branch protection has something to protect.
+git push -u origin cmremote/v0.5.4-aws-lc-rs
+git push origin cmremote/v0.5.4-aws-lc-rs:refs/heads/main
+
+# Now apply branch protection on main (Step 1.4).
+$body = @{
+    required_status_checks = @{
+        strict = $true
+        contexts = @()   # fill in after Step 6 adds the CI matrix; see Step 6.
+    }
+    enforce_admins = $true
+    required_pull_request_reviews = @{
+        required_approving_review_count = 1
+        require_code_owner_reviews = $true
+        dismiss_stale_reviews = $true
+    }
+    restrictions = $null
+    allow_force_pushes = $false
+    allow_deletions  = $false
+} | ConvertTo-Json -Depth 6
+
+$body | gh api -X PUT repos/CrashMediaIT/webrtc-cmremote/branches/main/protection `
+    -H "Accept: application/vnd.github+json" --input -
 ```
 
 (Why a branch off the tag rather than a fork-of-fork: the spike
