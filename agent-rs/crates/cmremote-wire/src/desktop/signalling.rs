@@ -110,15 +110,25 @@ pub struct SdpOffer {
     /// [`crate::ConnectionInfo::organization_id`].
     pub org_id: String,
     /// Discriminator — always [`SdpKind::Offer`] on this DTO; carried
-    /// explicitly so the wire form is self-describing.
-    #[serde(default = "default_offer_kind")]
+    /// explicitly so the wire form is self-describing. Required on
+    /// the wire — a missing `Kind` is a malformed payload.
     pub kind: SdpKind,
     /// Raw SDP blob produced by the viewer's `RTCPeerConnection`.
     pub sdp: String,
 }
 
-fn default_offer_kind() -> SdpKind {
-    SdpKind::Offer
+impl Default for SdpOffer {
+    fn default() -> Self {
+        Self {
+            viewer_connection_id: String::new(),
+            session_id: String::new(),
+            requester_name: String::new(),
+            org_name: String::new(),
+            org_id: String::new(),
+            kind: SdpKind::Offer,
+            sdp: String::new(),
+        }
+    }
 }
 
 /// `SendSdpAnswer(viewerConnectionId, sessionId, …, sdp)` — the
@@ -138,28 +148,11 @@ pub struct SdpAnswer {
     /// Operator organisation UUID.
     pub org_id: String,
     /// Discriminator — always [`SdpKind::Answer`] on this DTO.
-    #[serde(default = "default_answer_kind")]
+    /// Required on the wire — a missing `Kind` is a malformed
+    /// payload.
     pub kind: SdpKind,
     /// Raw SDP blob.
     pub sdp: String,
-}
-
-fn default_answer_kind() -> SdpKind {
-    SdpKind::Answer
-}
-
-impl Default for SdpOffer {
-    fn default() -> Self {
-        Self {
-            viewer_connection_id: String::new(),
-            session_id: String::new(),
-            requester_name: String::new(),
-            org_name: String::new(),
-            org_id: String::new(),
-            kind: SdpKind::Offer,
-            sdp: String::new(),
-        }
-    }
 }
 
 impl Default for SdpAnswer {
@@ -347,6 +340,25 @@ mod tests {
             serde_json::to_string(&SdpKind::Answer).unwrap(),
             "\"Answer\""
         );
+    }
+
+    #[test]
+    fn missing_kind_field_is_a_decode_error() {
+        // The discriminator is required on the wire — there is no
+        // sensible default for a peer that omits it (an `SdpAnswer`
+        // payload that silently became an `SdpOffer` would be a
+        // genuine bug). Pin the fail-closed behaviour so the .NET
+        // side can rely on it.
+        let json = r#"{
+            "ViewerConnectionId": "v",
+            "SessionId": "s",
+            "RequesterName": "r",
+            "OrgName": "o",
+            "OrgId": "g",
+            "Sdp": "v=0\r\n"
+        }"#;
+        assert!(serde_json::from_str::<SdpOffer>(json).is_err());
+        assert!(serde_json::from_str::<SdpAnswer>(json).is_err());
     }
 
     #[test]
