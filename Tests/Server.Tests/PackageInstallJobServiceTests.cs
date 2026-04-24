@@ -8,6 +8,7 @@ using Remotely.Shared.Entities;
 using Remotely.Shared.Enums;
 using Remotely.Shared.Services;
 using System;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace Remotely.Server.Tests;
@@ -30,6 +31,7 @@ public class PackageInstallJobServiceTests
         _service = new PackageInstallJobService(
             _dbFactory,
             new SystemTime(),
+            new NoopRateLimiter(),
             NullLogger<PackageInstallJobService>.Instance);
 
         // Seed a package the service can reference.
@@ -243,5 +245,18 @@ public class PackageInstallJobServiceTests
                 PackageInstallAction.Install,
                 null,
                 null));
+    }
+
+    /// <summary>
+    /// Test-only no-op rate limiter so the existing service tests keep
+    /// asserting the state-machine semantics without coupling to the
+    /// per-org budget. The dedicated
+    /// <c>PackageInstallJobRateLimiterTests</c> exercises the limiter
+    /// itself.
+    /// </summary>
+    private sealed class NoopRateLimiter : IPackageInstallJobRateLimiter
+    {
+        public Task<bool> TryAcquireAsync(string organizationId, int permitCount, CancellationToken cancellationToken)
+            => Task.FromResult(true);
     }
 }

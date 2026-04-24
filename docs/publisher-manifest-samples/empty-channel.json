@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "publisher": "crashmedia.ca",
+  "generatedAt": "2026-04-24T00:00:00Z",
+  "channel": "stable",
+  "version": "0.0.0",
+  "notes": "Empty channel — well-formed manifest with no published builds. The M3 dispatcher must treat this as 'no upgrade currently available' and leave AgentUpgradeStatus rows in Pending without burning a retry slot.",
+  "builds": []
+}

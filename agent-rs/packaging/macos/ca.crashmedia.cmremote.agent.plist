@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Source: CMRemote, clean-room implementation.
+
+  launchd LaunchDaemon for the CMRemote Rust agent on macOS (slice R8).
+  Installed at /Library/LaunchDaemons/ca.crashmedia.cmremote.agent.plist
+  by the .pkg installer; loaded with `launchctl load -w` in the
+  postinstall script.
+-->
+<plist version="1.0">
+  <dict>
+    <key>Label</key>
+    <string>ca.crashmedia.cmremote.agent</string>
+
+    <key>ProgramArguments</key>
+    <array>
+      <string>/usr/local/bin/cmremote-agent</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <dict>
+      <key>SuccessfulExit</key>
+      <false/>
+      <key>NetworkState</key>
+      <true/>
+    </dict>
+
+    <!-- Run as a dedicated unprivileged user. The .pkg installer's
+         postinstall creates _cmremote with a UID in the macOS system
+         range (200-499). -->
+    <key>UserName</key>
+    <string>_cmremote</string>
+    <key>GroupName</key>
+    <string>_cmremote</string>
+
+    <key>WorkingDirectory</key>
+    <string>/var/lib/cmremote</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+      <key>RUST_LOG</key>
+      <string>info</string>
+      <key>CMREMOTE_CONFIG_DIR</key>
+      <string>/etc/cmremote</string>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>/var/log/cmremote/agent.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/var/log/cmremote/agent.err.log</string>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+  </dict>
+</plist>
