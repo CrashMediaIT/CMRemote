@@ -29,6 +29,10 @@ tokio-tungstenite = { workspace = true }
 rustls = { workspace = true }
 futures-util = { workspace = true }
 rand = { workspace = true }
+# Slice R6/M3: AgentUpdateInstaller uses async fn — async-trait keeps
+# the trait dyn-compatible so the runtime can swap stub / real
+# installers behind an Arc<dyn …>.
+async-trait = "0.1"
 
 [dev-dependencies]
 tempfile = "3.13"

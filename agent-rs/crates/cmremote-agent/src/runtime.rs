@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 #[cfg(target_os = "linux")]
 use cmremote_platform::linux_apps::DpkgProvider;
-use cmremote_platform::packages::CompositePackageProvider;
+use cmremote_platform::packages::{CompositePackageProvider, RejectingDownloader};
 #[cfg(not(target_os = "linux"))]
 use cmremote_platform::stubs::NotSupportedAppsProvider;
 use cmremote_platform::{DeviceInfoProvider, StdDeviceInfoProvider};
@@ -56,19 +56,40 @@ pub async fn run(cli: CliArgs) -> Result<(), RuntimeError> {
     #[cfg(not(target_os = "linux"))]
     let apps = Arc::new(NotSupportedAppsProvider);
 
-    // Slice R6: composite package provider with no concrete handlers
-    // registered yet. Every InstallPackage request will be answered
-    // with a structured "not supported" failure until the signed-build
-    // pipeline (slice R8) ships and registers the Chocolatey / MSI /
-    // Executable handlers — at which point only this construction
-    // line changes.
-    let packages = Arc::new(CompositePackageProvider::new());
+    // Slice R6: composite package provider with the per-OS default
+    // handler set registered. On Windows the Chocolatey / UploadedMsi /
+    // Executable providers are wired in; on every other OS each
+    // provider's `can_handle` returns `false` so the composite still
+    // surfaces a structured "not supported" failure (the providers
+    // themselves return the same shape from `execute`). The downloader
+    // is the rejecting stub for now — the runtime will swap in the
+    // real reqwest-based client in a follow-up PR; until then MSI /
+    // Executable jobs fail loudly with "this agent is not configured
+    // to download package artifacts" rather than hanging.
+    let cache_dir = std::env::temp_dir().join("cmremote-package-cache");
+    let stage_dir = std::env::temp_dir().join("cmremote-update-stage");
+    let server_host = info.normalized_host();
+    let mut composite = CompositePackageProvider::new();
+    composite.register_default_handlers(cache_dir, server_host, Arc::new(RejectingDownloader));
+    let packages = Arc::new(composite);
+
+    // Slice M3 (gated on R6): the agent self-update handler shares
+    // the same downloader as the package providers. The installer is
+    // platform-specific and not yet implemented; until then the stub
+    // installer surfaces a clean structured failure so the manifest
+    // dispatcher's audit trail is honest about the missing capability.
+    let agent_update = Arc::new(crate::handlers::agent_update::AgentUpdateContext {
+        downloader: Arc::new(RejectingDownloader),
+        installer: Arc::new(crate::handlers::agent_update::StubAgentUpdateInstaller),
+        stage_dir,
+    });
 
     let handlers = Arc::new(AgentHandlers {
         connection_info: info.clone(),
         device_info,
         apps,
         packages,
+        agent_update,
     });
 
     // The shutdown channel is a single-producer / multi-consumer

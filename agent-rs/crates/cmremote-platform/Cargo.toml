@@ -15,11 +15,16 @@ serde = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 sha2 = "0.10"
+uuid = { workspace = true }
 
 # Async trait for the package provider so the orchestrator can plug
 # in async install paths once the signed-build pipeline lands.
 async-trait = "0.1"
+# Slice R6 process-runner default uses tokio::process; we intentionally
+# scope to the features cmremote-platform needs (process + io-util for
+# stdout/stderr capture, sync for tests, time for the exec timeout).
+tokio = { workspace = true }
 cmremote-wire = { path = "../cmremote-wire" }
 
 [dev-dependencies]
-tokio = { workspace = true }
+tempfile = "3.13"

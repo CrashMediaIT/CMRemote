@@ -160,9 +160,11 @@ dependencies = [
  "cmremote-wire",
  "serde",
  "sha2",
+ "tempfile",
  "thiserror",
  "tokio",
  "tracing",
+ "uuid",
 ]
 
 [[package]]

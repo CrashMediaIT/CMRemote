@@ -144,13 +144,14 @@ pub enum MethodName {
     DeleteLogs,
     /// Stub — agent log retrieval.
     GetLogs,
-    /// Slot for slice R8 — agent self-update via the manifest-backed
-    /// dispatcher. The server pushes <c>InstallAgentUpdate(downloadUrl,
-    /// version, sha256)</c>; the concrete download / verify / install
-    /// driver lands with R6's package-install handlers (they share the
-    /// fetch-verify-execute path). Today the dispatcher returns
-    /// <c>not_implemented</c> so the wire layer does not reject the
-    /// unknown method, but no install actually happens.
+    /// `InstallAgentUpdate(downloadUrl, version, sha256)` — agent
+    /// self-update. Slice R6/M3 ships the fetch + SHA-256 verify
+    /// path, sharing the same `ArtifactDownloader` as the package
+    /// providers. The platform-specific binary swap lives behind the
+    /// `AgentUpdateInstaller` trait; until a real installer is
+    /// registered the handler returns a structured "no installer
+    /// configured" failure (as opposed to silently succeeding) so the
+    /// manifest dispatcher's audit trail stays honest.
     InstallAgentUpdate,
     /// Stub — agent self-update (R8).
     ReinstallAgent,
