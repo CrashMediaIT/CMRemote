@@ -59,6 +59,19 @@ git remote add upstream https://github.com/webrtc-rs/dtls.git
 git fetch upstream --tags
 # v0.5.4 is the version pinned by the symbol report.
 git checkout -b cmremote/v0.5.4-aws-lc-rs v0.5.4
+# Incorporate the repository setup commits that already exist on main
+# (initial commit + any Copilot-added config files from Step 1).
+# --allow-unrelated-histories is required because the upstream tag and
+# the repo's initial commit have no common ancestor.
+git merge origin/main --allow-unrelated-histories \
+    -m "chore: incorporate repository setup into cmremote/v0.5.4-aws-lc-rs"
+```
+
+Verify the merge consumed all of `origin/main`:
+
+```bash
+# Should produce no output — the branch must be ahead of or equal to main.
+git log --oneline cmremote/v0.5.4-aws-lc-rs..origin/main
 ```
 
 (Why a branch off the tag rather than a fork-of-fork: the spike
