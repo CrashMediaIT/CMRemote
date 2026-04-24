@@ -30,8 +30,10 @@
 //! cannot disclose them.
 
 use cmremote_wire::{
-    ChangeWindowsSessionRequest, DesktopTransportResult, IceCandidate, RemoteControlSessionRequest,
-    RestartScreenCasterRequest, SdpAnswer, SdpOffer, MAX_SDP_BYTES, MAX_SIGNALLING_STRING_LEN,
+    ChangeWindowsSessionRequest, DesktopTransportResult, IceCandidate, IceCredentialType,
+    IceServer, IceServerConfig, RemoteControlSessionRequest, RestartScreenCasterRequest, SdpAnswer,
+    SdpOffer, MAX_ICE_CREDENTIAL_LEN, MAX_ICE_SERVERS, MAX_ICE_URL_LEN, MAX_SDP_BYTES,
+    MAX_SIGNALLING_STRING_LEN, MAX_URLS_PER_ICE_SERVER,
 };
 
 /// Maximum byte length permitted for any operator-supplied string
@@ -398,6 +400,203 @@ pub fn check_ice_candidate(
     )
 }
 
+// ---------------------------------------------------------------------------
+// Slice R7.i — ICE / TURN server configuration guard.
+//
+// `IceServerConfig` is delivered to the agent before the WebRTC peer
+// connection starts gathering candidates. The guard refuses any
+// shape that the eventual driver could not safely consume:
+//
+// 1. URL scheme allow-list (`stun:`, `stuns:`, `turn:`, `turns:`).
+//    No `http(s)://`, no `file://`, no scheme-relative `//host`.
+// 2. Per-config and per-server count caps and per-URL byte cap, so
+//    a hostile config cannot exhaust the resolver budget.
+// 3. Operator-string sanitisation on `username` (refuses control
+//    characters / NUL / DEL / bidi-overrides — the same contract
+//    every other operator-supplied string in this module follows).
+// 4. Length cap + hostile-byte refusal on the **sensitive**
+//    `credential`. The credential value is never echoed into the
+//    rejection message — only its field name and the policy that
+//    refused it.
+// 5. Fail-closed refusal of `IceCredentialType::Oauth` until the
+//    OAuth credential pipeline lands; the wire understands the
+//    discriminator but the driver does not yet honour it.
+// ---------------------------------------------------------------------------
+
+/// Allow-list of URL schemes an `IceServer.urls` entry may use.
+/// Anything else (`http://`, `file://`, scheme-relative `//host`,
+/// or a bare host:port without a scheme) is treated as a probe and
+/// refused.
+const ICE_URL_SCHEMES: [&str; 4] = ["stun:", "stuns:", "turn:", "turns:"];
+
+/// Returns the matching scheme prefix when `url` starts with one of
+/// [`ICE_URL_SCHEMES`], or `None` otherwise.
+fn ice_url_scheme(url: &str) -> Option<&'static str> {
+    ICE_URL_SCHEMES
+        .iter()
+        .copied()
+        .find(|scheme| url.len() > scheme.len() && url.as_bytes().starts_with(scheme.as_bytes()))
+}
+
+/// Validate a single ICE-server URL. Refuses an empty value, a
+/// value exceeding [`MAX_ICE_URL_LEN`], a value that does not start
+/// with one of the four allow-listed schemes, and any value
+/// containing a control character / NUL / DEL / Unicode
+/// bidi-override / ASCII whitespace (no legitimate ICE URL contains
+/// inline whitespace and embedded controls would let a hostile
+/// config split the URL across log lines).
+fn validate_ice_url(field: &str, value: &str) -> Result<(), String> {
+    if value.is_empty() {
+        return Err(format!("{field} must not be empty"));
+    }
+    if value.len() > MAX_ICE_URL_LEN {
+        return Err(format!("{field} exceeds {MAX_ICE_URL_LEN}-byte limit"));
+    }
+    if ice_url_scheme(value).is_none() {
+        // Do not echo the URL — log only the field name and the
+        // policy that refused it. A hostile URL can include
+        // homoglyphs that confuse a downstream log renderer.
+        return Err(format!(
+            "{field} scheme is not in the ICE allow-list (stun:, stuns:, turn:, turns:)"
+        ));
+    }
+    for c in value.chars() {
+        if c.is_control() || c == '\u{007F}' {
+            return Err(format!("{field} contains a non-printable character"));
+        }
+        if c.is_whitespace() {
+            return Err(format!("{field} contains whitespace"));
+        }
+        if matches!(
+            c,
+            '\u{200E}' | '\u{200F}'
+                | '\u{202A}'..='\u{202E}'
+                | '\u{2066}'..='\u{2069}'
+        ) {
+            return Err(format!("{field} contains a bidi-override character"));
+        }
+    }
+    Ok(())
+}
+
+/// Validate an `IceServer.credential`. The value is **sensitive** —
+/// the rejection message MUST NOT contain it under any branch.
+/// Length-capped at [`MAX_ICE_CREDENTIAL_LEN`] and refused if it
+/// contains a control character / NUL / DEL / Unicode bidi-override.
+fn validate_ice_credential(field: &str, value: &str) -> Result<(), String> {
+    if value.is_empty() {
+        return Err(format!("{field} must not be empty"));
+    }
+    if value.len() > MAX_ICE_CREDENTIAL_LEN {
+        return Err(format!(
+            "{field} exceeds {MAX_ICE_CREDENTIAL_LEN}-byte limit"
+        ));
+    }
+    for c in value.chars() {
+        if c.is_control() || c == '\u{007F}' {
+            // Pin the message to a fixed shape that cannot
+            // inadvertently include the credential's bytes.
+            return Err(format!("{field} contains a non-printable character"));
+        }
+        if matches!(
+            c,
+            '\u{200E}' | '\u{200F}'
+                | '\u{202A}'..='\u{202E}'
+                | '\u{2066}'..='\u{2069}'
+        ) {
+            return Err(format!("{field} contains a bidi-override character"));
+        }
+    }
+    Ok(())
+}
+
+fn validate_single_ice_server(idx: usize, server: &IceServer) -> Result<(), String> {
+    let prefix = format!("ice_servers[{idx}]");
+
+    if server.urls.is_empty() {
+        return Err(format!("{prefix}.urls must contain at least one entry"));
+    }
+    if server.urls.len() > MAX_URLS_PER_ICE_SERVER {
+        return Err(format!(
+            "{prefix}.urls exceeds {MAX_URLS_PER_ICE_SERVER}-entry limit"
+        ));
+    }
+    for (uidx, url) in server.urls.iter().enumerate() {
+        validate_ice_url(&format!("{prefix}.urls[{uidx}]"), url)?;
+    }
+
+    // Per W3C `RTCIceServer`: a `turn:` / `turns:` URL requires a
+    // username + credential, while a `stun:` / `stuns:` URL accepts
+    // neither. Enforce that here so the driver never has to deal
+    // with a malformed half-credentialled config.
+    let any_turn = server
+        .urls
+        .iter()
+        .any(|u| matches!(ice_url_scheme(u), Some("turn:") | Some("turns:")));
+    let any_stun = server
+        .urls
+        .iter()
+        .any(|u| matches!(ice_url_scheme(u), Some("stun:") | Some("stuns:")));
+
+    if any_turn {
+        let username = server
+            .username
+            .as_deref()
+            .ok_or_else(|| format!("{prefix}.username is required for turn(s) URLs"))?;
+        validate_operator_string(&format!("{prefix}.username"), username)?;
+        let credential = server
+            .credential
+            .as_deref()
+            .ok_or_else(|| format!("{prefix}.credential is required for turn(s) URLs"))?;
+        validate_ice_credential(&format!("{prefix}.credential"), credential)?;
+    } else if any_stun {
+        if server.username.is_some() {
+            return Err(format!(
+                "{prefix}.username is not permitted for plain stun(s) URLs"
+            ));
+        }
+        if server.credential.is_some() {
+            return Err(format!(
+                "{prefix}.credential is not permitted for plain stun(s) URLs"
+            ));
+        }
+    }
+
+    if matches!(server.credential_type, IceCredentialType::Oauth) {
+        // The wire understands the discriminator so a future
+        // deployment can opt in without a contract bump, but the
+        // initial agent fails closed — see the slice R7.i contract.
+        return Err(format!(
+            "{prefix}.credential_type \"Oauth\" is not implemented by this agent"
+        ));
+    }
+
+    Ok(())
+}
+
+/// Run the security-contract guards against an [`IceServerConfig`].
+/// Called by the desktop-transport provider *before* any URL is
+/// handed to the WebRTC stack's resolver.
+///
+/// The rejection's `session_id` field is left empty: an
+/// `IceServerConfig` is delivered out-of-band to the per-session
+/// negotiation so the caller pairs the rejection with the session
+/// id it knows about, rather than this guard reflecting a value it
+/// cannot independently validate.
+pub fn check_ice_server_config(config: &IceServerConfig) -> Result<(), GuardRejection> {
+    run(|_| {
+        if config.ice_servers.len() > MAX_ICE_SERVERS {
+            return Err(format!("ice_servers exceeds {MAX_ICE_SERVERS}-entry limit"));
+        }
+        for (idx, server) in config.ice_servers.iter().enumerate() {
+            validate_single_ice_server(idx, server)?;
+        }
+        // `ice_transport_policy` is an enum with only safe variants;
+        // nothing extra to validate.
+        Ok(())
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -758,5 +957,276 @@ mod tests {
         req.sdp_mid = Some("0\u{202E}".into());
         let r = check_ice_candidate(&req, Some(VALID_ORG_ID)).unwrap_err();
         assert!(r.message.contains("sdp_mid"), "{}", r.message);
+    }
+
+    // -----------------------------------------------------------------
+    // Slice R7.i — ICE / TURN server configuration tests.
+    // -----------------------------------------------------------------
+
+    fn turn_server() -> IceServer {
+        IceServer {
+            urls: vec![
+                "turn:turn.example.org:3478?transport=udp".into(),
+                "turns:turn.example.org:5349?transport=tcp".into(),
+            ],
+            username: Some("agent-bob".into()),
+            credential: Some("hunter2".into()),
+            credential_type: IceCredentialType::Password,
+        }
+    }
+
+    fn stun_server() -> IceServer {
+        IceServer {
+            urls: vec!["stun:stun.example.org:3478".into()],
+            username: None,
+            credential: None,
+            credential_type: IceCredentialType::Password,
+        }
+    }
+
+    fn ok_ice_config() -> IceServerConfig {
+        IceServerConfig {
+            ice_servers: vec![stun_server(), turn_server()],
+            ice_transport_policy: cmremote_wire::IceTransportPolicy::All,
+        }
+    }
+
+    #[test]
+    fn happy_path_passes_for_ice_server_config() {
+        check_ice_server_config(&ok_ice_config()).expect("happy path");
+    }
+
+    #[test]
+    fn empty_ice_server_list_is_accepted_as_a_lan_only_config() {
+        // An empty list is a meaningful — if narrow — config that
+        // limits the WebRTC stack to host candidates. The guard
+        // accepts it; the eventual driver decides whether to warn.
+        let cfg = IceServerConfig {
+            ice_servers: vec![],
+            ice_transport_policy: cmremote_wire::IceTransportPolicy::All,
+        };
+        check_ice_server_config(&cfg).expect("empty list is valid");
+    }
+
+    #[test]
+    fn over_max_ice_servers_is_refused() {
+        let mut cfg = ok_ice_config();
+        cfg.ice_servers = (0..(MAX_ICE_SERVERS + 1)).map(|_| stun_server()).collect();
+        let r = check_ice_server_config(&cfg).unwrap_err();
+        assert!(r.message.contains("ice_servers"), "{}", r.message);
+        assert!(r.message.contains("limit"), "{}", r.message);
+    }
+
+    #[test]
+    fn over_max_urls_per_server_is_refused() {
+        let mut cfg = ok_ice_config();
+        cfg.ice_servers[0].urls = (0..(MAX_URLS_PER_ICE_SERVER + 1))
+            .map(|i| format!("stun:stun{i}.example.org"))
+            .collect();
+        let r = check_ice_server_config(&cfg).unwrap_err();
+        assert!(r.message.contains("urls"), "{}", r.message);
+        assert!(r.message.contains("entry limit"), "{}", r.message);
+    }
+
+    #[test]
+    fn empty_urls_list_is_refused() {
+        let mut cfg = ok_ice_config();
+        cfg.ice_servers[0].urls.clear();
+        let r = check_ice_server_config(&cfg).unwrap_err();
+        assert!(r.message.contains("at least one"), "{}", r.message);
+    }
+
+    #[test]
+    fn empty_url_string_is_refused() {
+        let mut cfg = ok_ice_config();
+        cfg.ice_servers[0].urls[0] = "".into();
+        let r = check_ice_server_config(&cfg).unwrap_err();
+        assert!(r.message.contains("urls[0]"), "{}", r.message);
+        assert!(r.message.contains("empty"), "{}", r.message);
+    }
+
+    #[test]
+    fn over_max_url_length_is_refused() {
+        let mut cfg = ok_ice_config();
+        cfg.ice_servers[0].urls[0] = format!("stun:{}", "x".repeat(MAX_ICE_URL_LEN));
+        let r = check_ice_server_config(&cfg).unwrap_err();
+        assert!(r.message.contains("urls[0]"), "{}", r.message);
+        assert!(r.message.contains("limit"), "{}", r.message);
+    }
+
+    #[test]
+    fn non_allowlisted_scheme_is_refused() {
+        for bad in [
+            "http://stun.example.org",
+            "https://stun.example.org",
+            "file:///etc/passwd",
+            "//stun.example.org",
+            "stun.example.org:3478", // bare host, no scheme
+            "STUN:stun.example.org", // case-sensitive: only lower-case
+            "ws://signal.example.org",
+            "javascript:alert(1)",
+        ] {
+            let mut cfg = ok_ice_config();
+            cfg.ice_servers[0].urls[0] = bad.into();
+            let r = check_ice_server_config(&cfg).unwrap_err();
+            assert!(
+                r.message.contains("allow-list"),
+                "expected allow-list refusal for {bad}, got {}",
+                r.message
+            );
+            // The hostile URL itself must NOT be echoed.
+            assert!(
+                !r.message.contains(bad),
+                "rejection echoed url: {}",
+                r.message
+            );
+        }
+    }
+
+    #[test]
+    fn url_with_embedded_control_or_whitespace_is_refused() {
+        for bad in [
+            "stun:stun.example.org\n:3478",
+            "stun:stun.example.org\t:3478",
+            "stun:stun.example.org :3478",
+            "stun:stun.example.org\u{0007}",
+            "stun:stun.example.org\u{007F}",
+        ] {
+            let mut cfg = ok_ice_config();
+            cfg.ice_servers[0].urls[0] = bad.into();
+            let r = check_ice_server_config(&cfg).unwrap_err();
+            assert!(
+                r.message.contains("non-printable") || r.message.contains("whitespace"),
+                "expected refusal for {bad:?}, got {}",
+                r.message
+            );
+        }
+    }
+
+    #[test]
+    fn url_with_bidi_override_is_refused() {
+        let mut cfg = ok_ice_config();
+        cfg.ice_servers[0].urls[0] = "stun:stun.example.org\u{202E}".into();
+        let r = check_ice_server_config(&cfg).unwrap_err();
+        assert!(r.message.contains("bidi-override"), "{}", r.message);
+    }
+
+    #[test]
+    fn turn_server_without_username_is_refused() {
+        let mut cfg = ok_ice_config();
+        cfg.ice_servers[1].username = None;
+        let r = check_ice_server_config(&cfg).unwrap_err();
+        assert!(r.message.contains("username"), "{}", r.message);
+        assert!(r.message.contains("required"), "{}", r.message);
+    }
+
+    #[test]
+    fn turn_server_without_credential_is_refused() {
+        let mut cfg = ok_ice_config();
+        cfg.ice_servers[1].credential = None;
+        let r = check_ice_server_config(&cfg).unwrap_err();
+        assert!(r.message.contains("credential"), "{}", r.message);
+        assert!(r.message.contains("required"), "{}", r.message);
+    }
+
+    #[test]
+    fn stun_server_with_credential_is_refused() {
+        let mut cfg = ok_ice_config();
+        cfg.ice_servers[0].credential = Some("oops".into());
+        let r = check_ice_server_config(&cfg).unwrap_err();
+        assert!(r.message.contains("not permitted"), "{}", r.message);
+        // And the credential's value MUST NOT leak into the
+        // rejection message.
+        assert!(!r.message.contains("oops"), "{}", r.message);
+    }
+
+    #[test]
+    fn stun_server_with_username_is_refused() {
+        let mut cfg = ok_ice_config();
+        cfg.ice_servers[0].username = Some("oops-user".into());
+        let r = check_ice_server_config(&cfg).unwrap_err();
+        assert!(r.message.contains("not permitted"), "{}", r.message);
+    }
+
+    #[test]
+    fn over_max_credential_length_is_refused_without_echoing_value() {
+        let mut cfg = ok_ice_config();
+        let huge = "z".repeat(MAX_ICE_CREDENTIAL_LEN + 1);
+        cfg.ice_servers[1].credential = Some(huge.clone());
+        let r = check_ice_server_config(&cfg).unwrap_err();
+        assert!(r.message.contains("credential"), "{}", r.message);
+        assert!(r.message.contains("limit"), "{}", r.message);
+        // The credential's value MUST NOT appear in the rejection.
+        assert!(!r.message.contains(&huge), "rejection echoed credential");
+        assert!(!r.message.contains("zzz"), "rejection echoed credential");
+    }
+
+    #[test]
+    fn empty_credential_is_refused() {
+        let mut cfg = ok_ice_config();
+        cfg.ice_servers[1].credential = Some(String::new());
+        let r = check_ice_server_config(&cfg).unwrap_err();
+        assert!(r.message.contains("credential"), "{}", r.message);
+        assert!(r.message.contains("empty"), "{}", r.message);
+    }
+
+    #[test]
+    fn credential_with_control_or_bidi_is_refused_without_echoing_value() {
+        // Use a credential body whose substrings are unlikely to
+        // appear in the rejection message itself ("ter" appears in
+        // "character", "hun" in "thumb", etc).
+        let secret_body = "Zk9-pAyL0aD";
+        for (suffix, marker) in [
+            ("\u{0000}", "non-printable"),
+            ("\u{007F}", "non-printable"),
+            ("\u{0007}", "non-printable"),
+            ("\u{202E}", "bidi-override"),
+            ("\u{2066}", "bidi-override"),
+        ] {
+            let mut cfg = ok_ice_config();
+            let bad = format!("{secret_body}{suffix}");
+            cfg.ice_servers[1].credential = Some(bad.clone());
+            let r = check_ice_server_config(&cfg).unwrap_err();
+            assert!(
+                r.message.contains(marker),
+                "expected {marker} refusal, got {}",
+                r.message
+            );
+            // None of the credential's printable bytes may leak.
+            assert!(
+                !r.message.contains(secret_body),
+                "rejection echoed credential: {}",
+                r.message
+            );
+        }
+    }
+
+    #[test]
+    fn username_with_bidi_override_is_refused() {
+        let mut cfg = ok_ice_config();
+        cfg.ice_servers[1].username = Some("agent\u{202E}bob".into());
+        let r = check_ice_server_config(&cfg).unwrap_err();
+        assert!(r.message.contains("username"), "{}", r.message);
+        assert!(r.message.contains("bidi-override"), "{}", r.message);
+    }
+
+    #[test]
+    fn oauth_credential_type_fails_closed() {
+        let mut cfg = ok_ice_config();
+        cfg.ice_servers[1].credential_type = IceCredentialType::Oauth;
+        let r = check_ice_server_config(&cfg).unwrap_err();
+        assert!(r.message.contains("Oauth"), "{}", r.message);
+        assert!(r.message.contains("not implemented"), "{}", r.message);
+    }
+
+    #[test]
+    fn rejection_for_ice_config_carries_empty_session_id() {
+        // The guard cannot independently validate the session id —
+        // it is delivered out-of-band — so the rejection's
+        // session_id field is left empty by contract. Pin that.
+        let mut cfg = ok_ice_config();
+        cfg.ice_servers[0].urls[0] = "javascript:alert(1)".into();
+        let r = check_ice_server_config(&cfg).unwrap_err();
+        assert_eq!(r.session_id, "");
     }
 }

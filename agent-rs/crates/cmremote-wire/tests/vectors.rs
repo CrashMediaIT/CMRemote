@@ -9,8 +9,9 @@ use std::path::{Path, PathBuf};
 use cmremote_wire::{
     from_msgpack, to_msgpack, ChangeWindowsSessionRequest, ConnectionInfo, DesktopTransportResult,
     HandshakeRequest, HandshakeResponse, HubClose, HubCompletion, HubInvocation, HubPing,
-    HubProtocol, IceCandidate, InvokeCtrlAltDelRequest, RemoteControlSessionRequest,
-    RestartScreenCasterRequest, SdpAnswer, SdpKind, SdpOffer,
+    HubProtocol, IceCandidate, IceCredentialType, IceServerConfig, IceTransportPolicy,
+    InvokeCtrlAltDelRequest, RemoteControlSessionRequest, RestartScreenCasterRequest, SdpAnswer,
+    SdpKind, SdpOffer,
 };
 
 /// Walk up from the crate's manifest directory until we find the
@@ -499,4 +500,60 @@ fn signalling_result_vectors_round_trip() {
 
     assert_msgpack_round_trip::<DesktopTransportResult>(&dir.join("result-success.json"));
     assert_msgpack_round_trip::<DesktopTransportResult>(&dir.join("result-failure.json"));
+}
+
+// -------------------------------------------------------------------------
+// Slice R7.i — ICE / TURN server configuration vectors. The .NET hub will
+// eventually deliver an `IceServerConfig` to the agent before the WebRTC
+// peer connection starts gathering candidates; freezing the wire shape
+// here lets the .NET side land its half against a stable contract.
+// -------------------------------------------------------------------------
+
+#[test]
+fn ice_config_typical_vector_round_trips() {
+    let path = vectors_root()
+        .join("method-surface")
+        .join("ice-config")
+        .join("ice-server-config.json");
+    let raw = read(&path);
+    let cfg: IceServerConfig = serde_json::from_str(&raw).unwrap();
+    assert_eq!(cfg.ice_servers.len(), 2);
+    assert_eq!(cfg.ice_transport_policy, IceTransportPolicy::All);
+    // The first entry is a plain stun: server with no credentials;
+    // the second is a turn:/turns: pair with shared-secret auth.
+    let stun = &cfg.ice_servers[0];
+    assert!(stun.urls[0].starts_with("stun:"));
+    assert!(stun.username.is_none());
+    assert!(stun.credential.is_none());
+    let turn = &cfg.ice_servers[1];
+    assert_eq!(turn.username.as_deref(), Some("agent-bob"));
+    assert!(turn.credential.is_some());
+    assert_eq!(turn.credential_type, IceCredentialType::Password);
+
+    let re = serde_json::to_string(&cfg).unwrap();
+    // PascalCase wire field names must survive — the contract with
+    // the .NET hub.
+    assert!(re.contains("\"IceServers\""), "{re}");
+    assert!(re.contains("\"IceTransportPolicy\":\"All\""), "{re}");
+    assert!(re.contains("\"Urls\""), "{re}");
+    assert!(re.contains("\"CredentialType\":\"Password\""), "{re}");
+
+    assert_msgpack_round_trip::<IceServerConfig>(&path);
+}
+
+#[test]
+fn ice_config_relay_only_vector_round_trips() {
+    let path = vectors_root()
+        .join("method-surface")
+        .join("ice-config")
+        .join("ice-server-config-relay-only.json");
+    let raw = read(&path);
+    let cfg: IceServerConfig = serde_json::from_str(&raw).unwrap();
+    assert_eq!(cfg.ice_transport_policy, IceTransportPolicy::Relay);
+    assert_eq!(cfg.ice_servers.len(), 1);
+    assert!(cfg.ice_servers[0].urls[0].starts_with("turns:"));
+
+    let re = serde_json::to_string(&cfg).unwrap();
+    assert!(re.contains("\"IceTransportPolicy\":\"Relay\""), "{re}");
+    assert_msgpack_round_trip::<IceServerConfig>(&path);
 }
