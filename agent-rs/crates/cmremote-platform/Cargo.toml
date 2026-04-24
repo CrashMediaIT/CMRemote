@@ -35,5 +35,19 @@ futures-util = { workspace = true }
 rustls = { workspace = true }
 cmremote-wire = { path = "../cmremote-wire" }
 
+[features]
+# Opt-in concrete WebRTC desktop-transport driver. Default is OFF —
+# the runtime keeps the `NotSupportedDesktopTransport` stub until a
+# build explicitly enables this feature. The driver itself stubs the
+# actual peer-connection construction (slice R7.k); the real
+# `webrtc` crate dependency lands once Gate A (the upstream crate-graph
+# audit, ADR 0001 follow-up) is resolved (slice R7.l). Keeping the
+# driver under a feature flag means the audit does not need to land
+# before this code can be reviewed and merged.
+webrtc-driver = []
+
 [dev-dependencies]
 tempfile = "3.13"
+# `test-util` enables `tokio::time::pause` / `advance` for the
+# session-registry idle-sweep tests in `desktop::session`.
+tokio = { workspace = true, features = ["test-util"] }
