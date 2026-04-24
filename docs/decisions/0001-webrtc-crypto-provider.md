@@ -333,6 +333,9 @@ Option B.
   uncovers gaps that cannot be shimmed without re-implementing
   cryptographic primitives, this ADR is reopened and Option C
   is re-evaluated.
+  - **Status (2026-04-24):** Spike **approved to proceed** — see
+    [0001-spike-approval.md](0001-spike-approval.md) for gate #1
+    sign-off and deliverables.
 - **After the spike succeeds:** a follow-up PR creates the
   `CrashMediaIT/webrtc-cmremote` repository, adds the
   `[patch.crates-io]` entry and the `[sources].allow-git`
@@ -359,3 +362,4 @@ Option B.
 - [`aws-lc-rs` crate](https://crates.io/crates/aws-lc-rs)
 - [CMRemote threat model](../threat-model.md)
 - [CMRemote roadmap — slice R7 row](../../ROADMAP.md)
+- [Feasibility spike approval — gate #1](0001-spike-approval.md)
