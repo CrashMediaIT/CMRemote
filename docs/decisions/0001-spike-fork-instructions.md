@@ -2,7 +2,7 @@
 
 - **Parent ADR:** [0001-webrtc-crypto-provider.md](0001-webrtc-crypto-provider.md)
 - **Spike report:** [0001-spike-report.md](0001-spike-report.md)
-- **Spike PoC crate:** [`agent-rs/crates/cmremote-webrtc-crypto-spike/`](../../agent-rs/crates/cmremote-webrtc-crypto-spike/)
+- **Spike PoC crate:** formerly `agent-rs/crates/cmremote-webrtc-crypto-spike/` — deleted by Step 8 once the fork was wired in via `[patch.crates-io]`; `cargo test` evidence preserved in git history
 - **Status:** Active — this is the runbook for creating the external repository the ADR's Option B requires
 - **Audience:** CMRemote maintainers with `CrashMediaIT` org admin rights
 
@@ -97,21 +97,28 @@ git ls-files 'src/**/*.rs' | xargs sed -i \
 ! grep -rn 'ring' src/
 ```
 
-The PoC crate at
-[`agent-rs/crates/cmremote-webrtc-crypto-spike/`](../../agent-rs/crates/cmremote-webrtc-crypto-spike/)
-is a **standalone, runnable demonstration** that this exact
-substitution preserves behaviour for every distinct symbol. Re-run
-its tests against the fork to confirm:
+The PoC crate previously at
+`agent-rs/crates/cmremote-webrtc-crypto-spike/` was a **standalone,
+runnable demonstration** that this exact substitution preserves
+behaviour for every distinct symbol. It was deleted in the same PR
+that wired the fork in via `[patch.crates-io]` (Step 8) — its
+`cargo test` evidence is preserved in git history at the commit
+that landed the runbook
+([`docs/decisions/0001-spike-fork-instructions.md`](0001-spike-fork-instructions.md))
+and the spike report ([`0001-spike-report.md`](0001-spike-report.md)).
+To re-run that evidence, check out the parent commit of the
+deletion and run:
 
 ```bash
 cd path/to/CMRemote/agent-rs
 cargo test -p cmremote-webrtc-crypto-spike
 ```
 
-Expected: 11/11 passed (Ed25519, ECDSA‑P256‑ASN1, ECDSA‑P384‑ASN1
-verify, RSA‑PKCS#1‑SHA256/384/512, RSA‑PKCS#1‑SHA1 legacy verify,
-the negative-path tampering check, the empty-public-key error
-check, and the trait-object compile assertion).
+Expected (at the deletion commit's parent): 11/11 passed (Ed25519,
+ECDSA‑P256‑ASN1, ECDSA‑P384‑ASN1 verify, RSA‑PKCS#1‑SHA256/384/512,
+RSA‑PKCS#1‑SHA1 legacy verify, the negative-path tampering check,
+the empty-public-key error check, and the trait-object compile
+assertion).
 
 ## Step 4 — Update `Cargo.toml` to drop `ring` and pin `aws-lc-rs`
 
@@ -120,7 +127,7 @@ In the fork's `Cargo.toml`:
 1. **Remove** the `ring = "0.16.19"` dependency line.
 2. **Add** `aws-lc-rs = "1"` to `[dependencies]`. Pin the major
    version only — this matches the constraint
-   `agent-rs/crates/cmremote-webrtc-crypto-spike/Cargo.toml`
+    `agent-rs/crates/cmremote-webrtc-crypto-spike/Cargo.toml`
    already uses, so the fork and the workspace will resolve to a
    single `aws-lc-rs` version (the cargo-deny `multiple-versions`
    policy is `warn`, not `deny`, so a brief drift won't fail CI,
@@ -257,5 +264,8 @@ documented fallback. Do **not** silently fall back to Option A
 - Spike approval (gate #1): [0001-spike-approval.md](0001-spike-approval.md)
 - Spike report (deliverable #1): [0001-spike-report.md](0001-spike-report.md)
 - Spike PoC crate (deliverable #2 — running-code evidence):
-  [`agent-rs/crates/cmremote-webrtc-crypto-spike/`](../../agent-rs/crates/cmremote-webrtc-crypto-spike/)
+  formerly at `agent-rs/crates/cmremote-webrtc-crypto-spike/`,
+  deleted by Step 8 once the fork was wired in via
+  `[patch.crates-io]`; `cargo test` evidence preserved in git
+  history at the parent of the deletion commit.
 - ROADMAP — slice R7 row: [../../ROADMAP.md](../../ROADMAP.md)
