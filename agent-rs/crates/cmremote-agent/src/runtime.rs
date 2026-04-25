@@ -108,26 +108,6 @@ pub async fn run(cli: CliArgs) -> Result<(), RuntimeError> {
         stage_dir,
     });
 
-    // Slice R7 — desktop transport. By default, until the WebRTC
-    // capture / encode driver lands, every request resolves to a
-    // structured "not supported on <OS>" failure
-    // (`NotSupportedDesktopTransport`). When the workspace is built
-    // with `--features cmremote-agent/webrtc-driver` (slice R7.k), the
-    // runtime swaps in `WebRtcDesktopTransport` — a concrete provider
-    // that owns a per-session state machine and audit-logs every
-    // transition, but stubs the actual peer-connection construction
-    // until the supply-chain audit (slice R7.l) authorises adding the
-    // upstream `webrtc` crate. Either way the dispatcher's
-    // `Arc<dyn DesktopTransportProvider>` slot is unchanged.
-    #[cfg(not(feature = "webrtc-driver"))]
-    let desktop: Arc<dyn DesktopTransportProvider> = Arc::new(
-        NotSupportedDesktopTransport::for_current_host(info.organization_id.clone()),
-    );
-    #[cfg(feature = "webrtc-driver")]
-    let desktop: Arc<dyn DesktopTransportProvider> = Arc::new(
-        WebRtcDesktopTransport::for_current_host(info.organization_id.clone()),
-    );
-
     // Slice R7.n.4 — per-host bundle of desktop capability providers
     // (capturer + mouse + keyboard + clipboard). On Windows we try
     // `WindowsDesktopProviders::for_primary_output`, which composes
@@ -144,6 +124,40 @@ pub async fn run(cli: CliArgs) -> Result<(), RuntimeError> {
     // operator. On every other host today, the not-supported bundle
     // is the only available bundle.
     let desktop_providers = Arc::new(build_desktop_providers());
+
+    // Slice R7 — desktop transport. By default, until the WebRTC
+    // capture / encode driver lands, every request resolves to a
+    // structured "not supported on <OS>" failure
+    // (`NotSupportedDesktopTransport`). When the workspace is built
+    // with `--features cmremote-agent/webrtc-driver` (slice R7.k), the
+    // runtime swaps in `WebRtcDesktopTransport` — a concrete provider
+    // that owns a per-session state machine and audit-logs every
+    // transition, but stubs the actual peer-connection construction
+    // until the supply-chain audit (slice R7.l) authorises adding the
+    // upstream `webrtc` crate. Either way the dispatcher's
+    // `Arc<dyn DesktopTransportProvider>` slot is unchanged.
+    //
+    // Slice R7.n.5 — when `webrtc-driver` is on, inject the per-host
+    // `desktop_providers` bundle and a `DiscardingCaptureSink` into
+    // the transport via `with_providers`. Each `RemoteControl` then
+    // spawns a per-session capture pump that drives the bundle's
+    // capturer at `CapturePumpConfig::default().target_fps` (30 fps)
+    // and pushes captured frames into the sink. Until slice R7.n.6
+    // lands the Media Foundation H.264 encoder, the sink discards
+    // every frame after counting it.
+    #[cfg(not(feature = "webrtc-driver"))]
+    let desktop: Arc<dyn DesktopTransportProvider> = Arc::new(
+        NotSupportedDesktopTransport::for_current_host(info.organization_id.clone()),
+    );
+    #[cfg(feature = "webrtc-driver")]
+    let desktop: Arc<dyn DesktopTransportProvider> =
+        Arc::new(WebRtcDesktopTransport::with_providers(
+            cmremote_platform::HostOs::current(),
+            info.organization_id.clone(),
+            desktop_providers.clone(),
+            Arc::new(cmremote_platform::desktop::DiscardingCaptureSink::new()),
+            cmremote_platform::desktop::CapturePumpConfig::default(),
+        ));
 
     let handlers = Arc::new(AgentHandlers {
         connection_info: info.clone(),

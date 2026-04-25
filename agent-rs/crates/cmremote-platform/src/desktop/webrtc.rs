@@ -47,6 +47,7 @@
 //! [`super::NotSupportedDesktopTransport`]. The dispatcher's
 //! `Arc<dyn DesktopTransportProvider>` slot is unchanged.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -56,8 +57,13 @@ use cmremote_wire::{
     SdpOffer,
 };
 use tokio::sync::Mutex;
+use tokio::time::Instant;
 
 use super::guards;
+use super::providers::DesktopProviders;
+use super::pump::{
+    CapturePump, CapturePumpConfig, CaptureSink, CaptureStatsSnapshot, DiscardingCaptureSink,
+};
 use super::session::{CloseReason, DesktopSessionRegistry, DesktopSessionState};
 use super::DesktopTransportProvider;
 use crate::HostOs;
@@ -76,23 +82,77 @@ pub struct WebRtcDesktopTransport {
     host_os: HostOs,
     expected_org_id: Option<String>,
     sessions: Arc<Mutex<DesktopSessionRegistry>>,
+    /// Per-host bundle of capture / input providers (slice R7.n.4).
+    /// The pump reads `providers.capturer`; the future track-builder
+    /// will read `providers.mouse` / `providers.keyboard` /
+    /// `providers.clipboard` for the input data-channel.
+    providers: Arc<DesktopProviders>,
+    /// Sink every running pump pushes captured frames into. Until
+    /// the encoder lands (slice R7.n.6 — Media Foundation), the
+    /// default sink is [`DiscardingCaptureSink`] which counts +
+    /// drops frames. Stored as one shared `Arc` so every per-session
+    /// pump observes the same downstream stats.
+    sink: Arc<dyn CaptureSink>,
+    /// Pump tunables — pinned at construction so renegotiation
+    /// can't smuggle a hostile FPS in through the wire.
+    pump_config: CapturePumpConfig,
+    /// Live pump per session. Keyed by canonical-UUID `session_id`,
+    /// kept in lock-step with [`Self::sessions`]: every entry here
+    /// has a matching session record, and every session that has
+    /// reached `Initializing` has a matching pump until close /
+    /// replace / sweep removes both. Not coalesced into the
+    /// registry struct because the registry is `pub` and consumed
+    /// by tests that don't want a Tokio runtime dependency.
+    pumps: Arc<Mutex<HashMap<String, CapturePump>>>,
 }
 
 impl WebRtcDesktopTransport {
     /// Build a new driver naming `host_os` and using `expected_org_id`
     /// for the cross-org guard (`None` skips the cross-org check, same
     /// semantics as [`super::NotSupportedDesktopTransport::new`]).
+    ///
+    /// Uses [`DesktopProviders::not_supported_for`] for the bundle
+    /// and [`DiscardingCaptureSink`] for the sink. The agent runtime
+    /// upgrades both via [`Self::with_providers`] when constructing
+    /// the production driver.
     pub fn new(host_os: HostOs, expected_org_id: Option<String>) -> Self {
+        Self::with_providers(
+            host_os,
+            expected_org_id,
+            Arc::new(DesktopProviders::not_supported_for(host_os)),
+            Arc::new(DiscardingCaptureSink::new()),
+            CapturePumpConfig::default(),
+        )
+    }
+
+    /// Build a driver that names the current host's OS, using the
+    /// `NotSupported` provider bundle + discarding sink. The agent
+    /// runtime calls [`Self::with_providers`] instead so it can
+    /// inject the per-OS bundle from
+    /// [`super::providers::DesktopProviders`] +
+    /// `cmremote_platform_windows::WindowsDesktopProviders` etc.
+    pub fn for_current_host(expected_org_id: Option<String>) -> Self {
+        Self::new(HostOs::current(), expected_org_id)
+    }
+
+    /// Full constructor — used by the agent runtime to inject the
+    /// per-host capture / input bundle and the production sink.
+    pub fn with_providers(
+        host_os: HostOs,
+        expected_org_id: Option<String>,
+        providers: Arc<DesktopProviders>,
+        sink: Arc<dyn CaptureSink>,
+        pump_config: CapturePumpConfig,
+    ) -> Self {
         Self {
             host_os,
             expected_org_id,
             sessions: Arc::new(Mutex::new(DesktopSessionRegistry::with_default_timeout())),
+            providers,
+            sink,
+            pump_config,
+            pumps: Arc::new(Mutex::new(HashMap::new())),
         }
-    }
-
-    /// Build a driver that names the current host's OS.
-    pub fn for_current_host(expected_org_id: Option<String>) -> Self {
-        Self::new(HostOs::current(), expected_org_id)
     }
 
     /// Borrow the underlying session registry. Exposed for the runtime
@@ -101,8 +161,85 @@ impl WebRtcDesktopTransport {
         self.sessions.clone()
     }
 
+    /// Borrow the per-session pump map. Exposed so the runtime sweep
+    /// task can confirm it's stopping pumps in lock-step with the
+    /// registry, and so tests can assert pump lifecycle.
+    pub fn pumps(&self) -> Arc<Mutex<HashMap<String, CapturePump>>> {
+        self.pumps.clone()
+    }
+
+    /// Stable plain-data snapshot of the live capture stats for one
+    /// session. `None` when no pump is running for that id (either
+    /// the session was never opened, or it has been closed and the
+    /// pump removed). Cheap — the returned snapshot is a clone of
+    /// the in-flight counters, not a borrow.
+    pub async fn pump_stats(&self, session_id: &str) -> Option<CaptureStatsSnapshot> {
+        let g = self.pumps.lock().await;
+        g.get(session_id).map(|p| p.stats().snapshot())
+    }
+
     fn expected_org(&self) -> Option<&str> {
         self.expected_org_id.as_deref()
+    }
+
+    /// Spawn a fresh pump for `session_id`, replacing (and stopping)
+    /// any existing pump for the same id. Awaits the prior pump's
+    /// abort-and-join so callers observe a clean handoff.
+    async fn spawn_pump(&self, session_id: &str) {
+        let pump = CapturePump::start(
+            self.providers.capturer.clone(),
+            self.sink.clone(),
+            self.pump_config,
+        );
+        let prior = {
+            let mut g = self.pumps.lock().await;
+            g.insert(session_id.to_string(), pump)
+        };
+        if let Some(prior) = prior {
+            tracing::info!(
+                session_id = %session_id,
+                event = "pump-replaced",
+                "stopped prior capture pump for replaced session",
+            );
+            let _ = prior.stop().await;
+        }
+    }
+
+    /// Stop and remove the pump for `session_id`. No-op if no pump
+    /// was registered for that id.
+    async fn stop_pump(&self, session_id: &str, reason: &'static str) {
+        let pump = {
+            let mut g = self.pumps.lock().await;
+            g.remove(session_id)
+        };
+        if let Some(pump) = pump {
+            tracing::info!(
+                session_id = %session_id,
+                event = "pump-stopped",
+                reason = reason,
+                "stopped capture pump",
+            );
+            let _ = pump.stop().await;
+        }
+    }
+
+    /// Sweep the session registry for idle sessions, then stop any
+    /// pump whose session id is no longer present. Replacement for
+    /// the bare `sessions().lock().await.sweep_idle(now)` the
+    /// runtime would otherwise call — using this method keeps
+    /// pumps from outliving their session record.
+    ///
+    /// Returns the list of evicted session ids (same shape the
+    /// underlying registry sweep returns).
+    pub async fn sweep_idle_with_pumps(&self, now: Instant) -> Vec<String> {
+        let evicted = {
+            let mut sessions = self.sessions.lock().await;
+            sessions.sweep_idle(now)
+        };
+        for id in &evicted {
+            self.stop_pump(id, CloseReason::IdleTimeout.as_str()).await;
+        }
+        evicted
     }
 
     /// Build the canonical "driver pending" failure naming the host OS
@@ -138,10 +275,18 @@ impl DesktopTransportProvider for WebRtcDesktopTransport {
         // yet wired.
         let mut sessions = self.sessions.lock().await;
         let _outcome = sessions.open(&request.session_id, &request.user_connection_id);
+        drop(sessions);
+        // Slice R7.n.5 — spawn a per-session capture pump (see
+        // `pump.rs`). The pump pulls from the bundle's capturer at
+        // `pump_config.target_fps` and pushes into the shared sink
+        // (default `DiscardingCaptureSink` until the encoder lands).
+        // `spawn_pump` aborts and joins any prior pump for the same
+        // session id, mirroring the registry's replace-on-duplicate
+        // semantics.
+        self.spawn_pump(&request.session_id).await;
         // Until the real driver lands, the open transition itself is
         // the only state change — the session sits in `Initializing`
         // and waits for `ProvideIceServers` / `SendSdpOffer`.
-        drop(sessions);
         self.driver_pending(request.session_id.clone())
     }
 
@@ -171,10 +316,14 @@ impl DesktopTransportProvider for WebRtcDesktopTransport {
         // Until the real driver lands, we close the registry's record
         // for the session id (audit-logged) so a subsequent
         // SendSdpOffer goes through the "session not initialised"
-        // path rather than racing against a stale state.
+        // path rather than racing against a stale state. Stop the
+        // matching pump in lock-step so the capturer is released
+        // before the new session attaches to it.
         let mut sessions = self.sessions.lock().await;
         sessions.close(&request.session_id, CloseReason::Explicit);
         drop(sessions);
+        self.stop_pump(&request.session_id, "change-windows-session")
+            .await;
         self.driver_pending(request.session_id.clone())
     }
 
@@ -691,5 +840,153 @@ mod tests {
         let _p: Arc<dyn DesktopTransportProvider> = Arc::new(
             WebRtcDesktopTransport::for_current_host(Some(VALID_ORG_ID.into())),
         );
+    }
+
+    // -----------------------------------------------------------------
+    // Slice R7.n.5 — capture-pump lifecycle. Every session that
+    // RemoteControl opens must spawn a pump; every close path
+    // (replace-on-duplicate, ChangeWindowsSession, sweep_idle) must
+    // stop the matching pump in lock-step with the registry.
+    // -----------------------------------------------------------------
+
+    /// Build a transport whose pump uses an extreme `target_fps` and
+    /// near-zero error backoff so the lifecycle assertions below
+    /// don't have to wait for a real 30 fps tick. The default
+    /// `NotSupported` capturer + `DiscardingCaptureSink` are still
+    /// used so the pump immediately starts hitting capture errors —
+    /// which is exactly what we want for the lifecycle assertions
+    /// (the tests care about start/stop, not about frames flowing).
+    fn fast_pump_transport() -> WebRtcDesktopTransport {
+        let providers = Arc::new(DesktopProviders::not_supported_for(HostOs::Linux));
+        let sink: Arc<dyn CaptureSink> = Arc::new(DiscardingCaptureSink::new());
+        let cfg = CapturePumpConfig {
+            target_fps: 1000,
+            // Generous so the pump stays alive across an
+            // `await`-laden assertion sequence.
+            max_consecutive_errors: 1_000_000,
+            error_backoff: std::time::Duration::from_micros(1),
+        };
+        WebRtcDesktopTransport::with_providers(
+            HostOs::Linux,
+            Some(VALID_ORG_ID.into()),
+            providers,
+            sink,
+            cfg,
+        )
+    }
+
+    #[tokio::test]
+    async fn remote_control_spawns_a_pump_for_the_session() {
+        let p = fast_pump_transport();
+        let _ = p.remote_control(&rc_req()).await;
+        let pumps = p.pumps().lock_owned().await;
+        assert!(
+            pumps.contains_key(VALID_SESSION_ID),
+            "pump must be registered for the opened session"
+        );
+        assert!(
+            pumps.get(VALID_SESSION_ID).unwrap().is_running(),
+            "freshly spawned pump must be running"
+        );
+    }
+
+    #[tokio::test]
+    async fn pump_stats_returns_live_snapshot_for_open_session_and_none_after_close() {
+        let p = fast_pump_transport();
+        let _ = p.remote_control(&rc_req()).await;
+        let snap = p.pump_stats(VALID_SESSION_ID).await.expect("snapshot");
+        // The pump is alive — `stopped_at` must be `None`. The
+        // `NotSupported` capturer means `frames_captured == 0` and
+        // `capture_errors > 0` after even a brief tick, but the
+        // assertion that matters here is the snapshot shape.
+        assert!(snap.stopped_at.is_none(), "{snap:?}");
+        // ChangeWindowsSession closes the session and stops the
+        // pump; after that, `pump_stats` returns `None`.
+        let _ = p.change_windows_session(&change_session_req()).await;
+        assert!(
+            p.pump_stats(VALID_SESSION_ID).await.is_none(),
+            "pump_stats must return None once the session is closed"
+        );
+    }
+
+    #[tokio::test]
+    async fn remote_control_replace_on_duplicate_stops_prior_pump() {
+        let p = fast_pump_transport();
+        let _ = p.remote_control(&rc_req()).await;
+        // Capture an Arc to the prior pump's stats handle so we can
+        // observe its termination after the replace.
+        let prior_stats = p
+            .pump_stats(VALID_SESSION_ID)
+            .await
+            .expect("prior snapshot");
+        assert!(prior_stats.stopped_at.is_none());
+
+        // Second RemoteControl with the same session id triggers
+        // the replace-on-duplicate path; spawn_pump aborts and
+        // joins the prior pump before swapping in the new one.
+        let _ = p.remote_control(&rc_req()).await;
+        // After the replace, exactly one pump remains in the map.
+        let pumps = p.pumps().lock_owned().await;
+        assert_eq!(pumps.len(), 1);
+        assert!(pumps.contains_key(VALID_SESSION_ID));
+        assert!(pumps.get(VALID_SESSION_ID).unwrap().is_running());
+    }
+
+    #[tokio::test]
+    async fn change_windows_session_stops_the_matching_pump() {
+        let p = fast_pump_transport();
+        let _ = p.remote_control(&rc_req()).await;
+        assert!(p.pumps().lock_owned().await.contains_key(VALID_SESSION_ID));
+        let _ = p.change_windows_session(&change_session_req()).await;
+        assert!(
+            !p.pumps().lock_owned().await.contains_key(VALID_SESSION_ID),
+            "ChangeWindowsSession must stop the pump in lock-step \
+             with closing the session"
+        );
+    }
+
+    #[tokio::test]
+    async fn sweep_idle_with_pumps_stops_pumps_for_evicted_sessions() {
+        let p = fast_pump_transport();
+        let _ = p.remote_control(&rc_req()).await;
+        assert!(p.pumps().lock_owned().await.contains_key(VALID_SESSION_ID));
+        // `sweep_idle_with_pumps(now + 1y)` evicts every session
+        // (every `last_activity` is older than the timeout) and
+        // must stop every matching pump.
+        let far_future =
+            tokio::time::Instant::now() + std::time::Duration::from_secs(365 * 24 * 3600);
+        let evicted = p.sweep_idle_with_pumps(far_future).await;
+        assert!(evicted.iter().any(|id| id == VALID_SESSION_ID));
+        assert!(
+            p.pumps().lock_owned().await.is_empty(),
+            "every pump must be removed after sweeping every session"
+        );
+    }
+
+    #[tokio::test]
+    async fn distinct_sessions_get_distinct_pumps() {
+        let p = fast_pump_transport();
+        let _ = p.remote_control(&rc_req()).await;
+        let mut second = rc_req();
+        second.session_id = OTHER_SESSION_ID.into();
+        let _ = p.remote_control(&second).await;
+        let pumps = p.pumps().lock_owned().await;
+        assert_eq!(pumps.len(), 2);
+        assert!(pumps.contains_key(VALID_SESSION_ID));
+        assert!(pumps.contains_key(OTHER_SESSION_ID));
+    }
+
+    #[tokio::test]
+    async fn rejected_remote_control_does_not_spawn_a_pump() {
+        // Cross-org request: the guard refuses before the registry
+        // sees it. No pump must be spawned, and the pumps map must
+        // stay empty.
+        let p = fast_pump_transport();
+        let mut hostile = rc_req();
+        hostile.org_id = "deadbeef-dead-dead-dead-deaddeaddead".into();
+        let r = p.remote_control(&hostile).await;
+        assert!(!r.success);
+        assert!(p.pumps().lock_owned().await.is_empty());
+        assert!(p.sessions().lock_owned().await.is_empty());
     }
 }

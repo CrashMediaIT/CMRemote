@@ -69,6 +69,7 @@ pub mod guards;
 pub mod input;
 pub mod media;
 pub mod providers;
+pub mod pump;
 pub mod session;
 #[cfg(feature = "webrtc-driver")]
 pub mod webrtc;
@@ -86,6 +87,10 @@ pub use media::{
     NotSupportedDesktopCapturer, NotSupportedVideoEncoder, VideoEncoder,
 };
 pub use providers::DesktopProviders;
+pub use pump::{
+    CapturePump, CapturePumpConfig, CaptureSink, CaptureStats, CaptureStatsSnapshot,
+    DiscardingCaptureSink,
+};
 pub use session::{
     CloseReason, DesktopSession, DesktopSessionRegistry, DesktopSessionState, OpenOutcome,
     TransitionOutcome, DEFAULT_IDLE_TIMEOUT,
