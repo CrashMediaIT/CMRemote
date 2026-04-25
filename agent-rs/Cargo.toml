@@ -85,7 +85,9 @@ panic = "abort"
 # Patches — supply-chain pins.
 # ---------------------------------------------------------------------------
 # Pins the four `needs-fork` members of the upstream `webrtc-rs/webrtc`
-# workspace (`webrtc`, `webrtc-dtls`, `webrtc-stun`, `webrtc-turn`) to
+# workspace (`webrtc`, `dtls`, `stun`, `turn` — historically known as
+# `webrtc-dtls`/`webrtc-stun`/`webrtc-turn` pre-v0.17, but renamed to
+# bare names in upstream's v0.17.0 workspace) to
 # the CMRemote monorepo fork that swaps `ring` for `aws-lc-rs`, per
 # ADR 0001 Option B
 # ([`docs/decisions/0001-webrtc-crypto-provider.md`](../docs/decisions/0001-webrtc-crypto-provider.md))
@@ -115,9 +117,12 @@ panic = "abort"
 # `[sources].allow-git` entry in `deny.toml` is per-host (not
 # per-tag), so a tag bump needs no `deny.toml` change.
 #
-# After editing any tag below, run `cargo update -p webrtc -p
-# webrtc-dtls -p webrtc-stun -p webrtc-turn` so the lock-file picks
-# up the new commit.
+# After editing any tag below, run `cargo update -p webrtc -p dtls
+# -p stun -p turn` so the lock-file picks up the new commit. (These
+# bare names are the actual upstream package names at v0.17; the
+# legacy `webrtc-dtls`/`webrtc-stun`/`webrtc-turn` names are the
+# pre-v0.17 names and `cargo update -p webrtc-dtls` will fail with
+# "did not match any packages" against the v0.17 monorepo fork.)
 [patch.crates-io]
 # Slice R7.l/R7.m — monorepo fork tagged `v0.17.0-cmremote.1`, the
 # fork's first release after Step 16 of the runbook. Because the
@@ -127,11 +132,19 @@ panic = "abort"
 # selector is needed (cargo rejects `git` + `path` as ambiguous).
 #
 # The previous dormant `webrtc-dtls = { …, tag = "v0.5.4-cmremote.1" }`
-# entry is superseded: `webrtc-dtls@v0.17` lives at the `dtls/`
-# member of the new tag, and the v0.5.4 fork branch / tag remain
-# immutable on the same repo for git-history / audit purposes
-# (see runbook Step 10).
-webrtc       = { git = "https://github.com/CrashMediaIT/webrtc-cmremote.git", tag = "v0.17.0-cmremote.1" }
-webrtc-dtls  = { git = "https://github.com/CrashMediaIT/webrtc-cmremote.git", tag = "v0.17.0-cmremote.1" }
-webrtc-stun  = { git = "https://github.com/CrashMediaIT/webrtc-cmremote.git", tag = "v0.17.0-cmremote.1" }
-webrtc-turn  = { git = "https://github.com/CrashMediaIT/webrtc-cmremote.git", tag = "v0.17.0-cmremote.1" }
+# entry is superseded: the v0.17 dtls crate lives at the `dtls/`
+# member of the new tag and is published to crates.io under its
+# bare name `dtls` (upstream renamed `webrtc-dtls` → `dtls` in
+# v0.17 — same story for `webrtc-stun`/`webrtc-turn` → `stun`/`turn`;
+# the umbrella `webrtc` crate name is unchanged). The v0.5.4 fork
+# branch / tag remain immutable on the same repo for git-history /
+# audit purposes (see runbook Step 10).
+#
+# Patch keys must match the package name on crates.io that is being
+# patched (cargo error: "does not appear to contain any packages
+# matching the name `<name>`"), so the keys below are the bare
+# v0.17 names, not the legacy `webrtc-*` aliases.
+webrtc = { git = "https://github.com/CrashMediaIT/webrtc-cmremote.git", tag = "v0.17.0-cmremote.1" }
+dtls   = { git = "https://github.com/CrashMediaIT/webrtc-cmremote.git", tag = "v0.17.0-cmremote.1" }
+stun   = { git = "https://github.com/CrashMediaIT/webrtc-cmremote.git", tag = "v0.17.0-cmremote.1" }
+turn   = { git = "https://github.com/CrashMediaIT/webrtc-cmremote.git", tag = "v0.17.0-cmremote.1" }
