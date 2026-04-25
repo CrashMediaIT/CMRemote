@@ -52,8 +52,22 @@ pub mod capture;
 #[allow(unsafe_code)]
 pub mod input;
 
+// `session` is intentionally NOT cfg-gated to `target_os = "windows"`:
+// the pure-logic helpers (`is_session_zero`, `is_in_console_session`,
+// `can_inject_input`) need to be callable from cross-platform code
+// (e.g. the agent runtime on Linux deciding whether to surface a
+// "Windows-only" capability for a Windows agent), and their unit
+// tests should run on every CI host. Only the live Win32 entry
+// point [`session::WindowsSessionInfo::current`] is cfg-gated
+// internally — on non-Windows targets it returns a structured
+// `Io` error.
+#[allow(unsafe_code)]
+pub mod session;
+
 #[cfg(target_os = "windows")]
 pub use capture::{WindowsCaptureError, WindowsDesktopCapturer};
 
 #[cfg(target_os = "windows")]
 pub use input::{WindowsClipboard, WindowsKeyboardInput, WindowsMouseInput};
+
+pub use session::{WindowsSessionError, WindowsSessionInfo};
