@@ -49,4 +49,11 @@
 pub mod capture;
 
 #[cfg(target_os = "windows")]
+#[allow(unsafe_code)]
+pub mod input;
+
+#[cfg(target_os = "windows")]
 pub use capture::{WindowsCaptureError, WindowsDesktopCapturer};
+
+#[cfg(target_os = "windows")]
+pub use input::{WindowsClipboard, WindowsKeyboardInput, WindowsMouseInput};
