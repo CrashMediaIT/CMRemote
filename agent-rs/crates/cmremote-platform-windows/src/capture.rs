@@ -81,9 +81,8 @@ use tracing::{debug, warn};
 use windows::core::Interface;
 use windows::Win32::Foundation::HMODULE;
 use windows::Win32::Graphics::Direct3D::{
-    D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_UNKNOWN, D3D_FEATURE_LEVEL_10_0,
-    D3D_FEATURE_LEVEL_10_1, D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_9_1, D3D_FEATURE_LEVEL_9_2,
-    D3D_FEATURE_LEVEL_9_3,
+    D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_WARP, D3D_FEATURE_LEVEL_10_0, D3D_FEATURE_LEVEL_10_1,
+    D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_9_1, D3D_FEATURE_LEVEL_9_2, D3D_FEATURE_LEVEL_9_3,
 };
 use windows::Win32::Graphics::Direct3D11::{
     D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D, D3D11_CPU_ACCESS_READ,
@@ -461,11 +460,15 @@ fn create_d3d11_device() -> Result<(ID3D11Device, ID3D11DeviceContext), WindowsC
     if result.is_err() {
         // Hardware adapter failed; try the WARP software fallback
         // so we still build a device on a headless CI runner.
-        // SAFETY: Same contract as above.
+        // SAFETY: Same contract as above. Switching to
+        // `D3D_DRIVER_TYPE_WARP` selects Microsoft's software
+        // rasterizer; the `Adapter = None` argument is the correct
+        // pairing (passing a non-null adapter alongside any driver
+        // type other than `UNKNOWN` is documented as `E_INVALIDARG`).
         let warp = unsafe {
             D3D11CreateDevice(
                 None,
-                D3D_DRIVER_TYPE_UNKNOWN,
+                D3D_DRIVER_TYPE_WARP,
                 HMODULE::default(),
                 D3D11_CREATE_DEVICE_BGRA_SUPPORT,
                 Some(&feature_levels),
