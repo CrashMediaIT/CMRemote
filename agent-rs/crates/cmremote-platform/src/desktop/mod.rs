@@ -65,9 +65,11 @@ use cmremote_wire::{
 use crate::HostOs;
 
 pub mod consent;
+pub mod encoder_sink;
 pub mod guards;
 pub mod input;
 pub mod media;
+pub mod nv12;
 pub mod providers;
 pub mod pump;
 pub mod session;
@@ -78,6 +80,7 @@ pub use consent::{
     ConsentDecision, ConsentPrompter, ConsentRequest, DenyAllConsentPrompter,
     DEFAULT_CONSENT_TIMEOUT,
 };
+pub use encoder_sink::{DiscardingEncodedChunkSink, EncodedChunkSink, EncoderCaptureSink};
 pub use input::{
     Clipboard, DesktopInputError, KeyCode, KeyboardInput, MouseButton, MouseInput, NamedKey,
     NotSupportedClipboard, NotSupportedKeyboardInput, NotSupportedMouseInput, ScrollAxis,
@@ -86,6 +89,7 @@ pub use media::{
     CapturedFrame, DesktopCapturer, DesktopMediaError, EncodedVideoChunk,
     NotSupportedDesktopCapturer, NotSupportedVideoEncoder, VideoEncoder,
 };
+pub use nv12::{bgra_to_nv12, Nv12Frame};
 pub use providers::DesktopProviders;
 pub use pump::{
     CapturePump, CapturePumpConfig, CaptureSink, CaptureStats, CaptureStatsSnapshot,

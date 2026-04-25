@@ -63,6 +63,18 @@ windows = { version = "0.62", features = [
     "Win32_System_Ole",
     # Session info (slice R7.n.3)
     "Win32_System_RemoteDesktop",
+    # H.264 video encoder MFT (slice R7.n.6).
+    # Media Foundation is split across several feature groups:
+    #   - Media_MediaFoundation: IMFTransform, IMFSample, IMFMediaBuffer,
+    #     IMFMediaType, MFStartup/Shutdown, MFCreateMemoryBuffer/Sample,
+    #     MFSetAttributeSize/Ratio, MFT_MESSAGE_* constants.
+    #   - Media_KernelStreaming: MFVideoFormat_H264, MFVideoFormat_NV12,
+    #     MFVideoInterlace_Progressive (the format GUIDs live here).
+    #   - Media_DirectShow: CLSID_CMSH264EncoderMFT GUID definition.
+    #   - System_Com: CoCreateInstance, COINIT_*, CLSCTX_*.
+    "Win32_Media_MediaFoundation",
+    "Win32_Media_KernelStreaming",
+    "Win32_System_Com",
 ] }
 
 [dev-dependencies]

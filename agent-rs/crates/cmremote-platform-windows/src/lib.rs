@@ -50,6 +50,10 @@ pub mod capture;
 
 #[cfg(target_os = "windows")]
 #[allow(unsafe_code)]
+pub mod encoder;
+
+#[cfg(target_os = "windows")]
+#[allow(unsafe_code)]
 pub mod input;
 
 // `session` is intentionally NOT cfg-gated to `target_os = "windows"`:
@@ -73,6 +77,9 @@ pub mod providers;
 
 #[cfg(target_os = "windows")]
 pub use capture::{WindowsCaptureError, WindowsDesktopCapturer};
+
+#[cfg(target_os = "windows")]
+pub use encoder::{WindowsEncoderError, WindowsVideoEncoder, WindowsVideoEncoderConfig};
 
 #[cfg(target_os = "windows")]
 pub use input::{WindowsClipboard, WindowsKeyboardInput, WindowsMouseInput};
