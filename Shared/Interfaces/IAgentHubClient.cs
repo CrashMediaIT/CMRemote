@@ -134,4 +134,44 @@ public interface IAgentHubClient
     /// <c>PackageInstallResult</c>.
     /// </summary>
     Task InstallPackage(PackageInstallRequestDto request);
+
+    /// <summary>
+    /// Forwards a viewer's WebRTC SDP offer to the agent (slice R7.g).
+    /// The Rust agent's dispatcher routes this to the desktop transport
+    /// provider's <c>on_sdp_offer</c> hook; the legacy .NET agent ignores
+    /// it (it still uses the byte-array <c>SendDtoToClient</c> channel).
+    /// The agent reports its terminal outcome via
+    /// <c>DesktopTransportResultDto</c>.
+    /// </summary>
+    Task SendSdpOffer(SdpOfferDto offer);
+
+    /// <summary>
+    /// Forwards a viewer's WebRTC SDP answer to the agent (slice R7.g).
+    /// Same dispatch and rollout shape as <see cref="SendSdpOffer"/>.
+    /// </summary>
+    Task SendSdpAnswer(SdpAnswerDto answer);
+
+    /// <summary>
+    /// Forwards a single trickled ICE candidate from the viewer to
+    /// the agent (slice R7.g). An empty <c>Candidate</c> string with
+    /// <c>SdpMid</c> / <c>SdpMlineIndex</c> both <c>null</c> is the
+    /// RFC 8838 end-of-candidates marker. Same dispatch and rollout
+    /// shape as <see cref="SendSdpOffer"/>.
+    /// </summary>
+    Task SendIceCandidate(IceCandidateDto candidate);
+
+    /// <summary>
+    /// Delivers the authoritative ICE / TURN server configuration to
+    /// the agent before the WebRTC peer connection starts gathering
+    /// candidates (slice R7.j). Invoked once per remote-control
+    /// session; the embedded
+    /// <c>IceServerConfigDto.IceServers</c> become the agent's
+    /// <c>RTCConfiguration.iceServers</c> for the matching session.
+    /// The Rust agent's <c>check_provide_ice_servers</c> guard
+    /// validates the envelope and the per-server URL / credential
+    /// shape before any of it reaches the WebRTC driver. The agent
+    /// reports acceptance or refusal via
+    /// <c>DesktopTransportResultDto</c>.
+    /// </summary>
+    Task ProvideIceServers(ProvideIceServersRequestDto request);
 }
