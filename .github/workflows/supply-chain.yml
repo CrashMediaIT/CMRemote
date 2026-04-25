@@ -81,6 +81,43 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           working-directory: agent-rs
 
+  no-openssl-sys:
+    # Slice R7.l/R7.m policy gate. The audit doc
+    # (`docs/decisions/0001-webrtc-crate-graph-audit.md` §"Verdict
+    # table" → `srtp/` row) requires that `webrtc-srtp` be consumed
+    # with default features only so its opt-in `openssl` feature
+    # never selects `openssl-sys`. The `[bans].deny` entry on
+    # `openssl-sys` in `agent-rs/deny.toml` is the static assertion;
+    # this job is the dynamic, post-resolution assertion against the
+    # actual lock-file graph for every target triple cargo-deny
+    # checks. `cargo tree -i <pkg>` exits non-zero when the package
+    # is absent from the resolved graph, which is exactly the
+    # success condition we want — we invert with `!`.
+    name: no openssl-sys in resolved graph
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Assert openssl-sys is not in the resolved graph
+        working-directory: agent-rs
+        run: |
+          set -euo pipefail
+          if cargo tree --workspace --all-features -e normal,build -i openssl-sys >/dev/null 2>&1; then
+            echo "::error::openssl-sys is present in the resolved dependency graph."
+            echo "This violates the slice R7.l audit's policy gate on webrtc-srtp's opt-in 'openssl' feature."
+            echo "See docs/decisions/0001-webrtc-crate-graph-audit.md (Verdict table → srtp/ row)."
+            echo "Offending paths:"
+            cargo tree --workspace --all-features -e normal,build -i openssl-sys
+            exit 1
+          fi
+          echo "openssl-sys is absent from the resolved graph (expected)."
+
   dependency-review:
     # GitHub's dependency-review action only runs on pull_request events.
     name: dependency-review
