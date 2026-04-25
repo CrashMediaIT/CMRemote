@@ -340,6 +340,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "cmremote-platform",
+ "cmremote-platform-windows",
  "cmremote-wire",
  "futures-util",
  "rand 0.8.6",

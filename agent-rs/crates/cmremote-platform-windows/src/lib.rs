@@ -64,6 +64,13 @@ pub mod input;
 #[allow(unsafe_code)]
 pub mod session;
 
+// `providers` is the Windows bundle factory for the cross-crate
+// `DesktopProviders` abstraction in `cmremote-platform`. Only
+// available on Windows because it composes the DXGI capturer +
+// SendInput drivers from the modules above.
+#[cfg(target_os = "windows")]
+pub mod providers;
+
 #[cfg(target_os = "windows")]
 pub use capture::{WindowsCaptureError, WindowsDesktopCapturer};
 
@@ -71,3 +78,6 @@ pub use capture::{WindowsCaptureError, WindowsDesktopCapturer};
 pub use input::{WindowsClipboard, WindowsKeyboardInput, WindowsMouseInput};
 
 pub use session::{WindowsSessionError, WindowsSessionInfo};
+
+#[cfg(target_os = "windows")]
+pub use providers::{WindowsDesktopProviders, WindowsProvidersError};

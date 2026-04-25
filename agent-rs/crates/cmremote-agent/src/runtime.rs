@@ -9,11 +9,11 @@
 
 use std::sync::Arc;
 
-use cmremote_platform::desktop::DesktopTransportProvider;
 #[cfg(not(feature = "webrtc-driver"))]
 use cmremote_platform::desktop::NotSupportedDesktopTransport;
 #[cfg(feature = "webrtc-driver")]
 use cmremote_platform::desktop::WebRtcDesktopTransport;
+use cmremote_platform::desktop::{DesktopProviders, DesktopTransportProvider};
 #[cfg(target_os = "linux")]
 use cmremote_platform::linux_apps::DpkgProvider;
 use cmremote_platform::packages::{
@@ -128,6 +128,23 @@ pub async fn run(cli: CliArgs) -> Result<(), RuntimeError> {
         WebRtcDesktopTransport::for_current_host(info.organization_id.clone()),
     );
 
+    // Slice R7.n.4 — per-host bundle of desktop capability providers
+    // (capturer + mouse + keyboard + clipboard). On Windows we try
+    // `WindowsDesktopProviders::for_primary_output`, which composes
+    // the DXGI capturer with the three `SendInput` / `CF_UNICODETEXT`
+    // drivers and gates construction on `WindowsSessionInfo` so an
+    // agent running in Session 0 (services / `LocalSystem`) or in a
+    // session that doesn't share the active console falls back to
+    // the `NotSupported` bundle instead of `SendInput` silently
+    // swallowing every event. Construction failure (no D3D11 device,
+    // no primary output, query failure, non-interactive session) is
+    // warn-logged and falls back to the `NotSupported` bundle so the
+    // agent always starts; the desktop dispatch surface then
+    // surfaces a structured "not supported on <OS>" failure to the
+    // operator. On every other host today, the not-supported bundle
+    // is the only available bundle.
+    let desktop_providers = Arc::new(build_desktop_providers());
+
     let handlers = Arc::new(AgentHandlers {
         connection_info: info.clone(),
         device_info,
@@ -135,6 +152,7 @@ pub async fn run(cli: CliArgs) -> Result<(), RuntimeError> {
         packages,
         agent_update,
         desktop,
+        desktop_providers,
     });
 
     // The shutdown channel is a single-producer / multi-consumer
@@ -170,6 +188,48 @@ fn log_startup_banner(info: &ConnectionInfo, host: &cmremote_platform::DeviceSna
         architecture = %host.architecture,
         "cmremote-agent starting (slice R2a: hub dispatch surface)"
     );
+}
+
+/// Construct the per-host [`DesktopProviders`] bundle (slice R7.n.4).
+///
+/// On Windows attempts the real DXGI capturer + `SendInput` /
+/// `CF_UNICODETEXT` drivers via
+/// [`cmremote_platform_windows::WindowsDesktopProviders::for_primary_output`].
+/// Falls back to [`DesktopProviders::not_supported_for_current_host`]
+/// (with a warn-log naming the failure mode) on any error so the
+/// agent always starts. On every other host the not-supported
+/// bundle is the only available bundle.
+fn build_desktop_providers() -> DesktopProviders {
+    #[cfg(target_os = "windows")]
+    {
+        match cmremote_platform_windows::WindowsDesktopProviders::for_primary_output() {
+            Ok(bundle) => {
+                info!(
+                    "desktop providers: Windows DXGI capturer + SendInput drivers + \
+                     CF_UNICODETEXT clipboard"
+                );
+                bundle
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "failed to construct Windows desktop providers \
+                     (e.g. agent in Session 0, no interactive desktop attached, \
+                     or no D3D11 device); falling back to NotSupported bundle so \
+                     desktop-control requests surface a structured failure"
+                );
+                DesktopProviders::not_supported_for_current_host()
+            }
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        info!(
+            "desktop providers: NotSupported bundle (no concrete drivers available \
+             for this host)"
+        );
+        DesktopProviders::not_supported_for_current_host()
+    }
 }
 
 /// Resolve when the OS asks us to shut down.
@@ -216,5 +276,53 @@ mod tests {
         };
         let host = StdDeviceInfoProvider.snapshot().unwrap();
         log_startup_banner(&info, &host);
+    }
+
+    #[tokio::test]
+    async fn build_desktop_providers_returns_a_usable_bundle() {
+        // The bundle must always be constructible — on non-Windows
+        // hosts (including Linux CI) the fallback `NotSupported`
+        // bundle is the only available bundle, and on Windows the
+        // factory falls back to the same bundle when the live
+        // session topology rules input injection out. Either way
+        // the agent always starts with a non-null `desktop_providers`
+        // slot in `AgentHandlers`.
+        let bundle = build_desktop_providers();
+        // Smoke-check every slot is wired (a `NotSupported` slot
+        // surfaces a structured error on first use, which is the
+        // contract — never panics).
+        let _ = bundle.capturer.capture_next_frame().await;
+        let _ = bundle.mouse.move_to(0, 0).await;
+        let _ = bundle.keyboard.type_text("").await;
+        let _ = bundle.clipboard.read_text().await;
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[tokio::test]
+    async fn build_desktop_providers_returns_not_supported_bundle_off_windows() {
+        // On non-Windows hosts the bundle must surface
+        // `NotSupported` for every operation — we have no concrete
+        // drivers for those OSes today.
+        let bundle = build_desktop_providers();
+        let e = bundle.capturer.capture_next_frame().await.unwrap_err();
+        assert!(
+            e.to_string().to_lowercase().contains("not supported"),
+            "{e}"
+        );
+        let e = bundle.mouse.move_to(0, 0).await.unwrap_err();
+        assert!(
+            e.to_string().to_lowercase().contains("not supported"),
+            "{e}"
+        );
+        let e = bundle.keyboard.type_text("hi").await.unwrap_err();
+        assert!(
+            e.to_string().to_lowercase().contains("not supported"),
+            "{e}"
+        );
+        let e = bundle.clipboard.read_text().await.unwrap_err();
+        assert!(
+            e.to_string().to_lowercase().contains("not supported"),
+            "{e}"
+        );
     }
 }
