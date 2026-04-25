@@ -11,6 +11,7 @@ resolver = "2"
 members = [
     "crates/cmremote-wire",
     "crates/cmremote-platform",
+    "crates/cmremote-platform-windows",
     "crates/cmremote-agent",
 ]
 

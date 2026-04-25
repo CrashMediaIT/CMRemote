@@ -1,0 +1,81 @@
+# Source: CMRemote, clean-room implementation.
+#
+# Windows-specific desktop capture / input providers (slice R7.n).
+#
+# Lives in its own workspace member so the crate-level `unsafe_code`
+# forbid on `cmremote-platform` stays intact: every other platform
+# crate is safe-Rust, while DXGI Desktop Duplication (the only
+# supported Windows capture path) requires `unsafe` FFI through the
+# `windows` crate's COM interfaces.
+#
+# On non-Windows targets this crate compiles to an empty library —
+# the `windows` dep is target-gated to `cfg(target_os = "windows")`
+# below, and `src/lib.rs` only declares the capture module on
+# Windows. This keeps the workspace's Linux / macOS CI green
+# without any additional `--exclude` plumbing.
+
+[package]
+name = "cmremote-platform-windows"
+description = "Windows-specific desktop capture / input providers for the CMRemote agent."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+# Trait surface (`DesktopCapturer`, `CapturedFrame`, `DesktopMediaError`).
+cmremote-platform = { path = "../cmremote-platform" }
+async-trait = "0.1"
+thiserror = { workspace = true }
+tracing = { workspace = true }
+# `spawn_blocking` for offloading the blocking DXGI COM calls off
+# the runtime worker threads. Only the `rt` feature is needed.
+tokio = { workspace = true }
+
+# Real DXGI bindings, target-gated so non-Windows builds skip the
+# entire transitive subgraph. The `windows` crate is published by
+# Microsoft under MIT/Apache-2.0 (already in the `deny.toml`
+# licence allow-list) and shares the `windows-sys`/`windows-targets`
+# subgraph that is already in the lock-file via tokio's transitive
+# Windows deps — so adding it does not introduce any new vendor.
+#
+# Feature selection is deliberately narrow: exactly the Win32
+# subsystems DXGI Desktop Duplication needs. Widening this list
+# (e.g. to add Media Foundation H.264 encode in a follow-up slice)
+# is a review-worthy change because each feature pulls in another
+# generated-binding chunk.
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_System_Threading",
+    # Input drivers (slice R7.n.2)
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_System_DataExchange",
+    "Win32_System_Memory",
+    "Win32_System_Ole",
+    # Session info (slice R7.n.3)
+    "Win32_System_RemoteDesktop",
+    # H.264 video encoder MFT (slice R7.n.6).
+    # Media Foundation is split across several feature groups:
+    #   - Media_MediaFoundation: IMFTransform, IMFSample, IMFMediaBuffer,
+    #     IMFMediaType, MFStartup/Shutdown, MFCreateMemoryBuffer/Sample,
+    #     MFSetAttributeSize/Ratio, MFT_MESSAGE_* constants.
+    #   - Media_KernelStreaming: MFVideoFormat_H264, MFVideoFormat_NV12,
+    #     MFVideoInterlace_Progressive (the format GUIDs live here).
+    #   - Media_DirectShow: CLSID_CMSH264EncoderMFT GUID definition.
+    #   - System_Com: CoCreateInstance, COINIT_*, CLSCTX_*.
+    "Win32_Media_MediaFoundation",
+    "Win32_Media_KernelStreaming",
+    "Win32_System_Com",
+] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }

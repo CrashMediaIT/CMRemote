@@ -17,6 +17,12 @@ path = "src/main.rs"
 [dependencies]
 cmremote-wire = { path = "../cmremote-wire" }
 cmremote-platform = { path = "../cmremote-platform" }
+# `cmremote-platform-windows` compiles to an empty library on
+# non-Windows targets (the `windows` crate dep is itself
+# target-gated), so depending on it unconditionally lets the runtime
+# call `WindowsDesktopProviders::for_primary_output` behind a
+# `cfg(target_os = "windows")` without `--exclude` gymnastics in CI.
+cmremote-platform-windows = { path = "../cmremote-platform-windows" }
 
 tokio = { workspace = true }
 tracing = { workspace = true }

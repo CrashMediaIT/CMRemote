@@ -18,8 +18,10 @@ use std::sync::Arc;
 use cmremote_wire::HubInvocation;
 
 use cmremote_platform::{
-    apps::InstalledApplicationsProvider, desktop::DesktopTransportProvider,
-    packages::PackageProviderHandler, DeviceInfoProvider,
+    apps::InstalledApplicationsProvider,
+    desktop::{DesktopProviders, DesktopTransportProvider},
+    packages::PackageProviderHandler,
+    DeviceInfoProvider,
 };
 
 use crate::dispatch::MethodName;
@@ -33,9 +35,27 @@ pub struct AgentHandlers {
     pub(crate) packages: Arc<dyn PackageProviderHandler>,
     pub(crate) agent_update: Arc<agent_update::AgentUpdateContext>,
     pub(crate) desktop: Arc<dyn DesktopTransportProvider>,
+    /// Slice R7.n.4 — per-host bundle of desktop capability
+    /// providers (capturer + mouse + keyboard + clipboard). The
+    /// future WebRTC track-builder reads this to wire real media
+    /// tracks and a clipboard data-channel into a session; until
+    /// then it is *constructed* here so the agent's startup logs
+    /// can confirm the per-OS bundle (real on Windows when the
+    /// session is interactive, `NotSupported` everywhere else).
+    pub(crate) desktop_providers: Arc<DesktopProviders>,
 }
 
 impl AgentHandlers {
+    /// Per-host bundle of desktop capability providers (slice
+    /// R7.n.4). Read by the future WebRTC track-builder when it
+    /// promotes a session past the SDP-answer state; exposed as
+    /// an accessor today so the field is wired up end-to-end and
+    /// unit tests can assert the agent constructed the right
+    /// bundle for its host.
+    pub fn desktop_providers(&self) -> Arc<DesktopProviders> {
+        Arc::clone(&self.desktop_providers)
+    }
+
     /// Dispatch a hub invocation to the appropriate handler.
     pub async fn dispatch(
         &self,
