@@ -451,11 +451,14 @@ but a different `path = "..."` sub-directory:
 # commit that adds the umbrella `webrtc` dep).
 # webrtc-dtls = { git = "https://github.com/CrashMediaIT/webrtc-cmremote.git", tag = "v0.5.4-cmremote.1" }
 
-# New monorepo entries (slice R7.m):
-webrtc       = { git = "https://github.com/CrashMediaIT/webrtc-cmremote.git", tag = "v0.17.0-cmremote.1", path = "webrtc" }
-webrtc-dtls  = { git = "https://github.com/CrashMediaIT/webrtc-cmremote.git", tag = "v0.17.0-cmremote.1", path = "dtls" }
-webrtc-stun  = { git = "https://github.com/CrashMediaIT/webrtc-cmremote.git", tag = "v0.17.0-cmremote.1", path = "stun" }
-webrtc-turn  = { git = "https://github.com/CrashMediaIT/webrtc-cmremote.git", tag = "v0.17.0-cmremote.1", path = "turn" }
+# New monorepo entries (slice R7.m). Cargo clones the fork once
+# and discovers each named member by walking the fork's
+# `[workspace.members]`; per-entry `path = "..."` selectors are
+# **not** valid here — cargo rejects `git` + `path` as ambiguous.
+webrtc       = { git = "https://github.com/CrashMediaIT/webrtc-cmremote.git", tag = "v0.17.0-cmremote.1" }
+webrtc-dtls  = { git = "https://github.com/CrashMediaIT/webrtc-cmremote.git", tag = "v0.17.0-cmremote.1" }
+webrtc-stun  = { git = "https://github.com/CrashMediaIT/webrtc-cmremote.git", tag = "v0.17.0-cmremote.1" }
+webrtc-turn  = { git = "https://github.com/CrashMediaIT/webrtc-cmremote.git", tag = "v0.17.0-cmremote.1" }
 ```
 
 The `[sources].allow-git` entry in
