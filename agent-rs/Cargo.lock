@@ -2107,6 +2107,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b8848ee67ecc8aedbaf3e4122217aff892639231befc6a1b58d29fff4c2cabaa"
 
 [[patch.unused]]
-name = "webrtc-dtls"
-version = "0.5.4"
-source = "git+https://github.com/CrashMediaIT/webrtc-cmremote.git?tag=v0.5.4-cmremote.1#5ef4a824a8bfb5fe5eb5d4373d98183a47813289"
+name = "dtls"
+version = "0.17.0"
+source = "git+https://github.com/CrashMediaIT/webrtc-cmremote.git?tag=v0.17.0-cmremote.1#2c1ab4f114e87e684a01640d162187b31db71782"
+
+[[patch.unused]]
+name = "stun"
+version = "0.17.0"
+source = "git+https://github.com/CrashMediaIT/webrtc-cmremote.git?tag=v0.17.0-cmremote.1#2c1ab4f114e87e684a01640d162187b31db71782"
+
+[[patch.unused]]
+name = "turn"
+version = "0.17.0"
+source = "git+https://github.com/CrashMediaIT/webrtc-cmremote.git?tag=v0.17.0-cmremote.1#2c1ab4f114e87e684a01640d162187b31db71782"
+
+[[patch.unused]]
+name = "webrtc"
+version = "0.17.0"
+source = "git+https://github.com/CrashMediaIT/webrtc-cmremote.git?tag=v0.17.0-cmremote.1#2c1ab4f114e87e684a01640d162187b31db71782"
