@@ -60,7 +60,7 @@ use cmremote_platform::desktop::input::{
     ScrollAxis,
 };
 
-use windows::Win32::Foundation::{GlobalFree, HANDLE, HGLOBAL, HWND};
+use windows::Win32::Foundation::{GlobalFree, HANDLE, HGLOBAL};
 use windows::Win32::System::DataExchange::{
     CloseClipboard, EmptyClipboard, GetClipboardData, OpenClipboard, SetClipboardData,
 };
@@ -588,11 +588,14 @@ fn write_text_blocking(wide: &[u16]) -> Result<(), DesktopInputError> {
 }
 
 fn open_clipboard() -> Result<(), DesktopInputError> {
-    // SAFETY: A None HWND is documented as "associate with the
-    // current task"; OpenClipboard returns FALSE if another
-    // process is currently holding the clipboard. We surface that
-    // as a structured Io error so the caller can retry.
-    unsafe { OpenClipboard(Some(HWND::default())) }
+    // SAFETY: `None` is documented as "associate the open clipboard
+    // with the current task" — the idiomatic way to call
+    // `OpenClipboard` from a process that does not own a window
+    // (which is our case, since the agent runs as a service).
+    // Returns FALSE if another process is currently holding the
+    // clipboard; we surface that as a structured Io error so the
+    // caller can retry.
+    unsafe { OpenClipboard(None) }
         .map_err(|e| DesktopInputError::Io(format!("OpenClipboard: {}", os_code(&e))))
 }
 
