@@ -35,16 +35,37 @@ futures-util = { workspace = true }
 rustls = { workspace = true }
 cmremote-wire = { path = "../cmremote-wire" }
 
+# Slice R7.m — concrete WebRTC peer-connection driver dependency.
+# Optional and gated behind the `webrtc-driver` feature so default
+# builds continue to pull only the lifecycle scaffolding from
+# `desktop::webrtc` (the R7.k stub). The crate itself is resolved
+# through the workspace-level `[patch.crates-io].webrtc` entry to
+# the `CrashMediaIT/webrtc-cmremote` monorepo fork at tag
+# `v0.17.0-cmremote.1`, which swaps `ring` for `aws-lc-rs` per
+# ADR-0001 Option B (`docs/decisions/0001-webrtc-crypto-provider.md`)
+# and runbook Steps 10–17
+# (`docs/decisions/0001-spike-fork-instructions.md`).
+#
+# `default-features = false` is mandatory: it keeps `webrtc-srtp`'s
+# opt-in `openssl` feature off, which keeps `openssl-sys` out of the
+# dep graph (audit doc §"Verdict table" → `srtp/` row). The
+# `no-openssl-sys` job in `.github/workflows/supply-chain.yml`
+# pins this policy by failing CI if `openssl-sys` ever appears in
+# the resolved graph for any feature combination.
+webrtc = { version = "0.17", default-features = false, optional = true }
+
 [features]
 # Opt-in concrete WebRTC desktop-transport driver. Default is OFF —
 # the runtime keeps the `NotSupportedDesktopTransport` stub until a
 # build explicitly enables this feature. The driver itself stubs the
 # actual peer-connection construction (slice R7.k); the real
-# `webrtc` crate dependency lands once Gate A (the upstream crate-graph
-# audit, ADR 0001 follow-up) is resolved (slice R7.l). Keeping the
-# driver under a feature flag means the audit does not need to land
-# before this code can be reviewed and merged.
-webrtc-driver = []
+# `webrtc` crate dependency was wired in slice R7.m via the
+# optional `webrtc` dep above (resolved through the
+# `[patch.crates-io]` pin to the CMRemote fork). The peer-connection
+# construction itself is still pending — turning the feature on
+# today gives a working dep graph but leaves the provider methods
+# returning the `DRIVER_PENDING_MESSAGE` stub.
+webrtc-driver = ["dep:webrtc"]
 
 [dev-dependencies]
 tempfile = "3.13"

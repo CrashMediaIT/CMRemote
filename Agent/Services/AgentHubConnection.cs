@@ -756,6 +756,55 @@ public class AgentHubConnection : IAgentHubConnection, IDisposable
         }
     }
 
+    // -----------------------------------------------------------------
+    // Slice R7.g / R7.j — WebRTC signalling + ICE-server-config
+    // forwarding hub methods.
+    //
+    // The Rust agent's dispatcher routes these through the desktop
+    // transport provider (see agent-rs/crates/cmremote-platform/src/
+    // desktop/{guards,session,webrtc}.rs). The legacy .NET agent does
+    // NOT speak the new typed methods — viewers paired with a legacy
+    // agent continue to use the existing byte-array DtoWrapper channel
+    // (SendDtoToClient / SendDtoToViewer) for SDP and ICE traffic.
+    // These stubs exist purely to satisfy the IAgentHubClient contract
+    // so the legacy agent keeps building during the cut-over to the
+    // Rust workspace; they log at Debug and return immediately.
+    // -----------------------------------------------------------------
+
+    public Task SendSdpOffer(SdpOfferDto offer)
+    {
+        _logger.LogDebug(
+            "SendSdpOffer received on legacy .NET agent — ignored. " +
+            "WebRTC signalling on this agent flows through the byte-array " +
+            "DtoWrapper channel; the typed hub method is honoured by the Rust agent only.");
+        return Task.CompletedTask;
+    }
+
+    public Task SendSdpAnswer(SdpAnswerDto answer)
+    {
+        _logger.LogDebug(
+            "SendSdpAnswer received on legacy .NET agent — ignored. " +
+            "Use the byte-array DtoWrapper channel for SDP traffic on this agent.");
+        return Task.CompletedTask;
+    }
+
+    public Task SendIceCandidate(IceCandidateDto candidate)
+    {
+        _logger.LogDebug(
+            "SendIceCandidate received on legacy .NET agent — ignored. " +
+            "Use the byte-array DtoWrapper channel for ICE candidates on this agent.");
+        return Task.CompletedTask;
+    }
+
+    public Task ProvideIceServers(ProvideIceServersRequestDto request)
+    {
+        _logger.LogDebug(
+            "ProvideIceServers received on legacy .NET agent — ignored. " +
+            "ICE server configuration on this agent is read from the embedded server data; " +
+            "the typed hub method is honoured by the Rust agent only.");
+        return Task.CompletedTask;
+    }
+
     private async Task TrySendInstalledApplicationsFailure(string requestId, string error)
     {
         try
