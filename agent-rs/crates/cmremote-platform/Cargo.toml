@@ -57,14 +57,19 @@ webrtc = { version = "0.17", default-features = false, optional = true }
 [features]
 # Opt-in concrete WebRTC desktop-transport driver. Default is OFF —
 # the runtime keeps the `NotSupportedDesktopTransport` stub until a
-# build explicitly enables this feature. The driver itself stubs the
-# actual peer-connection construction (slice R7.k); the real
-# `webrtc` crate dependency was wired in slice R7.m via the
-# optional `webrtc` dep above (resolved through the
-# `[patch.crates-io]` pin to the CMRemote fork). The peer-connection
-# construction itself is still pending — turning the feature on
-# today gives a working dep graph but leaves the provider methods
-# returning the `DRIVER_PENDING_MESSAGE` stub.
+# build explicitly enables this feature. With the feature on, the
+# driver runs the slice R7.k lifecycle scaffolding **plus** the
+# slice R7.m peer-connection construction: `RTCPeerConnection`
+# instances are built per-session via the `webrtc` crate
+# (resolved through the `[patch.crates-io]` pin to the CMRemote
+# fork at tag `v0.17.0-cmremote.1`, which swaps `ring` for
+# `aws-lc-rs`), SDP offers / answers / ICE candidates are driven
+# end-to-end against the real ICE / DTLS / SCTP stack, and
+# locally-trickled candidates and the answer SDP are pushed back
+# to the .NET hub through the [`SignallingEgress`] seam. The
+# capture-pump → encoder → RTP-track wiring (slice R7.n.6, Media
+# Foundation H.264) is still pending — turning this feature on
+# today gives a connected RTP transport with no media track.
 webrtc-driver = ["dep:webrtc"]
 
 [dev-dependencies]

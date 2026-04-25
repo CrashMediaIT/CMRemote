@@ -41,13 +41,14 @@ rand = { workspace = true }
 async-trait = "0.1"
 
 [features]
-# Opt-in concrete WebRTC desktop-transport driver (slice R7.k). When
-# enabled, the runtime constructs `WebRtcDesktopTransport` instead of
-# `NotSupportedDesktopTransport`. The driver itself stubs the actual
-# peer-connection construction; the upstream `webrtc` crate dependency
-# lands in a follow-up slice (R7.l) once the supply-chain audit
-# authorises it. Default is OFF so the audit can land without
-# affecting any production build.
+# Opt-in concrete WebRTC desktop-transport driver (slices R7.k +
+# R7.m). When enabled, the runtime constructs
+# `WebRtcDesktopTransport` instead of `NotSupportedDesktopTransport`.
+# Slice R7.m wires real `RTCPeerConnection` construction through the
+# `webrtc` crate (resolved via the workspace `[patch.crates-io]` pin
+# to the CMRemote fork). The capture / encode / RTP-track wiring
+# (slice R7.n.6) is still pending. Default is OFF so the audit can
+# land without affecting any production build.
 webrtc-driver = ["cmremote-platform/webrtc-driver"]
 
 [dev-dependencies]

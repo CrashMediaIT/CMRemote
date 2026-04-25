@@ -1,53 +1,79 @@
 // Source: CMRemote, clean-room implementation.
 
 //! Concrete `DesktopTransportProvider` implementation backed by a
-//! [`super::session::DesktopSessionRegistry`] (slice R7.k).
+//! [`super::session::DesktopSessionRegistry`] and the `webrtc-rs`
+//! peer-connection stack (slice R7.k lifecycle scaffolding + slice
+//! R7.m peer-connection construction).
 //!
 //! ## Status
 //!
-//! This module ships the **lifecycle scaffolding** the eventual WebRTC
-//! driver will plug into:
+//! Slice R7.k landed the **lifecycle scaffolding** (per-session
+//! state machine, guard ordering, replace-on-duplicate semantics,
+//! audit logging). Slice R7.m replaces the prior
+//! `DRIVER_PENDING_MESSAGE` stub returns on every signalling /
+//! provide-ice hook with real `webrtc-rs` peer-connection
+//! operations:
 //!
-//! - per-session state machine (via [`super::session`]),
-//! - guard-first ordering on every `DesktopTransportProvider` method
-//!   (R7.b cross-org / operator-string / canonical-UUID checks for the
-//!   four method-surface methods, R7.g envelope checks for the three
-//!   signalling methods, R7.j envelope+config checks for
-//!   `ProvideIceServers`),
-//! - replace-on-duplicate semantics for `RemoteControl`,
-//! - audit-log events at every state transition,
+//! - `on_provide_ice_servers` translates the wire `IceServerConfig`
+//!   into [`webrtc::peer_connection::configuration::RTCConfiguration`],
+//!   constructs an [`webrtc::peer_connection::RTCPeerConnection`]
+//!   via [`super::webrtc_pc::PeerConnectionFactory`], installs the
+//!   `on_ice_candidate` and `on_peer_connection_state_change`
+//!   handlers (which fan out to the runtime-supplied
+//!   [`super::SignallingEgress`] and the registry transition logic),
+//!   stores the PC in [`super::webrtc_pc::PeerConnectionRegistry`],
+//!   and returns success.
+//! - `on_sdp_offer` ensures a PC exists (lazy-creating one with the
+//!   default `RTCConfiguration` if no `ProvideIceServers` has been
+//!   seen — the .NET hub may skip it when the viewer reuses
+//!   defaults), `set_remote_description`s the offer,
+//!   `create_answer`s, `set_local_description`s the answer, and
+//!   pushes the answer through the egress.
+//! - `on_sdp_answer` `set_remote_description`s the answer on the
+//!   existing PC.
+//! - `on_ice_candidate` `add_ice_candidate`s on the existing PC
+//!   after translating the wire shape.
+//! - `change_windows_session` closes the PC alongside the pump.
+//! - `remote_control`'s replace-on-duplicate path closes the prior
+//!   PC alongside the prior pump.
+//! - The idle sweep closes every evicted PC alongside its pump.
+//! - `restart_screen_caster` is a driver-internal kick: it stops
+//!   and respawns the pump for the session (no PC mutation; the
+//!   negotiated transport stays up).
+//! - `invoke_ctrl_alt_del` is platform-bound (Windows-only Secure
+//!   Attention Sequence) and returns a structured "not supported on
+//!   `<host_os>`" failure on every other host. The Windows-side
+//!   driver lands in a follow-up slice.
 //!
-//! but **stubs the actual peer-connection construction** — every
-//! signalling-and-onward hook returns
-//! [`DesktopTransportResult::failed`] with the message `"WebRTC driver
-//! pending — peer-connection construction stub"` once the guards have
-//! passed and the registry has been updated.
+//! The capture-pump → encoder → RTP-track wiring (slice R7.n.6,
+//! Media Foundation H.264 encoder) is still pending — the pump
+//! pushes captured frames into the configured `CaptureSink`, which
+//! defaults to [`super::DiscardingCaptureSink`] until the encoder
+//! lands. The peer connection is therefore fully negotiable today
+//! but does not yet emit media; the operator gets a connected RTP
+//! transport with no track. That gap is documented in the R7 row of
+//! `ROADMAP.md`.
 //!
 //! ## Why a feature flag (`webrtc-driver`)
 //!
-//! The `webrtc` crate itself is gated on the supply-chain audit
-//! described in [`docs/decisions/0001-webrtc-crypto-provider.md`].
-//! Until that audit (slice R7.l) lands the audit-and-fork list for
-//! every `webrtc-rs` sub-crate, adding `webrtc = "0.x"` to the
-//! workspace would trip `cargo deny`'s `ring` ban via transitive
-//! sub-crates the spike never audited (`webrtc-ice`, `webrtc-mdns`,
-//! `webrtc-interceptor`, `webrtc-data`, `webrtc-media`).
-//!
-//! Hiding this driver behind a default-off cargo feature lets the
-//! lifecycle scaffolding land — and be reviewed and tested — without
-//! touching `deny.toml`. Once R7.l ships and the per-fork wiring PRs
-//! merge, R7.m flips this same code path from "stub failure" to
-//! "construct an `RTCPeerConnection`" without touching the trait
-//! surface or the dispatcher.
+//! The `webrtc` crate is gated on the supply-chain audit described
+//! in [`docs/decisions/0001-webrtc-crypto-provider.md`] and resolved
+//! through the workspace-level
+//! `[patch.crates-io].webrtc` pin to `CrashMediaIT/webrtc-cmremote`
+//! at tag `v0.17.0-cmremote.1` (which swaps `ring` for `aws-lc-rs`).
+//! Default builds skip this whole module so the dep graph is the
+//! same as before R7.m on the path the CI fleet exercises today.
 //!
 //! ## Wiring
 //!
 //! When the workspace is built with `--features webrtc-driver`, the
-//! agent runtime constructs a [`WebRtcDesktopTransport`] in place of
+//! agent runtime constructs a [`WebRtcDesktopTransport`] via
+//! [`WebRtcDesktopTransport::with_providers`] in place of
 //! [`super::NotSupportedDesktopTransport`]. The dispatcher's
 //! `Arc<dyn DesktopTransportProvider>` slot is unchanged.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -58,6 +84,10 @@ use cmremote_wire::{
 };
 use tokio::sync::Mutex;
 use tokio::time::Instant;
+use webrtc::peer_connection::configuration::RTCConfiguration;
+use webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState;
+use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
+use webrtc::peer_connection::RTCPeerConnection;
 
 use super::guards;
 use super::providers::DesktopProviders;
@@ -65,15 +95,20 @@ use super::pump::{
     CapturePump, CapturePumpConfig, CaptureSink, CaptureStatsSnapshot, DiscardingCaptureSink,
 };
 use super::session::{CloseReason, DesktopSessionRegistry, DesktopSessionState};
+use super::signalling_egress::{LoggingSignallingEgress, SignallingEgress};
+use super::webrtc_pc::{
+    translate_ice_candidate, translate_ice_config, PeerConnectionFactory, PeerConnectionRegistry,
+};
 use super::DesktopTransportProvider;
 use crate::HostOs;
 
-/// Stable string baked into every "driver pending" failure result.
-/// Pinned by tests so the .NET hub-side error renderer (and
-/// downstream `tracing` aggregations) can match on it without
-/// pattern-tracking a moving message.
-pub const DRIVER_PENDING_MESSAGE: &str =
-    "WebRTC driver pending — peer-connection construction stub";
+/// Stable string baked into every "platform method not implemented"
+/// failure result. Used today for `invoke_ctrl_alt_del` (Windows-only
+/// Secure Attention Sequence). Pinned by tests so the .NET hub-side
+/// error renderer can match on it without pattern-tracking a moving
+/// message.
+pub const PLATFORM_METHOD_NOT_IMPLEMENTED_MESSAGE: &str =
+    "Desktop transport method is not implemented on this host OS";
 
 /// Concrete `DesktopTransportProvider` for the WebRTC capture / encode
 /// driver. See the module docs for the lifecycle vs. peer-connection
@@ -104,6 +139,39 @@ pub struct WebRtcDesktopTransport {
     /// registry struct because the registry is `pub` and consumed
     /// by tests that don't want a Tokio runtime dependency.
     pumps: Arc<Mutex<HashMap<String, CapturePump>>>,
+    /// Slice R7.m — shared `webrtc-rs` API factory. Built once at
+    /// construction; one `MediaEngine` is registered with the
+    /// upstream default codec set and shared across every
+    /// per-session peer connection (same pattern the upstream
+    /// examples use).
+    pc_factory: Arc<PeerConnectionFactory>,
+    /// Slice R7.m — live `Arc<RTCPeerConnection>` per session.
+    /// Maintained in lock-step with [`Self::sessions`] and
+    /// [`Self::pumps`] (every close / replace path drops the PC
+    /// alongside the matching pump and registry record).
+    peer_connections: Arc<PeerConnectionRegistry>,
+    /// Slice R7.m — per-PC "alive" flags. Each entry mirrors the
+    /// matching peer connection in [`Self::peer_connections`]. The
+    /// `on_peer_connection_state_change` handler we install at PC
+    /// build time clones the matching flag and, on every state
+    /// change, gates the registry mutation behind a still-alive
+    /// check. When we explicitly close a PC (replace-on-duplicate,
+    /// `change_windows_session`, sweep) we clear the flag *before*
+    /// awaiting `pc.close()` so the late-arriving `Closed` event
+    /// from the old PC does not stomp the freshly-opened session
+    /// record. Keyed by `session_id` because the registry records
+    /// are keyed the same way and we never have more than one
+    /// live PC per session.
+    pc_alive: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
+    /// Slice R7.m — outbound signalling sink. The driver invokes
+    /// this from the `on_ice_candidate` peer-connection event
+    /// handler (locally-trickled candidates) and from the
+    /// `on_sdp_offer` answer-emission path. Default is
+    /// [`LoggingSignallingEgress`] which warn-logs every drop; the
+    /// agent runtime swaps in a hub-bound implementation that
+    /// invokes the server-bound `SendSdpAnswer` /
+    /// `SendIceCandidate` hub methods.
+    egress: Arc<dyn SignallingEgress>,
 }
 
 impl WebRtcDesktopTransport {
@@ -111,18 +179,47 @@ impl WebRtcDesktopTransport {
     /// for the cross-org guard (`None` skips the cross-org check, same
     /// semantics as [`super::NotSupportedDesktopTransport::new`]).
     ///
-    /// Uses [`DesktopProviders::not_supported_for`] for the bundle
-    /// and [`DiscardingCaptureSink`] for the sink. The agent runtime
-    /// upgrades both via [`Self::with_providers`] when constructing
-    /// the production driver.
+    /// Uses [`DesktopProviders::not_supported_for`] for the bundle,
+    /// [`DiscardingCaptureSink`] for the sink, and
+    /// [`LoggingSignallingEgress`] for the egress. The agent runtime
+    /// upgrades all three via [`Self::with_providers`] when
+    /// constructing the production driver.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the `webrtc-rs` `MediaEngine` fails to register the
+    /// default codec set — in practice this only happens when the
+    /// build pulled in an inconsistent codec set, which we want to
+    /// surface at construction time rather than on the first
+    /// `RemoteControl`. The fallible variant is
+    /// [`Self::try_new`].
     pub fn new(host_os: HostOs, expected_org_id: Option<String>) -> Self {
-        Self::with_providers(
+        Self::try_new(host_os, expected_org_id).expect("webrtc-rs MediaEngine init")
+    }
+
+    /// Fallible variant of [`Self::new`] — returns the upstream
+    /// `webrtc::Error` if the `MediaEngine` fails to register the
+    /// default codec set. Used by `cmremote-agent`'s runtime so the
+    /// agent surfaces a clean startup error instead of panicking
+    /// inside `Arc::new`.
+    pub fn try_new(
+        host_os: HostOs,
+        expected_org_id: Option<String>,
+    ) -> Result<Self, webrtc::Error> {
+        let pc_factory = Arc::new(PeerConnectionFactory::new()?);
+        Ok(Self {
             host_os,
             expected_org_id,
-            Arc::new(DesktopProviders::not_supported_for(host_os)),
-            Arc::new(DiscardingCaptureSink::new()),
-            CapturePumpConfig::default(),
-        )
+            sessions: Arc::new(Mutex::new(DesktopSessionRegistry::with_default_timeout())),
+            providers: Arc::new(DesktopProviders::not_supported_for(host_os)),
+            sink: Arc::new(DiscardingCaptureSink::new()),
+            pump_config: CapturePumpConfig::default(),
+            pumps: Arc::new(Mutex::new(HashMap::new())),
+            pc_factory,
+            peer_connections: Arc::new(PeerConnectionRegistry::new()),
+            pc_alive: Arc::new(Mutex::new(HashMap::new())),
+            egress: Arc::new(LoggingSignallingEgress),
+        })
     }
 
     /// Build a driver that names the current host's OS, using the
@@ -135,8 +232,11 @@ impl WebRtcDesktopTransport {
         Self::new(HostOs::current(), expected_org_id)
     }
 
-    /// Full constructor — used by the agent runtime to inject the
-    /// per-host capture / input bundle and the production sink.
+    /// Convenience constructor used by the agent runtime — accepts
+    /// the per-host capture / input bundle and the production sink,
+    /// retains the default [`LoggingSignallingEgress`]. Use
+    /// [`Self::with_providers_and_egress`] to inject a real
+    /// hub-bound egress.
     pub fn with_providers(
         host_os: HostOs,
         expected_org_id: Option<String>,
@@ -144,6 +244,35 @@ impl WebRtcDesktopTransport {
         sink: Arc<dyn CaptureSink>,
         pump_config: CapturePumpConfig,
     ) -> Self {
+        Self::with_providers_and_egress(
+            host_os,
+            expected_org_id,
+            providers,
+            sink,
+            pump_config,
+            Arc::new(LoggingSignallingEgress),
+        )
+    }
+
+    /// Full constructor — used by the agent runtime to inject the
+    /// per-host capture / input bundle, the production sink, and a
+    /// real hub-bound [`SignallingEgress`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if the `webrtc-rs` `MediaEngine` fails to register
+    /// the default codec set. See [`Self::try_new`] for the
+    /// fallible variant.
+    pub fn with_providers_and_egress(
+        host_os: HostOs,
+        expected_org_id: Option<String>,
+        providers: Arc<DesktopProviders>,
+        sink: Arc<dyn CaptureSink>,
+        pump_config: CapturePumpConfig,
+        egress: Arc<dyn SignallingEgress>,
+    ) -> Self {
+        let pc_factory =
+            Arc::new(PeerConnectionFactory::new().expect("webrtc-rs MediaEngine init"));
         Self {
             host_os,
             expected_org_id,
@@ -152,6 +281,10 @@ impl WebRtcDesktopTransport {
             sink,
             pump_config,
             pumps: Arc::new(Mutex::new(HashMap::new())),
+            pc_factory,
+            peer_connections: Arc::new(PeerConnectionRegistry::new()),
+            pc_alive: Arc::new(Mutex::new(HashMap::new())),
+            egress,
         }
     }
 
@@ -176,6 +309,13 @@ impl WebRtcDesktopTransport {
     pub async fn pump_stats(&self, session_id: &str) -> Option<CaptureStatsSnapshot> {
         let g = self.pumps.lock().await;
         g.get(session_id).map(|p| p.stats().snapshot())
+    }
+
+    /// `true` when a peer connection is currently registered for
+    /// `session_id`. Exposed for the runtime sweep task (so it can
+    /// assert PCs and pumps stay in lock-step) and for tests.
+    pub async fn has_peer_connection(&self, session_id: &str) -> bool {
+        self.peer_connections.get(session_id).await.is_some()
     }
 
     fn expected_org(&self) -> Option<&str> {
@@ -223,11 +363,189 @@ impl WebRtcDesktopTransport {
         }
     }
 
+    /// Close (and remove) the peer connection for `session_id`,
+    /// awaiting its `close()`. No-op when no PC is registered.
+    /// Errors from `close()` are logged at `warn!` so the audit
+    /// trail captures a teardown failure but the caller's
+    /// happy-path lifecycle is unaffected.
+    ///
+    /// Clears the matching alive flag *before* awaiting `close()`
+    /// so the late-arriving `Closed` state-change event from the
+    /// PC's event handler does not stomp a freshly-opened
+    /// replacement session.
+    async fn close_peer_connection(&self, session_id: &str, reason: &'static str) {
+        // Clear the alive flag first — every state-change event the
+        // closed PC fires after this point will short-circuit out
+        // of the handler's registry mutation.
+        if let Some(flag) = self.pc_alive.lock().await.remove(session_id) {
+            flag.store(false, Ordering::SeqCst);
+        }
+        if let Some(pc) = self.peer_connections.remove(session_id).await {
+            if let Err(e) = pc.close().await {
+                tracing::warn!(
+                    session_id = %session_id,
+                    reason = reason,
+                    error = %e,
+                    event = "peer-connection-close-failed",
+                    "RTCPeerConnection close returned error",
+                );
+            } else {
+                tracing::info!(
+                    session_id = %session_id,
+                    reason = reason,
+                    event = "peer-connection-closed",
+                    "closed RTCPeerConnection",
+                );
+            }
+        }
+    }
+
+    /// Build (and register) a fresh peer connection for `session_id`
+    /// with `configuration`. Replaces and closes any prior PC for
+    /// the same id (mirrors the registry's replace-on-duplicate
+    /// semantics). Installs `on_ice_candidate` and
+    /// `on_peer_connection_state_change` handlers that fan out
+    /// through the egress and registry respectively. Returns the
+    /// freshly-built `Arc<RTCPeerConnection>` so the caller can
+    /// immediately drive `set_remote_description` / `create_answer`
+    /// without a second registry lookup.
+    async fn build_peer_connection(
+        &self,
+        session_id: &str,
+        viewer_connection_id: &str,
+        configuration: RTCConfiguration,
+    ) -> Result<Arc<RTCPeerConnection>, webrtc::Error> {
+        // Close any prior PC for this session before building the
+        // new one. `close_peer_connection` clears the alive flag
+        // first so the prior PC's state-change events cannot stomp
+        // the about-to-be-installed new flag.
+        self.close_peer_connection(session_id, "peer-connection-replaced")
+            .await;
+        let pc = self.pc_factory.create(configuration).await?;
+        // Install the alive flag for this PC and capture a clone
+        // for the state-change handler.
+        let alive = Arc::new(AtomicBool::new(true));
+        self.pc_alive
+            .lock()
+            .await
+            .insert(session_id.to_string(), alive.clone());
+        // Install the locally-trickled-candidate egress handler.
+        let egress_for_ice = self.egress.clone();
+        let session_id_for_ice = session_id.to_string();
+        let viewer_for_ice = viewer_connection_id.to_string();
+        let alive_for_ice = alive.clone();
+        pc.on_ice_candidate(Box::new(move |maybe_candidate| {
+            let egress = egress_for_ice.clone();
+            let session_id = session_id_for_ice.clone();
+            let viewer = viewer_for_ice.clone();
+            let alive = alive_for_ice.clone();
+            Box::pin(async move {
+                // Stale candidate from a closed PC; drop without
+                // forwarding so the audit log is honest about the
+                // viewer scope.
+                if !alive.load(Ordering::SeqCst) {
+                    return;
+                }
+                let Some(candidate) = maybe_candidate else {
+                    // `None` signals end-of-gathering; nothing to
+                    // forward. The hub-side trickle protocol does
+                    // not have an explicit terminator.
+                    tracing::debug!(
+                        session_id = %session_id,
+                        event = "ice-gathering-complete",
+                        "local ICE gathering finished",
+                    );
+                    return;
+                };
+                let init = match candidate.to_json() {
+                    Ok(init) => init,
+                    Err(e) => {
+                        tracing::warn!(
+                            session_id = %session_id,
+                            error = %e,
+                            event = "ice-candidate-serialize-failed",
+                            "could not serialise local ICE candidate to JSON",
+                        );
+                        return;
+                    }
+                };
+                egress
+                    .send_ice_candidate(
+                        &session_id,
+                        &viewer,
+                        init.candidate,
+                        init.sdp_mid,
+                        init.sdp_mline_index,
+                    )
+                    .await;
+            })
+        }));
+        // Install the connection-state egress so the registry's
+        // `Connected` / `Closed` transitions reflect the actual
+        // peer-connection state.
+        let sessions_for_state = self.sessions.clone();
+        let session_id_for_state = session_id.to_string();
+        let alive_for_state = alive;
+        pc.on_peer_connection_state_change(Box::new(move |state| {
+            let sessions = sessions_for_state.clone();
+            let session_id = session_id_for_state.clone();
+            let alive = alive_for_state.clone();
+            Box::pin(async move {
+                // Closed-PC events reach this handler after the
+                // driver has explicitly torn the PC down (e.g.
+                // ChangeWindowsSession or replace-on-duplicate).
+                // Skip them so the freshly-opened replacement
+                // session is not stomped.
+                if !alive.load(Ordering::SeqCst) {
+                    return;
+                }
+                let mut sessions = sessions.lock().await;
+                match state {
+                    RTCPeerConnectionState::Connected => {
+                        let _ = sessions.transition(
+                            &session_id,
+                            DesktopSessionState::Connected,
+                            "pc-state-connected",
+                        );
+                    }
+                    RTCPeerConnectionState::Failed
+                    | RTCPeerConnectionState::Closed
+                    | RTCPeerConnectionState::Disconnected => {
+                        sessions.close(&session_id, CloseReason::Explicit);
+                    }
+                    _ => {}
+                }
+            })
+        }));
+        // Insert into the registry. Any prior entry was closed
+        // above; this insert is a fresh slot so `insert` will
+        // return `None`. We still log if the prior was
+        // unexpectedly present (defence-in-depth — should never
+        // fire in practice).
+        if let Some(prior) = self.peer_connections.insert(session_id, pc.clone()).await {
+            tracing::warn!(
+                session_id = %session_id,
+                event = "peer-connection-replaced-late",
+                "unexpected prior PC found after explicit close; closing it",
+            );
+            if let Err(e) = prior.close().await {
+                tracing::warn!(
+                    session_id = %session_id,
+                    error = %e,
+                    event = "peer-connection-close-failed",
+                    "prior RTCPeerConnection close returned error",
+                );
+            }
+        }
+        Ok(pc)
+    }
+
     /// Sweep the session registry for idle sessions, then stop any
-    /// pump whose session id is no longer present. Replacement for
-    /// the bare `sessions().lock().await.sweep_idle(now)` the
-    /// runtime would otherwise call — using this method keeps
-    /// pumps from outliving their session record.
+    /// pump and close any peer connection whose session id is no
+    /// longer present. Replacement for the bare
+    /// `sessions().lock().await.sweep_idle(now)` the runtime would
+    /// otherwise call — using this method keeps pumps and PCs from
+    /// outliving their session record.
     ///
     /// Returns the list of evicted session ids (same shape the
     /// underlying registry sweep returns).
@@ -238,17 +556,39 @@ impl WebRtcDesktopTransport {
         };
         for id in &evicted {
             self.stop_pump(id, CloseReason::IdleTimeout.as_str()).await;
+            self.close_peer_connection(id, CloseReason::IdleTimeout.as_str())
+                .await;
         }
         evicted
     }
 
-    /// Build the canonical "driver pending" failure naming the host OS
-    /// — every signalling-or-onward stub returns this once the guards
-    /// pass and the registry has been updated.
-    fn driver_pending(&self, session_id: String) -> DesktopTransportResult {
+    /// Build a structured failure naming the host OS — used for
+    /// `invoke_ctrl_alt_del` until the Windows-side driver lands.
+    fn platform_not_implemented(&self, session_id: String, method: &str) -> DesktopTransportResult {
         DesktopTransportResult::failed(
             session_id,
-            format!("{DRIVER_PENDING_MESSAGE} (host_os={:?})", self.host_os),
+            format!(
+                "{PLATFORM_METHOD_NOT_IMPLEMENTED_MESSAGE}: {method:?} on {:?}",
+                self.host_os
+            ),
+        )
+    }
+
+    /// Build a structured "internal driver error" failure that
+    /// folds the upstream `webrtc::Error` into a stable message
+    /// shape. The upstream error string is included verbatim
+    /// because it never carries sensitive data (no SDP, no ICE
+    /// credential, no access key — those are caller-side payloads
+    /// the driver passes to the API by value).
+    fn driver_error(
+        &self,
+        session_id: String,
+        method: &str,
+        error: webrtc::Error,
+    ) -> DesktopTransportResult {
+        DesktopTransportResult::failed(
+            session_id,
+            format!("WebRTC driver error during {method:?}: {error}"),
         )
     }
 }
@@ -270,12 +610,17 @@ impl DesktopTransportProvider for WebRtcDesktopTransport {
             return rejection.into_result();
         }
         // Guards passed → register (or replace) the session BEFORE
-        // returning the driver-pending stub, so the audit trail
-        // records the open even though the peer connection is not
-        // yet wired.
+        // building the pump / PC, so the audit trail records the
+        // open even if the pump / PC construction fails downstream.
         let mut sessions = self.sessions.lock().await;
         let _outcome = sessions.open(&request.session_id, &request.user_connection_id);
         drop(sessions);
+        // Slice R7.m — replace-on-duplicate also closes any prior
+        // peer connection (mirrors the registry's `Replaced`
+        // semantics). Done before the new pump spawns so the
+        // capturer is never owned by two PCs at once.
+        self.close_peer_connection(&request.session_id, CloseReason::Replaced.as_str())
+            .await;
         // Slice R7.n.5 — spawn a per-session capture pump (see
         // `pump.rs`). The pump pulls from the bundle's capturer at
         // `pump_config.target_fps` and pushes into the shared sink
@@ -284,10 +629,12 @@ impl DesktopTransportProvider for WebRtcDesktopTransport {
         // session id, mirroring the registry's replace-on-duplicate
         // semantics.
         self.spawn_pump(&request.session_id).await;
-        // Until the real driver lands, the open transition itself is
-        // the only state change — the session sits in `Initializing`
-        // and waits for `ProvideIceServers` / `SendSdpOffer`.
-        self.driver_pending(request.session_id.clone())
+        // Slice R7.m — the peer connection itself is built lazily
+        // when the first signalling message arrives (either
+        // `ProvideIceServers` with a real config, or `SendSdpOffer`
+        // with the default config when the viewer reuses defaults).
+        // RemoteControl just opens the registry record.
+        DesktopTransportResult::ok(request.session_id.clone())
     }
 
     async fn restart_screen_caster(
@@ -297,11 +644,23 @@ impl DesktopTransportProvider for WebRtcDesktopTransport {
         if let Err(rejection) = guards::check_restart_screen_caster(request, self.expected_org()) {
             return rejection.into_result();
         }
-        // RestartScreenCaster is a driver-internal kick — it does not
-        // open or close a session by itself; the existing session (if
-        // any) keeps its state. Surface the driver-pending message so
-        // the dispatcher's audit trail still records the call.
-        self.driver_pending(request.session_id.clone())
+        // RestartScreenCaster is a driver-internal kick — the .NET
+        // equivalent restarts the screencaster process. The Rust
+        // equivalent stops and respawns the per-session capture
+        // pump; the negotiated peer connection is left intact so
+        // the viewer does not have to renegotiate.
+        let session_present = {
+            let sessions = self.sessions.lock().await;
+            sessions.get(&request.session_id).is_some()
+        };
+        if !session_present {
+            return DesktopTransportResult::failed(
+                request.session_id.clone(),
+                "RestartScreenCaster received before RemoteControl opened the session".to_string(),
+            );
+        }
+        self.spawn_pump(&request.session_id).await;
+        DesktopTransportResult::ok(request.session_id.clone())
     }
 
     async fn change_windows_session(
@@ -313,18 +672,20 @@ impl DesktopTransportProvider for WebRtcDesktopTransport {
         }
         // ChangeWindowsSession on Windows tears down the existing
         // capture pipeline and rebuilds it in the target session.
-        // Until the real driver lands, we close the registry's record
-        // for the session id (audit-logged) so a subsequent
+        // Close the registry record (audit-logged) so a subsequent
         // SendSdpOffer goes through the "session not initialised"
         // path rather than racing against a stale state. Stop the
-        // matching pump in lock-step so the capturer is released
-        // before the new session attaches to it.
+        // matching pump and close the matching peer connection in
+        // lock-step so the capturer + ICE agent are released before
+        // the new session attaches to either.
         let mut sessions = self.sessions.lock().await;
         sessions.close(&request.session_id, CloseReason::Explicit);
         drop(sessions);
         self.stop_pump(&request.session_id, "change-windows-session")
             .await;
-        self.driver_pending(request.session_id.clone())
+        self.close_peer_connection(&request.session_id, "change-windows-session")
+            .await;
+        DesktopTransportResult::ok(request.session_id.clone())
     }
 
     async fn invoke_ctrl_alt_del(
@@ -332,78 +693,172 @@ impl DesktopTransportProvider for WebRtcDesktopTransport {
         _request: &InvokeCtrlAltDelRequest,
     ) -> DesktopTransportResult {
         // No envelope to guard — the request type is empty.
-        // No session id either; keep the same "empty session id in
-        // the failure result" shape `NotSupportedDesktopTransport` uses
-        // so the dispatcher's `arguments` decoder treats either
-        // provider identically.
-        self.driver_pending(String::new())
+        // CtrlAltDel is the W32 Secure Attention Sequence and is
+        // delivered by a privileged Windows service on the .NET
+        // side. The cross-platform Rust agent has no equivalent
+        // today; the Windows-side driver lands in a follow-up slice.
+        // Keep the same "empty session id in the failure result"
+        // shape `NotSupportedDesktopTransport` uses so the
+        // dispatcher's `arguments` decoder treats either provider
+        // identically.
+        self.platform_not_implemented(String::new(), "InvokeCtrlAltDel")
     }
 
     // ---------------------------------------------------------------
     // R7.g signalling methods. State transitions documented inline.
+    // Slice R7.m wires each one to the per-session
+    // `RTCPeerConnection`.
     // ---------------------------------------------------------------
 
     async fn on_sdp_offer(&self, request: &SdpOffer) -> DesktopTransportResult {
         if let Err(rejection) = guards::check_sdp_offer(request, self.expected_org()) {
             return rejection.into_result();
         }
-        let mut sessions = self.sessions.lock().await;
-        if sessions.get(&request.session_id).is_none() {
-            // No `RemoteControl` for this id — refuse with a precise
-            // message so the audit log captures the ordering bug.
-            return DesktopTransportResult::failed(
-                request.session_id.clone(),
-                "SendSdpOffer received before RemoteControl opened the session".to_string(),
+        // Confirm the session was opened by a prior RemoteControl —
+        // otherwise refuse with a precise message so the audit log
+        // captures the ordering bug.
+        {
+            let sessions = self.sessions.lock().await;
+            if sessions.get(&request.session_id).is_none() {
+                return DesktopTransportResult::failed(
+                    request.session_id.clone(),
+                    "SendSdpOffer received before RemoteControl opened the session".to_string(),
+                );
+            }
+        }
+        // Drive the registry to NegotiatingSdp before any I/O so
+        // the audit log captures the transition even if the upstream
+        // SDP parse fails.
+        {
+            let mut sessions = self.sessions.lock().await;
+            let _ = sessions.transition(
+                &request.session_id,
+                DesktopSessionState::NegotiatingSdp,
+                "send-sdp-offer",
             );
         }
-        // Both Initializing→NegotiatingSdp and IceConfigured→
-        // NegotiatingSdp are valid (the .NET hub may skip
-        // ProvideIceServers when the viewer reuses defaults). Drive
-        // the registry to NegotiatingSdp; an idempotent retry
-        // (re-offer in the same state) is silently accepted.
-        let _ = sessions.transition(
-            &request.session_id,
-            DesktopSessionState::NegotiatingSdp,
-            "send-sdp-offer",
-        );
-        drop(sessions);
-        self.driver_pending(request.session_id.clone())
+        // Slice R7.m — fetch the existing peer connection or
+        // lazy-build one with the default RTCConfiguration. The
+        // .NET hub may skip ProvideIceServers when the viewer
+        // reuses defaults; the upstream stack is happy with an
+        // empty `ice_servers` list and will gather host candidates
+        // only.
+        let pc = match self.peer_connections.get(&request.session_id).await {
+            Some(pc) => pc,
+            None => match self
+                .build_peer_connection(
+                    &request.session_id,
+                    &request.viewer_connection_id,
+                    RTCConfiguration::default(),
+                )
+                .await
+            {
+                Ok(pc) => pc,
+                Err(e) => {
+                    return self.driver_error(request.session_id.clone(), "SendSdpOffer", e);
+                }
+            },
+        };
+        // Set the remote description (offer), produce an answer,
+        // set the local description, then push the answer through
+        // the egress.
+        let offer = match RTCSessionDescription::offer(request.sdp.clone()) {
+            Ok(o) => o,
+            Err(e) => {
+                return self.driver_error(request.session_id.clone(), "SendSdpOffer", e);
+            }
+        };
+        if let Err(e) = pc.set_remote_description(offer).await {
+            return self.driver_error(request.session_id.clone(), "SendSdpOffer", e);
+        }
+        let answer = match pc.create_answer(None).await {
+            Ok(a) => a,
+            Err(e) => {
+                return self.driver_error(request.session_id.clone(), "SendSdpOffer", e);
+            }
+        };
+        let answer_sdp = answer.sdp.clone();
+        if let Err(e) = pc.set_local_description(answer).await {
+            return self.driver_error(request.session_id.clone(), "SendSdpOffer", e);
+        }
+        // Forward the answer to the viewer through the egress.
+        // `set_local_description` returns immediately; the local
+        // ICE agent will start trickling candidates through the
+        // `on_ice_candidate` handler we installed at PC build time.
+        self.egress
+            .send_sdp_answer(
+                &request.session_id,
+                &request.viewer_connection_id,
+                answer_sdp,
+            )
+            .await;
+        DesktopTransportResult::ok(request.session_id.clone())
     }
 
     async fn on_sdp_answer(&self, request: &SdpAnswer) -> DesktopTransportResult {
         if let Err(rejection) = guards::check_sdp_answer(request, self.expected_org()) {
             return rejection.into_result();
         }
-        let sessions = self.sessions.lock().await;
-        if sessions.get(&request.session_id).is_none() {
+        {
+            let sessions = self.sessions.lock().await;
+            if sessions.get(&request.session_id).is_none() {
+                return DesktopTransportResult::failed(
+                    request.session_id.clone(),
+                    "SendSdpAnswer received before RemoteControl opened the session".to_string(),
+                );
+            }
+        }
+        // SDP answer applies to the existing PC built by a prior
+        // ProvideIceServers / SendSdpOffer round. Refuse if no PC
+        // exists — receiving an answer without an offer is a
+        // protocol violation we want surfaced.
+        let Some(pc) = self.peer_connections.get(&request.session_id).await else {
             return DesktopTransportResult::failed(
                 request.session_id.clone(),
-                "SendSdpAnswer received before RemoteControl opened the session".to_string(),
+                "SendSdpAnswer received with no active peer connection".to_string(),
             );
+        };
+        let answer = match RTCSessionDescription::answer(request.sdp.clone()) {
+            Ok(a) => a,
+            Err(e) => {
+                return self.driver_error(request.session_id.clone(), "SendSdpAnswer", e);
+            }
+        };
+        if let Err(e) = pc.set_remote_description(answer).await {
+            return self.driver_error(request.session_id.clone(), "SendSdpAnswer", e);
         }
-        // SDP answer does not change registry state — the session
-        // stays in NegotiatingSdp until the driver promotes it to
-        // Connected. Audit logging still happens via `transition`'s
-        // idempotent path the moment the driver lands.
-        drop(sessions);
-        self.driver_pending(request.session_id.clone())
+        DesktopTransportResult::ok(request.session_id.clone())
     }
 
     async fn on_ice_candidate(&self, request: &IceCandidate) -> DesktopTransportResult {
         if let Err(rejection) = guards::check_ice_candidate(request, self.expected_org()) {
             return rejection.into_result();
         }
-        let sessions = self.sessions.lock().await;
-        if sessions.get(&request.session_id).is_none() {
+        {
+            let sessions = self.sessions.lock().await;
+            if sessions.get(&request.session_id).is_none() {
+                return DesktopTransportResult::failed(
+                    request.session_id.clone(),
+                    "SendIceCandidate received before RemoteControl opened the session".to_string(),
+                );
+            }
+        }
+        // ICE trickle feeds the existing PC's ICE agent. Refuse if
+        // no PC is up — ICE without a peer connection is a
+        // protocol violation. The wire-layer guard has already
+        // length-capped + scheme-checked the candidate body; this
+        // call cannot leak a hostile string into the audit log.
+        let Some(pc) = self.peer_connections.get(&request.session_id).await else {
             return DesktopTransportResult::failed(
                 request.session_id.clone(),
-                "SendIceCandidate received before RemoteControl opened the session".to_string(),
+                "SendIceCandidate received with no active peer connection".to_string(),
             );
+        };
+        let init = translate_ice_candidate(request);
+        if let Err(e) = pc.add_ice_candidate(init).await {
+            return self.driver_error(request.session_id.clone(), "SendIceCandidate", e);
         }
-        // ICE trickle does not change registry state; it feeds the
-        // peer connection's ICE agent directly. No transition emitted.
-        drop(sessions);
-        self.driver_pending(request.session_id.clone())
+        DesktopTransportResult::ok(request.session_id.clone())
     }
 
     // ---------------------------------------------------------------
@@ -417,30 +872,82 @@ impl DesktopTransportProvider for WebRtcDesktopTransport {
         if let Err(rejection) = guards::check_provide_ice_servers(request, self.expected_org()) {
             return rejection.into_result();
         }
-        let mut sessions = self.sessions.lock().await;
-        if sessions.get(&request.session_id).is_none() {
-            return DesktopTransportResult::failed(
-                request.session_id.clone(),
-                "ProvideIceServers received before RemoteControl opened the session".to_string(),
+        {
+            let sessions = self.sessions.lock().await;
+            if sessions.get(&request.session_id).is_none() {
+                return DesktopTransportResult::failed(
+                    request.session_id.clone(),
+                    "ProvideIceServers received before RemoteControl opened the session"
+                        .to_string(),
+                );
+            }
+        }
+        // Drive the registry to IceConfigured before any I/O so the
+        // audit log captures the transition even if the upstream PC
+        // build fails.
+        {
+            let mut sessions = self.sessions.lock().await;
+            let _ = sessions.transition(
+                &request.session_id,
+                DesktopSessionState::IceConfigured,
+                "provide-ice-servers",
             );
         }
-        let _ = sessions.transition(
-            &request.session_id,
-            DesktopSessionState::IceConfigured,
-            "provide-ice-servers",
-        );
-        drop(sessions);
-        self.driver_pending(request.session_id.clone())
+        // Slice R7.m — translate the wire `IceServerConfig` into
+        // `RTCConfiguration` and (re)build the peer connection.
+        // Receiving a fresh config replaces any prior PC for the
+        // same id (the upstream stack does not support mutating
+        // `RTCConfiguration::ice_servers` after PC construction
+        // without `set_configuration` + `restart_ice`; building
+        // fresh is simpler and what the .NET hub expects when it
+        // re-issues ProvideIceServers).
+        let configuration = translate_ice_config(&request.ice_server_config);
+        if let Err(e) = self
+            .build_peer_connection(
+                &request.session_id,
+                &request.viewer_connection_id,
+                configuration,
+            )
+            .await
+        {
+            return self.driver_error(request.session_id.clone(), "ProvideIceServers", e);
+        }
+        DesktopTransportResult::ok(request.session_id.clone())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::desktop::signalling_egress::testing::{CapturedSignal, CapturingSignallingEgress};
 
     const VALID_SESSION_ID: &str = "11111111-2222-3333-4444-555555555555";
     const OTHER_SESSION_ID: &str = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
     const VALID_ORG_ID: &str = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+
+    /// A small but valid SDP offer — borrowed from the upstream
+    /// `webrtc-rs` example, trimmed to the minimum the parser
+    /// accepts. Contains a single `m=application` line with a
+    /// data-channel-only setup so the upstream stack does not
+    /// require a media engine codec.
+    const SAMPLE_OFFER_SDP: &str = "v=0\r\n\
+o=- 4659777215431993300 2 IN IP4 127.0.0.1\r\n\
+s=-\r\n\
+t=0 0\r\n\
+a=group:BUNDLE 0\r\n\
+a=extmap-allow-mixed\r\n\
+a=msid-semantic: WMS\r\n\
+m=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\n\
+c=IN IP4 0.0.0.0\r\n\
+a=ice-ufrag:abcd\r\n\
+a=ice-pwd:abcdefghijklmnopqrstuvwx\r\n\
+a=ice-options:trickle\r\n\
+a=fingerprint:sha-256 \
+00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF\r\n\
+a=setup:actpass\r\n\
+a=mid:0\r\n\
+a=sctp-port:5000\r\n\
+a=max-message-size:262144\r\n";
 
     fn rc_req() -> RemoteControlSessionRequest {
         RemoteControlSessionRequest {
@@ -486,7 +993,7 @@ mod tests {
             org_name: "Acme".to_string(),
             org_id: VALID_ORG_ID.to_string(),
             kind: cmremote_wire::SdpKind::Offer,
-            sdp: "v=0\r\n".to_string(),
+            sdp: SAMPLE_OFFER_SDP.to_string(),
         }
     }
 
@@ -535,115 +1042,160 @@ mod tests {
         }
     }
 
+    /// Build a transport with a [`CapturingSignallingEgress`] so
+    /// the test can assert what the driver actually emits. Returns
+    /// the transport and a clone of the egress.
+    fn transport_with_capture() -> (WebRtcDesktopTransport, CapturingSignallingEgress) {
+        let egress = CapturingSignallingEgress::new();
+        let providers = Arc::new(DesktopProviders::not_supported_for(HostOs::Linux));
+        let sink: Arc<dyn CaptureSink> = Arc::new(DiscardingCaptureSink::new());
+        let t = WebRtcDesktopTransport::with_providers_and_egress(
+            HostOs::Linux,
+            Some(VALID_ORG_ID.into()),
+            providers,
+            sink,
+            CapturePumpConfig::default(),
+            Arc::new(egress.clone()),
+        );
+        (t, egress)
+    }
+
     // -----------------------------------------------------------------
     // Happy path: RemoteControl opens the session; subsequent
-    // signalling methods drive the registry into the right state.
+    // signalling methods drive the registry into the right state and
+    // build / drive the real peer connection.
     // -----------------------------------------------------------------
 
     #[tokio::test]
-    async fn remote_control_opens_session_and_returns_driver_pending() {
-        let p = WebRtcDesktopTransport::new(HostOs::Linux, Some(VALID_ORG_ID.into()));
+    async fn remote_control_opens_session_and_returns_ok() {
+        let (p, _egress) = transport_with_capture();
         let r = p.remote_control(&rc_req()).await;
-        assert!(!r.success);
+        assert!(r.success, "{r:?}");
         assert_eq!(r.session_id, VALID_SESSION_ID);
-        let msg = r.error_message.unwrap();
-        assert!(msg.contains(DRIVER_PENDING_MESSAGE), "{msg}");
-        // Sensitive access_key MUST NOT appear.
-        assert!(!msg.contains("secret-access-key"), "{msg}");
+        assert!(r.error_message.is_none());
         // Registry now has the session in Initializing.
         let sessions = p.sessions().lock_owned().await;
         let s = sessions.get(VALID_SESSION_ID).unwrap();
         assert_eq!(s.state, DesktopSessionState::Initializing);
+        // No PC yet — built lazily on first signalling.
+        drop(sessions);
+        assert!(!p.has_peer_connection(VALID_SESSION_ID).await);
     }
 
     #[tokio::test]
-    async fn provide_ice_servers_after_remote_control_drives_to_ice_configured() {
-        let p = WebRtcDesktopTransport::new(HostOs::Linux, Some(VALID_ORG_ID.into()));
+    async fn provide_ice_servers_after_remote_control_builds_pc_and_drives_to_ice_configured() {
+        let (p, _egress) = transport_with_capture();
         let _ = p.remote_control(&rc_req()).await;
         let r = p.on_provide_ice_servers(&provide_ice_req()).await;
-        assert!(!r.success);
-        let msg = r.error_message.unwrap();
-        assert!(msg.contains(DRIVER_PENDING_MESSAGE), "{msg}");
-        assert!(!msg.contains("secret-access-key"), "{msg}");
+        assert!(r.success, "{r:?}");
+        // Sensitive access_key MUST NOT appear in any returned
+        // message — happy path returns no message at all.
+        assert!(r.error_message.is_none());
         let sessions = p.sessions().lock_owned().await;
         assert_eq!(
             sessions.get(VALID_SESSION_ID).unwrap().state,
             DesktopSessionState::IceConfigured,
         );
+        drop(sessions);
+        // PC must now exist.
+        assert!(p.has_peer_connection(VALID_SESSION_ID).await);
     }
 
     #[tokio::test]
-    async fn sdp_offer_after_provide_ice_drives_to_negotiating_sdp() {
-        let p = WebRtcDesktopTransport::new(HostOs::Linux, Some(VALID_ORG_ID.into()));
+    async fn sdp_offer_after_provide_ice_drives_to_negotiating_sdp_and_emits_answer() {
+        let (p, egress) = transport_with_capture();
         let _ = p.remote_control(&rc_req()).await;
         let _ = p.on_provide_ice_servers(&provide_ice_req()).await;
-        let _ = p.on_sdp_offer(&sdp_offer_req()).await;
+        let r = p.on_sdp_offer(&sdp_offer_req()).await;
+        assert!(r.success, "{r:?}");
         let sessions = p.sessions().lock_owned().await;
         assert_eq!(
             sessions.get(VALID_SESSION_ID).unwrap().state,
             DesktopSessionState::NegotiatingSdp,
         );
+        drop(sessions);
+        // Egress must have captured exactly one SDP answer for the
+        // session, addressed to the right viewer.
+        let captured = egress.captured().await;
+        let mut answers = captured.iter().filter_map(|c| match c {
+            CapturedSignal::SdpAnswer {
+                session_id,
+                viewer_connection_id,
+                sdp,
+            } => Some((
+                session_id.clone(),
+                viewer_connection_id.clone(),
+                sdp.clone(),
+            )),
+            _ => None,
+        });
+        let (sid, viewer, answer_sdp) = answers.next().expect("one answer");
+        assert!(answers.next().is_none(), "expected exactly one answer");
+        assert_eq!(sid, VALID_SESSION_ID);
+        assert_eq!(viewer, "viewer-1");
+        assert!(answer_sdp.contains("v=0"), "{answer_sdp}");
     }
 
     #[tokio::test]
-    async fn sdp_offer_without_prior_provide_ice_still_drives_to_negotiating_sdp() {
+    async fn sdp_offer_without_prior_provide_ice_lazy_builds_pc_and_emits_answer() {
         // The .NET hub may emit SendSdpOffer without ProvideIceServers
-        // when the viewer reuses defaults; the state machine accepts
-        // the shortcut.
-        let p = WebRtcDesktopTransport::new(HostOs::Linux, Some(VALID_ORG_ID.into()));
+        // when the viewer reuses defaults; the driver must lazy-build
+        // the PC with the default RTCConfiguration.
+        let (p, egress) = transport_with_capture();
         let _ = p.remote_control(&rc_req()).await;
-        let _ = p.on_sdp_offer(&sdp_offer_req()).await;
+        let r = p.on_sdp_offer(&sdp_offer_req()).await;
+        assert!(r.success, "{r:?}");
         let sessions = p.sessions().lock_owned().await;
         assert_eq!(
             sessions.get(VALID_SESSION_ID).unwrap().state,
             DesktopSessionState::NegotiatingSdp,
         );
+        drop(sessions);
+        assert!(p.has_peer_connection(VALID_SESSION_ID).await);
+        // Answer was emitted.
+        assert!(matches!(
+            egress.captured().await.first(),
+            Some(CapturedSignal::SdpAnswer { .. })
+        ));
     }
 
     #[tokio::test]
-    async fn sdp_answer_does_not_change_registry_state() {
-        let p = WebRtcDesktopTransport::new(HostOs::Linux, Some(VALID_ORG_ID.into()));
-        let _ = p.remote_control(&rc_req()).await;
-        let _ = p.on_sdp_offer(&sdp_offer_req()).await;
-        let _ = p.on_sdp_answer(&sdp_answer_req()).await;
-        let sessions = p.sessions().lock_owned().await;
-        assert_eq!(
-            sessions.get(VALID_SESSION_ID).unwrap().state,
-            DesktopSessionState::NegotiatingSdp,
-        );
-    }
-
-    #[tokio::test]
-    async fn ice_candidate_does_not_change_registry_state() {
-        let p = WebRtcDesktopTransport::new(HostOs::Linux, Some(VALID_ORG_ID.into()));
-        let _ = p.remote_control(&rc_req()).await;
-        let _ = p.on_sdp_offer(&sdp_offer_req()).await;
-        let _ = p.on_ice_candidate(&ice_candidate_req()).await;
-        let sessions = p.sessions().lock_owned().await;
-        assert_eq!(
-            sessions.get(VALID_SESSION_ID).unwrap().state,
-            DesktopSessionState::NegotiatingSdp,
-        );
-    }
-
-    // -----------------------------------------------------------------
-    // Replace-on-duplicate.
-    // -----------------------------------------------------------------
-
-    #[tokio::test]
-    async fn duplicate_remote_control_replaces_prior_session() {
-        let p = WebRtcDesktopTransport::new(HostOs::Linux, Some(VALID_ORG_ID.into()));
+    async fn ice_candidate_after_provide_ice_is_accepted() {
+        let (p, _egress) = transport_with_capture();
         let _ = p.remote_control(&rc_req()).await;
         let _ = p.on_provide_ice_servers(&provide_ice_req()).await;
+        // Drive an offer first so the PC has a remote description
+        // and the trickled candidate has somewhere to apply.
+        let _ = p.on_sdp_offer(&sdp_offer_req()).await;
+        let r = p.on_ice_candidate(&ice_candidate_req()).await;
+        assert!(r.success, "{r:?}");
+    }
+
+    // -----------------------------------------------------------------
+    // Replace-on-duplicate: the prior PC must be closed before the
+    // new one is registered.
+    // -----------------------------------------------------------------
+
+    #[tokio::test]
+    async fn duplicate_remote_control_replaces_prior_session_and_drops_prior_pc() {
+        let (p, _egress) = transport_with_capture();
+        let _ = p.remote_control(&rc_req()).await;
+        let _ = p.on_provide_ice_servers(&provide_ice_req()).await;
+        assert!(p.has_peer_connection(VALID_SESSION_ID).await);
         // Re-issue RemoteControl with a different viewer.
         let mut req = rc_req();
         req.user_connection_id = "viewer-2".into();
-        let _ = p.remote_control(&req).await;
+        let r = p.remote_control(&req).await;
+        assert!(r.success, "{r:?}");
         let sessions = p.sessions().lock_owned().await;
         let s = sessions.get(VALID_SESSION_ID).unwrap();
         // Session is freshly Initializing, viewer is the new id.
         assert_eq!(s.state, DesktopSessionState::Initializing);
         assert_eq!(s.viewer_connection_id, "viewer-2");
+        drop(sessions);
+        // The prior PC was dropped — a fresh one is built on the
+        // next signalling round.
+        assert!(!p.has_peer_connection(VALID_SESSION_ID).await);
     }
 
     // -----------------------------------------------------------------
@@ -653,7 +1205,7 @@ mod tests {
 
     #[tokio::test]
     async fn provide_ice_without_remote_control_refuses_with_precise_message() {
-        let p = WebRtcDesktopTransport::new(HostOs::Linux, Some(VALID_ORG_ID.into()));
+        let (p, _egress) = transport_with_capture();
         let r = p.on_provide_ice_servers(&provide_ice_req()).await;
         assert!(!r.success);
         let msg = r.error_message.unwrap();
@@ -666,7 +1218,7 @@ mod tests {
 
     #[tokio::test]
     async fn sdp_offer_without_remote_control_refuses_with_precise_message() {
-        let p = WebRtcDesktopTransport::new(HostOs::Linux, Some(VALID_ORG_ID.into()));
+        let (p, _egress) = transport_with_capture();
         let r = p.on_sdp_offer(&sdp_offer_req()).await;
         assert!(!r.success);
         assert!(r.error_message.unwrap().contains("SendSdpOffer"));
@@ -674,7 +1226,7 @@ mod tests {
 
     #[tokio::test]
     async fn sdp_answer_without_remote_control_refuses_with_precise_message() {
-        let p = WebRtcDesktopTransport::new(HostOs::Linux, Some(VALID_ORG_ID.into()));
+        let (p, _egress) = transport_with_capture();
         let r = p.on_sdp_answer(&sdp_answer_req()).await;
         assert!(!r.success);
         assert!(r.error_message.unwrap().contains("SendSdpAnswer"));
@@ -682,31 +1234,54 @@ mod tests {
 
     #[tokio::test]
     async fn ice_candidate_without_remote_control_refuses_with_precise_message() {
-        let p = WebRtcDesktopTransport::new(HostOs::Linux, Some(VALID_ORG_ID.into()));
+        let (p, _egress) = transport_with_capture();
         let r = p.on_ice_candidate(&ice_candidate_req()).await;
         assert!(!r.success);
         assert!(r.error_message.unwrap().contains("SendIceCandidate"));
     }
 
+    #[tokio::test]
+    async fn sdp_answer_without_active_pc_refuses_with_precise_message() {
+        // Open the session but never drive a ProvideIceServers /
+        // SendSdpOffer round; the answer must be refused because
+        // there's no PC waiting on it.
+        let (p, _egress) = transport_with_capture();
+        let _ = p.remote_control(&rc_req()).await;
+        let r = p.on_sdp_answer(&sdp_answer_req()).await;
+        assert!(!r.success);
+        let msg = r.error_message.unwrap();
+        assert!(msg.contains("no active peer connection"), "{msg}");
+    }
+
+    #[tokio::test]
+    async fn ice_candidate_without_active_pc_refuses_with_precise_message() {
+        let (p, _egress) = transport_with_capture();
+        let _ = p.remote_control(&rc_req()).await;
+        let r = p.on_ice_candidate(&ice_candidate_req()).await;
+        assert!(!r.success);
+        let msg = r.error_message.unwrap();
+        assert!(msg.contains("no active peer connection"), "{msg}");
+    }
+
     // -----------------------------------------------------------------
-    // Guards run BEFORE any registry mutation. Pin the ordering by
-    // confirming a hostile request leaves the registry empty.
+    // Guards run BEFORE any registry / PC mutation.
     // -----------------------------------------------------------------
 
     #[tokio::test]
     async fn cross_org_remote_control_is_refused_before_registry_mutation() {
-        let p = WebRtcDesktopTransport::new(HostOs::Linux, Some(VALID_ORG_ID.into()));
+        let (p, _egress) = transport_with_capture();
         let mut req = rc_req();
         req.org_id = "ffffffff-ffff-ffff-ffff-ffffffffffff".into();
         let r = p.remote_control(&req).await;
         assert!(!r.success);
         assert!(r.error_message.unwrap().contains("organisation"));
         assert!(p.sessions().lock_owned().await.is_empty());
+        assert!(!p.has_peer_connection(VALID_SESSION_ID).await);
     }
 
     #[tokio::test]
     async fn malformed_session_id_refused_without_touching_registry() {
-        let p = WebRtcDesktopTransport::new(HostOs::Linux, Some(VALID_ORG_ID.into()));
+        let (p, _egress) = transport_with_capture();
         let mut req = rc_req();
         req.session_id = "not-a-uuid".into();
         let r = p.remote_control(&req).await;
@@ -715,8 +1290,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn over_length_sdp_refused_before_registry_mutation() {
-        let p = WebRtcDesktopTransport::new(HostOs::Linux, Some(VALID_ORG_ID.into()));
+    async fn over_length_sdp_refused_before_pc_mutation() {
+        let (p, _egress) = transport_with_capture();
         let _ = p.remote_control(&rc_req()).await;
         let mut req = sdp_offer_req();
         req.sdp = "v".repeat(cmremote_wire::MAX_SDP_BYTES + 1);
@@ -724,17 +1299,20 @@ mod tests {
         assert!(!r.success);
         assert!(r.error_message.unwrap().contains("sdp"));
         // Session should still be Initializing — the over-length
-        // offer never reached the state machine.
+        // offer never reached the state machine, and no PC was
+        // built.
         let sessions = p.sessions().lock_owned().await;
         assert_eq!(
             sessions.get(VALID_SESSION_ID).unwrap().state,
             DesktopSessionState::Initializing,
         );
+        drop(sessions);
+        assert!(!p.has_peer_connection(VALID_SESSION_ID).await);
     }
 
     #[tokio::test]
-    async fn hostile_ice_url_refused_before_registry_mutation() {
-        let p = WebRtcDesktopTransport::new(HostOs::Linux, Some(VALID_ORG_ID.into()));
+    async fn hostile_ice_url_refused_before_pc_mutation() {
+        let (p, _egress) = transport_with_capture();
         let _ = p.remote_control(&rc_req()).await;
         let mut req = provide_ice_req();
         req.ice_server_config.ice_servers[0].urls[0] = "javascript:alert(1)".into();
@@ -744,12 +1322,14 @@ mod tests {
         assert!(msg.contains("ice_servers[0]"), "{msg}");
         // The hostile URL bytes MUST NOT appear in the rejection.
         assert!(!msg.contains("javascript"), "{msg}");
-        // State unchanged.
+        // State unchanged; no PC built.
         let sessions = p.sessions().lock_owned().await;
         assert_eq!(
             sessions.get(VALID_SESSION_ID).unwrap().state,
             DesktopSessionState::Initializing,
         );
+        drop(sessions);
+        assert!(!p.has_peer_connection(VALID_SESSION_ID).await);
     }
 
     // -----------------------------------------------------------------
@@ -758,12 +1338,13 @@ mod tests {
 
     #[tokio::test]
     async fn signalling_for_session_a_does_not_change_session_b_state() {
-        let p = WebRtcDesktopTransport::new(HostOs::Linux, Some(VALID_ORG_ID.into()));
+        let (p, _egress) = transport_with_capture();
         let _ = p.remote_control(&rc_req()).await;
         let mut req_b = rc_req();
         req_b.session_id = OTHER_SESSION_ID.into();
         let _ = p.remote_control(&req_b).await;
-        // Drive A to NegotiatingSdp.
+        // Drive A through ProvideIceServers + SendSdpOffer.
+        let _ = p.on_provide_ice_servers(&provide_ice_req()).await;
         let _ = p.on_sdp_offer(&sdp_offer_req()).await;
         let sessions = p.sessions().lock_owned().await;
         assert_eq!(
@@ -774,21 +1355,24 @@ mod tests {
             sessions.get(OTHER_SESSION_ID).unwrap().state,
             DesktopSessionState::Initializing,
         );
+        drop(sessions);
+        assert!(p.has_peer_connection(VALID_SESSION_ID).await);
+        assert!(!p.has_peer_connection(OTHER_SESSION_ID).await);
     }
 
     // -----------------------------------------------------------------
-    // ChangeWindowsSession closes the registry entry (the driver will
-    // rebuild capture in the new session).
+    // ChangeWindowsSession closes the registry entry, the pump, AND
+    // the peer connection.
     // -----------------------------------------------------------------
 
     #[tokio::test]
-    async fn change_windows_session_closes_registry_entry_for_session() {
-        let p = WebRtcDesktopTransport::new(HostOs::Linux, Some(VALID_ORG_ID.into()));
+    async fn change_windows_session_closes_registry_pump_and_pc() {
+        let (p, _egress) = transport_with_capture();
         let _ = p.remote_control(&rc_req()).await;
         let _ = p.on_provide_ice_servers(&provide_ice_req()).await;
+        assert!(p.has_peer_connection(VALID_SESSION_ID).await);
         let r = p.change_windows_session(&change_session_req()).await;
-        assert!(!r.success);
-        assert!(r.error_message.unwrap().contains(DRIVER_PENDING_MESSAGE));
+        assert!(r.success, "{r:?}");
         // Entry is gone — a future SendSdpOffer will fail with the
         // "before RemoteControl" message.
         assert!(p
@@ -797,17 +1381,17 @@ mod tests {
             .await
             .get(VALID_SESSION_ID)
             .is_none());
+        assert!(!p.has_peer_connection(VALID_SESSION_ID).await);
     }
 
     #[tokio::test]
-    async fn restart_screen_caster_does_not_remove_session() {
+    async fn restart_screen_caster_keeps_session_open_and_returns_ok() {
         // RestartScreenCaster is a driver-internal kick; the session
         // entry must survive so the existing signalling can continue.
-        let p = WebRtcDesktopTransport::new(HostOs::Linux, Some(VALID_ORG_ID.into()));
+        let (p, _egress) = transport_with_capture();
         let _ = p.remote_control(&rc_req()).await;
         let r = p.restart_screen_caster(&restart_req()).await;
-        assert!(!r.success);
-        assert!(r.error_message.unwrap().contains(DRIVER_PENDING_MESSAGE));
+        assert!(r.success, "{r:?}");
         assert!(p
             .sessions()
             .lock_owned()
@@ -816,17 +1400,32 @@ mod tests {
             .is_some());
     }
 
+    #[tokio::test]
+    async fn restart_screen_caster_without_remote_control_refuses() {
+        let (p, _egress) = transport_with_capture();
+        let r = p.restart_screen_caster(&restart_req()).await;
+        assert!(!r.success);
+        assert!(r.error_message.unwrap().contains("before RemoteControl"));
+    }
+
     // -----------------------------------------------------------------
     // CtrlAltDel is a stateless ping; no session id, no registry change.
+    // Returns the platform-not-implemented message until the
+    // Windows-side driver lands.
     // -----------------------------------------------------------------
 
     #[tokio::test]
     async fn invoke_ctrl_alt_del_returns_empty_session_id_and_does_not_open_a_session() {
-        let p = WebRtcDesktopTransport::new(HostOs::Linux, Some(VALID_ORG_ID.into()));
+        let (p, _egress) = transport_with_capture();
         let r = p.invoke_ctrl_alt_del(&InvokeCtrlAltDelRequest).await;
         assert!(!r.success);
         assert!(r.session_id.is_empty());
-        assert!(r.error_message.unwrap().contains(DRIVER_PENDING_MESSAGE));
+        let msg = r.error_message.unwrap();
+        assert!(
+            msg.contains(PLATFORM_METHOD_NOT_IMPLEMENTED_MESSAGE),
+            "{msg}"
+        );
+        assert!(msg.contains("InvokeCtrlAltDel"), "{msg}");
         assert!(p.sessions().lock_owned().await.is_empty());
     }
 
@@ -946,13 +1545,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sweep_idle_with_pumps_stops_pumps_for_evicted_sessions() {
+    async fn sweep_idle_with_pumps_stops_pumps_and_closes_pcs_for_evicted_sessions() {
         let p = fast_pump_transport();
         let _ = p.remote_control(&rc_req()).await;
+        let _ = p.on_provide_ice_servers(&provide_ice_req()).await;
         assert!(p.pumps().lock_owned().await.contains_key(VALID_SESSION_ID));
+        assert!(p.has_peer_connection(VALID_SESSION_ID).await);
         // `sweep_idle_with_pumps(now + 1y)` evicts every session
         // (every `last_activity` is older than the timeout) and
-        // must stop every matching pump.
+        // must stop every matching pump and close every matching
+        // peer connection.
         let far_future =
             tokio::time::Instant::now() + std::time::Duration::from_secs(365 * 24 * 3600);
         let evicted = p.sweep_idle_with_pumps(far_future).await;
@@ -961,6 +1563,7 @@ mod tests {
             p.pumps().lock_owned().await.is_empty(),
             "every pump must be removed after sweeping every session"
         );
+        assert!(!p.has_peer_connection(VALID_SESSION_ID).await);
     }
 
     #[tokio::test]

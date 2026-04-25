@@ -129,13 +129,15 @@ pub async fn run(cli: CliArgs) -> Result<(), RuntimeError> {
     // capture / encode driver lands, every request resolves to a
     // structured "not supported on <OS>" failure
     // (`NotSupportedDesktopTransport`). When the workspace is built
-    // with `--features cmremote-agent/webrtc-driver` (slice R7.k), the
-    // runtime swaps in `WebRtcDesktopTransport` — a concrete provider
-    // that owns a per-session state machine and audit-logs every
-    // transition, but stubs the actual peer-connection construction
-    // until the supply-chain audit (slice R7.l) authorises adding the
-    // upstream `webrtc` crate. Either way the dispatcher's
-    // `Arc<dyn DesktopTransportProvider>` slot is unchanged.
+    // with `--features cmremote-agent/webrtc-driver` (slices R7.k +
+    // R7.m), the runtime swaps in `WebRtcDesktopTransport` — a
+    // concrete provider that owns a per-session state machine,
+    // audit-logs every transition, and drives a real
+    // `RTCPeerConnection` via the `webrtc` crate (resolved through
+    // the workspace `[patch.crates-io]` pin to the CMRemote fork at
+    // `v0.17.0-cmremote.1`). The dispatcher's
+    // `Arc<dyn DesktopTransportProvider>` slot is unchanged either
+    // way.
     //
     // Slice R7.n.5 — when `webrtc-driver` is on, inject the per-host
     // `desktop_providers` bundle and a `DiscardingCaptureSink` into

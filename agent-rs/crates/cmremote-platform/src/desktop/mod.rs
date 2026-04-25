@@ -73,8 +73,11 @@ pub mod nv12;
 pub mod providers;
 pub mod pump;
 pub mod session;
+pub mod signalling_egress;
 #[cfg(feature = "webrtc-driver")]
 pub mod webrtc;
+#[cfg(feature = "webrtc-driver")]
+pub(crate) mod webrtc_pc;
 
 pub use consent::{
     ConsentDecision, ConsentPrompter, ConsentRequest, DenyAllConsentPrompter,
@@ -99,6 +102,7 @@ pub use session::{
     CloseReason, DesktopSession, DesktopSessionRegistry, DesktopSessionState, OpenOutcome,
     TransitionOutcome, DEFAULT_IDLE_TIMEOUT,
 };
+pub use signalling_egress::{LoggingSignallingEgress, SignallingEgress};
 #[cfg(feature = "webrtc-driver")]
 pub use webrtc::WebRtcDesktopTransport;
 
