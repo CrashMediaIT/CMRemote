@@ -395,7 +395,10 @@ mod tests {
     #[test]
     fn not_supported_encoder_factory_returns_structured_error_naming_os() {
         let f = NotSupportedEncoderFactory::new(HostOs::Linux);
-        let err = f.build().err().expect("not-supported factory must error");
+        let err = f
+            .build()
+            .err()
+            .expect("not-supported factory must error");
         let s = err.to_string();
         assert!(s.contains("not supported"), "{s}");
         assert!(s.contains("Linux"), "{s}");

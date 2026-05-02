@@ -728,9 +728,11 @@ impl WebRtcDesktopTransport {
             loop {
                 match sender_for_pli.read_rtcp().await {
                     Ok((packets, _)) => {
-                        let saw_pli = packets
-                            .iter()
-                            .any(|p| p.as_any().downcast_ref::<PictureLossIndication>().is_some());
+                        let saw_pli = packets.iter().any(|p| {
+                            p.as_any()
+                                .downcast_ref::<PictureLossIndication>()
+                                .is_some()
+                        });
                         if saw_pli {
                             tracing::debug!(
                                 session_id = %session_id_for_pli,
@@ -1816,7 +1818,9 @@ a=max-message-size:262144\r\n";
     // upstream `webrtc-rs` PC machinery is real.
     // -----------------------------------------------------------------
 
-    use crate::desktop::media::{CapturedFrame, EncoderFactory, VideoEncoder};
+    use crate::desktop::media::{
+        CapturedFrame, EncoderFactory, VideoEncoder,
+    };
 
     /// Stub `VideoEncoder` that emits fixed-size dummy chunks.
     /// Used to exercise the R7.n.6 wiring without depending on a
@@ -1830,10 +1834,8 @@ a=max-message-size:262144\r\n";
         async fn encode(
             &self,
             frame: &CapturedFrame,
-        ) -> Result<
-            crate::desktop::media::EncodedVideoChunk,
-            crate::desktop::media::DesktopMediaError,
-        > {
+        ) -> Result<crate::desktop::media::EncodedVideoChunk, crate::desktop::media::DesktopMediaError>
+        {
             let mut s = self.seen.lock().unwrap();
             *s += 1;
             Ok(crate::desktop::media::EncodedVideoChunk {
@@ -1849,7 +1851,9 @@ a=max-message-size:262144\r\n";
     /// fresh stub encoder.
     struct StubEncoderFactory;
     impl EncoderFactory for StubEncoderFactory {
-        fn build(&self) -> Result<Arc<dyn VideoEncoder>, crate::desktop::media::DesktopMediaError> {
+        fn build(
+            &self,
+        ) -> Result<Arc<dyn VideoEncoder>, crate::desktop::media::DesktopMediaError> {
             Ok(Arc::new(StubEncoder::default()))
         }
     }
@@ -1904,9 +1908,8 @@ a=max-message-size:262144\r\n";
             .expect("PC built by on_provide_ice_servers");
         let transceivers = pc.get_transceivers().await;
         assert!(
-            transceivers
-                .iter()
-                .any(|t| t.kind() == webrtc::rtp_transceiver::rtp_codec::RTPCodecType::Video),
+            transceivers.iter().any(|t| t.kind()
+                == webrtc::rtp_transceiver::rtp_codec::RTPCodecType::Video),
             "PC must carry a video transceiver after attach_video_track ran",
         );
     }
@@ -1955,7 +1958,8 @@ a=max-message-size:262144\r\n";
             pc.get_transceivers()
                 .await
                 .iter()
-                .all(|t| t.kind() != webrtc::rtp_transceiver::rtp_codec::RTPCodecType::Video),
+                .all(|t| t.kind()
+                    != webrtc::rtp_transceiver::rtp_codec::RTPCodecType::Video),
             "PC must NOT carry a video transceiver when the encoder factory is NotSupported",
         );
     }
