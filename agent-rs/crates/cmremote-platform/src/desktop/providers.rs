@@ -50,7 +50,9 @@ use super::input::{
     Clipboard, KeyboardInput, MouseInput, NotSupportedClipboard, NotSupportedKeyboardInput,
     NotSupportedMouseInput,
 };
-use super::media::{DesktopCapturer, NotSupportedDesktopCapturer};
+use super::media::{
+    DesktopCapturer, EncoderFactory, NotSupportedDesktopCapturer, NotSupportedEncoderFactory,
+};
 use crate::HostOs;
 
 /// Owned bundle of the four desktop-capability providers for one
@@ -64,6 +66,12 @@ use crate::HostOs;
 pub struct DesktopProviders {
     /// Captures the host desktop as a sequence of [`super::media::CapturedFrame`]s.
     pub capturer: Arc<dyn DesktopCapturer>,
+    /// Builds a fresh per-session video encoder (slice R7.n.6).
+    /// Defaults to [`NotSupportedEncoderFactory`] in the
+    /// `not_supported_for*` constructors so the WebRTC driver
+    /// negotiates the peer connection without a video track on
+    /// hosts that have no encoder driver registered.
+    pub encoder_factory: Arc<dyn EncoderFactory>,
     /// Injects pointer events on the host.
     pub mouse: Arc<dyn MouseInput>,
     /// Injects keyboard events on the host.
@@ -86,6 +94,7 @@ impl DesktopProviders {
     pub fn not_supported_for(host_os: HostOs) -> Self {
         Self {
             capturer: Arc::new(NotSupportedDesktopCapturer::new(host_os)),
+            encoder_factory: Arc::new(NotSupportedEncoderFactory::new(host_os)),
             mouse: Arc::new(NotSupportedMouseInput::new(host_os)),
             keyboard: Arc::new(NotSupportedKeyboardInput::new(host_os)),
             clipboard: Arc::new(NotSupportedClipboard::new(host_os)),
@@ -110,6 +119,7 @@ impl std::fmt::Debug for DesktopProviders {
         // clipboard handles.
         f.debug_struct("DesktopProviders")
             .field("capturer", &"<dyn DesktopCapturer>")
+            .field("encoder_factory", &"<dyn EncoderFactory>")
             .field("mouse", &"<dyn MouseInput>")
             .field("keyboard", &"<dyn KeyboardInput>")
             .field("clipboard", &"<dyn Clipboard>")
@@ -128,6 +138,14 @@ mod tests {
 
         // Capturer
         let e = p.capturer.capture_next_frame().await.unwrap_err();
+        assert!(e.to_string().contains("Linux"), "{e}");
+
+        // Encoder factory
+        let e = p
+            .encoder_factory
+            .build()
+            .err()
+            .expect("not-supported factory must error");
         assert!(e.to_string().contains("Linux"), "{e}");
 
         // Mouse

@@ -51,6 +51,8 @@
 //!    can renegotiate with the viewer; silently emitting zero-byte
 //!    chunks would deadlock the receiver.
 
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use thiserror::Error;
 
@@ -244,6 +246,75 @@ impl VideoEncoder for NotSupportedVideoEncoder {
     }
 }
 
+// ---------------------------------------------------------------------------
+// EncoderFactory — slice R7.n.6.
+// ---------------------------------------------------------------------------
+
+/// Builds a fresh [`VideoEncoder`] for a single desktop session.
+///
+/// The slice R7.n.6 WebRTC driver wires capture frames into a
+/// per-session `RTCRtpSender` track. Each session needs its **own**
+/// encoder because every concrete encoder carries per-session state
+/// (frame counters, IDR flags, NAL-unit headers, hardware MFT
+/// instance) that cannot be shared across two viewers without
+/// corrupting the bitstream of either. The factory is therefore the
+/// only stable seam the driver pokes at when a peer connection is
+/// built.
+///
+/// Implementations MUST be cheap — `build()` is called inline on the
+/// signalling path and is expected to return in well under a frame
+/// interval. Per-OS factories typically just clone an
+/// [`Arc<EncoderConfig>`] and hand it to a `new(config)` constructor.
+///
+/// ## Failure mode
+///
+/// `build` returns [`DesktopMediaError::NotSupported`] when no
+/// encoder is registered for the host. The driver then negotiates
+/// the peer connection without a video track — the operator gets a
+/// connected RTP transport with no media, exactly the same state as
+/// before slice R7.n.6 landed. Any other error variant signals an
+/// in-flight construction failure (e.g. Media Foundation refused to
+/// instantiate the H.264 MFT) and is logged at `warn!` by the
+/// driver before falling back to the no-track path.
+pub trait EncoderFactory: Send + Sync {
+    /// Build a fresh encoder for one session. Returns
+    /// [`DesktopMediaError::NotSupported`] when no concrete encoder
+    /// is available on the host (e.g. non-Windows fallbacks today).
+    fn build(&self) -> Result<Arc<dyn VideoEncoder>, DesktopMediaError>;
+}
+
+/// Default factory used by the runtime when no concrete encoder
+/// driver is registered. Always returns
+/// [`DesktopMediaError::NotSupported`] naming the host OS — never
+/// constructs an encoder, never allocates.
+pub struct NotSupportedEncoderFactory {
+    host_os: HostOs,
+}
+
+impl NotSupportedEncoderFactory {
+    /// Build a factory that names `host_os` in its error.
+    pub fn new(host_os: HostOs) -> Self {
+        Self { host_os }
+    }
+
+    /// Build a factory that names the current host's OS.
+    pub fn for_current_host() -> Self {
+        Self::new(HostOs::current())
+    }
+}
+
+impl Default for NotSupportedEncoderFactory {
+    fn default() -> Self {
+        Self::for_current_host()
+    }
+}
+
+impl EncoderFactory for NotSupportedEncoderFactory {
+    fn build(&self) -> Result<Arc<dyn VideoEncoder>, DesktopMediaError> {
+        Err(DesktopMediaError::NotSupported(self.host_os))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -319,5 +390,28 @@ mod tests {
         let s = e.to_string();
         assert!(s.contains("desktop media I/O error"));
         assert!(s.contains("device 4 not present"));
+    }
+
+    #[test]
+    fn not_supported_encoder_factory_returns_structured_error_naming_os() {
+        let f = NotSupportedEncoderFactory::new(HostOs::Linux);
+        let err = f
+            .build()
+            .err()
+            .expect("not-supported factory must error");
+        let s = err.to_string();
+        assert!(s.contains("not supported"), "{s}");
+        assert!(s.contains("Linux"), "{s}");
+    }
+
+    #[test]
+    fn not_supported_encoder_factory_default_uses_current_host() {
+        // Smoke-check that `Default` does not panic.
+        let _: NotSupportedEncoderFactory = Default::default();
+    }
+
+    #[test]
+    fn encoder_factory_is_object_safe() {
+        let _f: Box<dyn EncoderFactory> = Box::new(NotSupportedEncoderFactory::for_current_host());
     }
 }

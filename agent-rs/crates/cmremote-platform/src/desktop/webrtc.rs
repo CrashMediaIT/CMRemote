@@ -89,16 +89,19 @@ use webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState;
 use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
 use webrtc::peer_connection::RTCPeerConnection;
 
+use super::encoder_sink::EncoderCaptureSink;
 use super::guards;
 use super::providers::DesktopProviders;
 use super::pump::{
     CapturePump, CapturePumpConfig, CaptureSink, CaptureStatsSnapshot, DiscardingCaptureSink,
+    LateBoundCaptureSink,
 };
 use super::session::{CloseReason, DesktopSessionRegistry, DesktopSessionState};
 use super::signalling_egress::{LoggingSignallingEgress, SignallingEgress};
 use super::webrtc_pc::{
     translate_ice_candidate, translate_ice_config, PeerConnectionFactory, PeerConnectionRegistry,
 };
+use super::webrtc_track::{new_h264_video_track, WebRtcVideoTrackSink};
 use super::DesktopTransportProvider;
 use crate::HostOs;
 
@@ -117,17 +120,23 @@ pub struct WebRtcDesktopTransport {
     host_os: HostOs,
     expected_org_id: Option<String>,
     sessions: Arc<Mutex<DesktopSessionRegistry>>,
-    /// Per-host bundle of capture / input providers (slice R7.n.4).
-    /// The pump reads `providers.capturer`; the future track-builder
-    /// will read `providers.mouse` / `providers.keyboard` /
-    /// `providers.clipboard` for the input data-channel.
+    /// Per-host bundle of capture / input / encoder providers
+    /// (slice R7.n.4 + R7.n.6). The pump reads `providers.capturer`;
+    /// the per-PC track-builder reads `providers.encoder_factory`;
+    /// the future input data-channel will read
+    /// `providers.mouse` / `providers.keyboard` / `providers.clipboard`.
     providers: Arc<DesktopProviders>,
-    /// Sink every running pump pushes captured frames into. Until
-    /// the encoder lands (slice R7.n.6 — Media Foundation), the
-    /// default sink is [`DiscardingCaptureSink`] which counts +
-    /// drops frames. Stored as one shared `Arc` so every per-session
-    /// pump observes the same downstream stats.
-    sink: Arc<dyn CaptureSink>,
+    /// Default downstream every per-session [`LateBoundCaptureSink`]
+    /// is initially bound to. Production injects
+    /// [`DiscardingCaptureSink`] (frames before the PC is built are
+    /// counted + dropped); tests inject a counting / observer sink
+    /// so they can assert on what the pump produced before
+    /// negotiation finished. Once [`Self::build_peer_connection`]
+    /// runs and the per-OS encoder is available, the matching
+    /// per-session sink is rebound to a chained
+    /// `EncoderCaptureSink` → [`WebRtcVideoTrackSink`]; on PC close
+    /// the sink falls back to this default.
+    default_sink: Arc<dyn CaptureSink>,
     /// Pump tunables — pinned at construction so renegotiation
     /// can't smuggle a hostile FPS in through the wire.
     pump_config: CapturePumpConfig,
@@ -139,6 +148,13 @@ pub struct WebRtcDesktopTransport {
     /// registry struct because the registry is `pub` and consumed
     /// by tests that don't want a Tokio runtime dependency.
     pumps: Arc<Mutex<HashMap<String, CapturePump>>>,
+    /// Slice R7.n.6 — per-session [`LateBoundCaptureSink`] each
+    /// pump pushes frames into. Initially bound to
+    /// [`Self::default_sink`]; rebound to the encoder→track chain
+    /// when the matching peer connection is built. Maintained in
+    /// lock-step with [`Self::pumps`]: every pump entry has a
+    /// matching sink entry, and every close path removes both.
+    session_sinks: Arc<Mutex<HashMap<String, Arc<LateBoundCaptureSink>>>>,
     /// Slice R7.m — shared `webrtc-rs` API factory. Built once at
     /// construction; one `MediaEngine` is registered with the
     /// upstream default codec set and shared across every
@@ -212,9 +228,10 @@ impl WebRtcDesktopTransport {
             expected_org_id,
             sessions: Arc::new(Mutex::new(DesktopSessionRegistry::with_default_timeout())),
             providers: Arc::new(DesktopProviders::not_supported_for(host_os)),
-            sink: Arc::new(DiscardingCaptureSink::new()),
+            default_sink: Arc::new(DiscardingCaptureSink::new()),
             pump_config: CapturePumpConfig::default(),
             pumps: Arc::new(Mutex::new(HashMap::new())),
+            session_sinks: Arc::new(Mutex::new(HashMap::new())),
             pc_factory,
             peer_connections: Arc::new(PeerConnectionRegistry::new()),
             pc_alive: Arc::new(Mutex::new(HashMap::new())),
@@ -278,9 +295,10 @@ impl WebRtcDesktopTransport {
             expected_org_id,
             sessions: Arc::new(Mutex::new(DesktopSessionRegistry::with_default_timeout())),
             providers,
-            sink,
+            default_sink: sink,
             pump_config,
             pumps: Arc::new(Mutex::new(HashMap::new())),
+            session_sinks: Arc::new(Mutex::new(HashMap::new())),
             pc_factory,
             peer_connections: Arc::new(PeerConnectionRegistry::new()),
             pc_alive: Arc::new(Mutex::new(HashMap::new())),
@@ -299,6 +317,15 @@ impl WebRtcDesktopTransport {
     /// registry, and so tests can assert pump lifecycle.
     pub fn pumps(&self) -> Arc<Mutex<HashMap<String, CapturePump>>> {
         self.pumps.clone()
+    }
+
+    /// Borrow the per-session capture-sink map. Exposed so tests
+    /// can assert that the slice R7.n.6 lifecycle (PC build →
+    /// `bind`, PC close → unbind/rebind to default) holds, and so
+    /// the runtime can audit how many frames were dropped before
+    /// the PC came up via [`LateBoundCaptureSink::dropped_before_bind`].
+    pub fn session_sinks(&self) -> Arc<Mutex<HashMap<String, Arc<LateBoundCaptureSink>>>> {
+        self.session_sinks.clone()
     }
 
     /// Stable plain-data snapshot of the live capture stats for one
@@ -325,10 +352,34 @@ impl WebRtcDesktopTransport {
     /// Spawn a fresh pump for `session_id`, replacing (and stopping)
     /// any existing pump for the same id. Awaits the prior pump's
     /// abort-and-join so callers observe a clean handoff.
+    ///
+    /// Slice R7.n.6 — also creates a per-session
+    /// [`LateBoundCaptureSink`] (initially bound to
+    /// [`Self::default_sink`]) and stores it in
+    /// [`Self::session_sinks`] so [`Self::build_peer_connection`]
+    /// can later swap in the encoder→track downstream without
+    /// restarting the pump.
     async fn spawn_pump(&self, session_id: &str) {
+        // Build the per-session sink first and bind it to the
+        // default downstream so any frame the pump produces before
+        // the PC is built is forwarded to the configured fallback
+        // (in production: `DiscardingCaptureSink`; in tests: the
+        // observer sink the test injected).
+        let session_sink = Arc::new(LateBoundCaptureSink::new());
+        session_sink.bind(self.default_sink.clone());
+        let prior_sink = {
+            let mut g = self.session_sinks.lock().await;
+            g.insert(session_id.to_string(), session_sink.clone())
+        };
+        if let Some(prior_sink) = prior_sink {
+            // Unbind the old sink so any frame a still-in-flight
+            // pump produces drops cleanly rather than racing the
+            // new sink's downstream.
+            prior_sink.unbind();
+        }
         let pump = CapturePump::start(
             self.providers.capturer.clone(),
-            self.sink.clone(),
+            session_sink as Arc<dyn CaptureSink>,
             self.pump_config,
         );
         let prior = {
@@ -346,12 +397,26 @@ impl WebRtcDesktopTransport {
     }
 
     /// Stop and remove the pump for `session_id`. No-op if no pump
-    /// was registered for that id.
+    /// was registered for that id. Also drops the matching
+    /// per-session sink so the encoder + track bound into it are
+    /// released along with the pump.
     async fn stop_pump(&self, session_id: &str, reason: &'static str) {
         let pump = {
             let mut g = self.pumps.lock().await;
             g.remove(session_id)
         };
+        // Drop the matching late-bound sink so the encoder + track
+        // it owns are released. Done after the pump is removed
+        // from the map so a still-in-flight `consume` call from
+        // the pump's task observes the unbind / drop sequence
+        // cleanly.
+        let session_sink = {
+            let mut g = self.session_sinks.lock().await;
+            g.remove(session_id)
+        };
+        if let Some(s) = session_sink {
+            s.unbind();
+        }
         if let Some(pump) = pump {
             tracing::info!(
                 session_id = %session_id,
@@ -373,12 +438,25 @@ impl WebRtcDesktopTransport {
     /// so the late-arriving `Closed` state-change event from the
     /// PC's event handler does not stomp a freshly-opened
     /// replacement session.
+    ///
+    /// Slice R7.n.6 — also rebinds the per-session capture sink
+    /// back to [`Self::default_sink`] so the still-running pump
+    /// (if any) returns to drop-and-count behaviour rather than
+    /// pushing into a track whose RTP packetizer is being torn
+    /// down.
     async fn close_peer_connection(&self, session_id: &str, reason: &'static str) {
         // Clear the alive flag first — every state-change event the
         // closed PC fires after this point will short-circuit out
         // of the handler's registry mutation.
         if let Some(flag) = self.pc_alive.lock().await.remove(session_id) {
             flag.store(false, Ordering::SeqCst);
+        }
+        // Rebind the per-session sink to the default downstream so
+        // frames captured between PC close and the next PC build
+        // (or session close) are forwarded to the configured
+        // fallback rather than the soon-to-be-dropped track sink.
+        if let Some(s) = self.session_sinks.lock().await.get(session_id) {
+            s.bind(self.default_sink.clone());
         }
         if let Some(pc) = self.peer_connections.remove(session_id).await {
             if let Err(e) = pc.close().await {
@@ -537,7 +615,130 @@ impl WebRtcDesktopTransport {
                 );
             }
         }
+
+        // Slice R7.n.6 — wire the per-session capture pump into a
+        // freshly-built H.264 video track on this PC. The encoder
+        // factory may report `NotSupported` (e.g. on hosts without
+        // a registered encoder driver); in that case we log a
+        // structured `info!` and leave the per-session sink bound
+        // to the default downstream so the operator gets a
+        // connected RTP transport with no media (the same
+        // behaviour as before R7.n.6) instead of a panic.
+        self.attach_video_track(session_id, &pc).await;
+
         Ok(pc)
+    }
+
+    /// Build an H.264 [`webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSample`],
+    /// attach it to `pc`, build the per-session encoder via
+    /// [`DesktopProviders::encoder_factory`], and rebind the
+    /// matching [`LateBoundCaptureSink`] to the chained
+    /// `EncoderCaptureSink` → [`WebRtcVideoTrackSink`].
+    ///
+    /// All failure paths are non-fatal: a `NotSupported` encoder,
+    /// a missing per-session sink (e.g. the pump never spawned —
+    /// should not happen in practice), or an `add_track` rejection
+    /// all log a structured event and leave the PC in a usable
+    /// (but trackless) state. The driver's signalling methods
+    /// continue to negotiate SDP and trickle ICE; the operator
+    /// just sees no video on the viewer side until the encoder
+    /// driver is configured.
+    async fn attach_video_track(&self, session_id: &str, pc: &Arc<RTCPeerConnection>) {
+        let encoder = match self.providers.encoder_factory.build() {
+            Ok(e) => e,
+            Err(e) => {
+                tracing::info!(
+                    session_id = %session_id,
+                    error = %e,
+                    event = "video-track-not-attached",
+                    "no video encoder available for this host; \
+                     peer connection will negotiate without a media track",
+                );
+                return;
+            }
+        };
+        let track = new_h264_video_track();
+        let sender = match pc.add_track(track.clone()).await {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!(
+                    session_id = %session_id,
+                    error = %e,
+                    event = "video-track-add-failed",
+                    "RTCPeerConnection::add_track returned error",
+                );
+                return;
+            }
+        };
+        let track_sink: Arc<dyn super::encoder_sink::EncodedChunkSink> =
+            Arc::new(WebRtcVideoTrackSink::new(track));
+        // Hold the concrete `EncoderCaptureSink` through an `Arc`
+        // so the PLI-listener task can call `request_keyframe()`
+        // directly on the encoder without going through a
+        // `CaptureSink` trait downcast. The same `Arc` doubles as
+        // the `Arc<dyn CaptureSink>` we `bind` into the late-bound
+        // sink below.
+        let chained = Arc::new(EncoderCaptureSink::new(encoder, track_sink));
+        // Rebind the per-session sink so the running pump now
+        // pushes captured frames through the encoder and onto the
+        // RTP track. If the per-session sink is missing (the pump
+        // somehow was not spawned) we log and bail — the PC stays
+        // attached to the track but the track will never receive
+        // samples.
+        let bound = {
+            let g = self.session_sinks.lock().await;
+            g.get(session_id).cloned()
+        };
+        match bound {
+            Some(sink) => sink.bind(chained.clone() as Arc<dyn CaptureSink>),
+            None => {
+                tracing::warn!(
+                    session_id = %session_id,
+                    event = "video-track-no-session-sink",
+                    "no per-session capture sink registered; \
+                     video track will not receive samples",
+                );
+                return;
+            }
+        }
+        // Spawn a best-effort RTCP-reader task that forwards every
+        // PLI from the viewer to the encoder so the next frame is
+        // a keyframe. Loops until `read_rtcp` returns an error
+        // (the sender was stopped, the PC was closed, …) which is
+        // the canonical way to clean up these per-PC tasks in the
+        // upstream `webrtc-rs` examples.
+        let chained_for_pli = chained;
+        let session_id_for_pli = session_id.to_string();
+        let sender_for_pli = sender;
+        tokio::spawn(async move {
+            use webrtc::rtcp::payload_feedbacks::picture_loss_indication::PictureLossIndication;
+            loop {
+                match sender_for_pli.read_rtcp().await {
+                    Ok((packets, _)) => {
+                        let saw_pli = packets.iter().any(|p| {
+                            p.as_any()
+                                .downcast_ref::<PictureLossIndication>()
+                                .is_some()
+                        });
+                        if saw_pli {
+                            tracing::debug!(
+                                session_id = %session_id_for_pli,
+                                event = "rtcp-pli-received",
+                                "viewer requested a keyframe via PLI",
+                            );
+                            chained_for_pli.request_keyframe();
+                        }
+                    }
+                    Err(_) => {
+                        // `read_rtcp` returns `ErrClosedPipe` once
+                        // the sender is stopped (the PC was
+                        // closed). Exit the loop quietly — the
+                        // close path logs the teardown.
+                        return;
+                    }
+                }
+            }
+        });
     }
 
     /// Sweep the session registry for idle sessions, then stop any
@@ -1591,5 +1792,210 @@ a=max-message-size:262144\r\n";
         assert!(!r.success);
         assert!(p.pumps().lock_owned().await.is_empty());
         assert!(p.sessions().lock_owned().await.is_empty());
+    }
+
+    // -----------------------------------------------------------------
+    // Slice R7.n.6 — capture-pump → encoder → RTP-track wiring.
+    //
+    // The driver's job in this slice is to (a) attach a per-session
+    // H.264 video track to the freshly-built `RTCPeerConnection` and
+    // (b) rebind the per-session `LateBoundCaptureSink` to the
+    // chained encoder→track sink so the running pump's frames flow
+    // end-to-end. We exercise that with a stub encoder factory; the
+    // upstream `webrtc-rs` PC machinery is real.
+    // -----------------------------------------------------------------
+
+    use crate::desktop::media::{
+        CapturedFrame, EncoderFactory, VideoEncoder,
+    };
+
+    /// Stub `VideoEncoder` that emits fixed-size dummy chunks.
+    /// Used to exercise the R7.n.6 wiring without depending on a
+    /// per-OS encoder driver.
+    #[derive(Default)]
+    struct StubEncoder {
+        seen: std::sync::Mutex<u64>,
+    }
+    #[async_trait]
+    impl VideoEncoder for StubEncoder {
+        async fn encode(
+            &self,
+            frame: &CapturedFrame,
+        ) -> Result<crate::desktop::media::EncodedVideoChunk, crate::desktop::media::DesktopMediaError>
+        {
+            let mut s = self.seen.lock().unwrap();
+            *s += 1;
+            Ok(crate::desktop::media::EncodedVideoChunk {
+                bytes: vec![0u8; 16],
+                timestamp_micros: frame.timestamp_micros,
+                is_keyframe: *s == 1,
+            })
+        }
+        fn request_keyframe(&self) {}
+    }
+
+    /// Stub `EncoderFactory` whose every `build()` call returns a
+    /// fresh stub encoder.
+    struct StubEncoderFactory;
+    impl EncoderFactory for StubEncoderFactory {
+        fn build(
+            &self,
+        ) -> Result<Arc<dyn VideoEncoder>, crate::desktop::media::DesktopMediaError> {
+            Ok(Arc::new(StubEncoder::default()))
+        }
+    }
+
+    /// Build a transport whose providers carry a [`StubEncoderFactory`]
+    /// so the R7.n.6 attach-track path takes the success branch
+    /// (rather than the `NotSupported` log-and-skip fallback).
+    fn transport_with_stub_encoder() -> WebRtcDesktopTransport {
+        let mut providers = DesktopProviders::not_supported_for(HostOs::Linux);
+        providers.encoder_factory = Arc::new(StubEncoderFactory);
+        let providers = Arc::new(providers);
+        let sink: Arc<dyn CaptureSink> = Arc::new(DiscardingCaptureSink::new());
+        WebRtcDesktopTransport::with_providers(
+            HostOs::Linux,
+            Some(VALID_ORG_ID.into()),
+            providers,
+            sink,
+            CapturePumpConfig::default(),
+        )
+    }
+
+    #[tokio::test]
+    async fn remote_control_creates_late_bound_sink_initially_pointing_at_default() {
+        // The per-session sink is created at RemoteControl time,
+        // bound to the default downstream so frames captured before
+        // the PC is built are still observable to the test sink.
+        let p = transport_with_stub_encoder();
+        let _ = p.remote_control(&rc_req()).await;
+        let sinks = p.session_sinks().lock_owned().await;
+        let s = sinks
+            .get(VALID_SESSION_ID)
+            .expect("session sink registered alongside pump");
+        assert!(
+            s.is_bound(),
+            "newly-spawned per-session sink must be bound to the default downstream",
+        );
+    }
+
+    #[tokio::test]
+    async fn build_peer_connection_attaches_h264_video_transceiver_to_pc() {
+        let p = transport_with_stub_encoder();
+        let _ = p.remote_control(&rc_req()).await;
+        // Drive ProvideIceServers to build the PC.
+        let r = p.on_provide_ice_servers(&provide_ice_req()).await;
+        assert!(r.success, "{r:?}");
+        // The PC must now exist *and* carry a video transceiver
+        // for the freshly-attached H.264 track.
+        let pc = p
+            .peer_connections
+            .get(VALID_SESSION_ID)
+            .await
+            .expect("PC built by on_provide_ice_servers");
+        let transceivers = pc.get_transceivers().await;
+        assert!(
+            transceivers.iter().any(|t| t.kind()
+                == webrtc::rtp_transceiver::rtp_codec::RTPCodecType::Video),
+            "PC must carry a video transceiver after attach_video_track ran",
+        );
+    }
+
+    #[tokio::test]
+    async fn build_peer_connection_keeps_session_sink_bound_after_rebind() {
+        // Before PC build the per-session sink points at the
+        // default downstream. After PC build, the sink is rebound
+        // to the chained encoder→track sink. Either way the sink
+        // must report `is_bound() == true` and the
+        // `dropped_before_bind` counter must not have advanced
+        // (frames flowing during the rebind window go to the
+        // default downstream, never silently dropped).
+        let p = transport_with_stub_encoder();
+        let _ = p.remote_control(&rc_req()).await;
+        let s = p
+            .session_sinks()
+            .lock_owned()
+            .await
+            .get(VALID_SESSION_ID)
+            .expect("session sink registered")
+            .clone();
+        assert!(s.is_bound());
+        let dropped_before = s.dropped_before_bind();
+        let r = p.on_provide_ice_servers(&provide_ice_req()).await;
+        assert!(r.success, "{r:?}");
+        assert!(s.is_bound());
+        assert_eq!(s.dropped_before_bind(), dropped_before);
+    }
+
+    #[tokio::test]
+    async fn build_peer_connection_with_not_supported_encoder_leaves_pc_trackless() {
+        // The default `NotSupportedEncoderFactory` reports no
+        // encoder; the driver must fall back to negotiating the
+        // PC without a video track rather than panicking.
+        let p = fast_pump_transport(); // uses NotSupportedEncoderFactory
+        let _ = p.remote_control(&rc_req()).await;
+        let r = p.on_provide_ice_servers(&provide_ice_req()).await;
+        assert!(r.success, "{r:?}");
+        let pc = p
+            .peer_connections
+            .get(VALID_SESSION_ID)
+            .await
+            .expect("PC built by on_provide_ice_servers");
+        assert!(
+            pc.get_transceivers()
+                .await
+                .iter()
+                .all(|t| t.kind()
+                    != webrtc::rtp_transceiver::rtp_codec::RTPCodecType::Video),
+            "PC must NOT carry a video transceiver when the encoder factory is NotSupported",
+        );
+    }
+
+    #[tokio::test]
+    async fn change_windows_session_unbinds_and_drops_per_session_sink() {
+        // After the PC is built the per-session sink points at the
+        // chained downstream. After `change_windows_session` runs,
+        // the session is closed: the sink is unbound and removed
+        // from the per-session map.
+        let p = transport_with_stub_encoder();
+        let _ = p.remote_control(&rc_req()).await;
+        let _ = p.on_provide_ice_servers(&provide_ice_req()).await;
+        // Capture the per-session sink Arc so we can observe its
+        // state after the close path drops the map entry.
+        let s = p
+            .session_sinks()
+            .lock_owned()
+            .await
+            .get(VALID_SESSION_ID)
+            .expect("session sink registered")
+            .clone();
+        let _ = p.change_windows_session(&change_session_req()).await;
+        assert!(
+            !s.is_bound(),
+            "stop_pump must unbind the per-session sink when the session is closed",
+        );
+        assert!(p
+            .session_sinks()
+            .lock_owned()
+            .await
+            .get(VALID_SESSION_ID)
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn distinct_sessions_get_distinct_session_sinks() {
+        let p = transport_with_stub_encoder();
+        let _ = p.remote_control(&rc_req()).await;
+        let mut second = rc_req();
+        second.session_id = OTHER_SESSION_ID.into();
+        let _ = p.remote_control(&second).await;
+        let sinks = p.session_sinks().lock_owned().await;
+        assert_eq!(sinks.len(), 2);
+        assert!(sinks.contains_key(VALID_SESSION_ID));
+        assert!(sinks.contains_key(OTHER_SESSION_ID));
+        // The two sinks are distinct `Arc`s.
+        let a = sinks.get(VALID_SESSION_ID).unwrap();
+        let b = sinks.get(OTHER_SESSION_ID).unwrap();
+        assert!(!Arc::ptr_eq(a, b));
     }
 }

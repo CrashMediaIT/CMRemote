@@ -78,6 +78,8 @@ pub mod signalling_egress;
 pub mod webrtc;
 #[cfg(feature = "webrtc-driver")]
 pub(crate) mod webrtc_pc;
+#[cfg(feature = "webrtc-driver")]
+pub mod webrtc_track;
 
 pub use consent::{
     ConsentDecision, ConsentPrompter, ConsentRequest, DenyAllConsentPrompter,
@@ -89,14 +91,15 @@ pub use input::{
     NotSupportedClipboard, NotSupportedKeyboardInput, NotSupportedMouseInput, ScrollAxis,
 };
 pub use media::{
-    CapturedFrame, DesktopCapturer, DesktopMediaError, EncodedVideoChunk,
-    NotSupportedDesktopCapturer, NotSupportedVideoEncoder, VideoEncoder,
+    CapturedFrame, DesktopCapturer, DesktopMediaError, EncodedVideoChunk, EncoderFactory,
+    NotSupportedDesktopCapturer, NotSupportedEncoderFactory, NotSupportedVideoEncoder,
+    VideoEncoder,
 };
 pub use nv12::{bgra_to_nv12, Nv12Frame};
 pub use providers::DesktopProviders;
 pub use pump::{
     CapturePump, CapturePumpConfig, CaptureSink, CaptureStats, CaptureStatsSnapshot,
-    DiscardingCaptureSink,
+    DiscardingCaptureSink, LateBoundCaptureSink,
 };
 pub use session::{
     CloseReason, DesktopSession, DesktopSessionRegistry, DesktopSessionState, OpenOutcome,
@@ -105,6 +108,10 @@ pub use session::{
 pub use signalling_egress::{LoggingSignallingEgress, SignallingEgress};
 #[cfg(feature = "webrtc-driver")]
 pub use webrtc::WebRtcDesktopTransport;
+#[cfg(feature = "webrtc-driver")]
+pub use webrtc_track::{
+    new_h264_video_track, WebRtcVideoTrackSink, VIDEO_STREAM_ID, VIDEO_TRACK_ID,
+};
 
 /// Async trait every desktop-transport backend implements.
 ///
