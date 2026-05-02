@@ -384,6 +384,181 @@ public class AgentHub : Hub<IAgentHubClient>
         return _viewerHubContext.Clients.Clients(viewerIDs).SendAsync("ConnectionFailed");
     }
 
+    /// <summary>
+    /// Slice R7.n.7 — server-bound counterpart of
+    /// <see cref="IAgentHubClient.SendSdpAnswer"/>. The Rust agent's
+    /// WebRTC driver invokes this with a locally-produced SDP answer
+    /// once it has accepted a viewer's offer; the hub validates that
+    /// the answer belongs to the calling agent's own device + an
+    /// expected viewer in the session's viewer list, then forwards
+    /// the DTO to the viewer's SignalR circuit as a
+    /// <c>ReceiveSdpAnswer</c> client method invocation.
+    /// </summary>
+    public async Task SendSdpAnswer(AgentSdpAnswerDto answer)
+    {
+        if (Device is null || answer is null)
+        {
+            return;
+        }
+
+        if (!TryAuthorizeViewerSignalling(
+                answer.SessionId,
+                answer.ViewerConnectionId,
+                out var viewerConnectionId))
+        {
+            return;
+        }
+
+        // Reject SDP bodies that exceed the wire-side cap. Mirrors
+        // `cmremote_wire::desktop::signalling::MAX_SDP_BYTES` (16 KiB)
+        // — well above any legitimate browser-emitted answer and
+        // well below the point where a malformed body could be used
+        // as an amplification vector.
+        if (answer.Sdp.Length > AgentSignallingLimits.MaxSdpBytes)
+        {
+            _logger.LogWarning(
+                "Rejecting SendSdpAnswer from device {DeviceId}: SDP body {Length} bytes exceeds {Cap} byte cap.",
+                Device.ID,
+                answer.Sdp.Length,
+                AgentSignallingLimits.MaxSdpBytes);
+            return;
+        }
+
+        await _viewerHubContext.Clients
+            .Client(viewerConnectionId)
+            .SendAsync("ReceiveSdpAnswer", answer);
+    }
+
+    /// <summary>
+    /// Slice R7.n.7 — server-bound counterpart of
+    /// <see cref="IAgentHubClient.SendIceCandidate"/>. The Rust
+    /// agent's WebRTC driver invokes this once per locally-trickled
+    /// ICE candidate (and once with an empty candidate string +
+    /// <c>null</c> mid / mline index for the RFC 8838
+    /// end-of-candidates marker). The hub validates the same
+    /// session-ownership invariants as <see cref="SendSdpAnswer"/>
+    /// and forwards as a <c>ReceiveIceCandidate</c> client method
+    /// invocation.
+    /// </summary>
+    public async Task SendIceCandidate(AgentIceCandidateDto candidate)
+    {
+        if (Device is null || candidate is null)
+        {
+            return;
+        }
+
+        if (!TryAuthorizeViewerSignalling(
+                candidate.SessionId,
+                candidate.ViewerConnectionId,
+                out var viewerConnectionId))
+        {
+            return;
+        }
+
+        // Cap the candidate string at the wire-side limit. Mirrors
+        // `cmremote_wire::desktop::signalling::MAX_SIGNALLING_STRING_LEN`
+        // (1 KiB).
+        if (candidate.Candidate.Length > AgentSignallingLimits.MaxSignallingStringLen)
+        {
+            _logger.LogWarning(
+                "Rejecting SendIceCandidate from device {DeviceId}: candidate {Length} bytes exceeds {Cap} byte cap.",
+                Device.ID,
+                candidate.Candidate.Length,
+                AgentSignallingLimits.MaxSignallingStringLen);
+            return;
+        }
+        if (candidate.SdpMid is { Length: var midLen } &&
+            midLen > AgentSignallingLimits.MaxSignallingStringLen)
+        {
+            _logger.LogWarning(
+                "Rejecting SendIceCandidate from device {DeviceId}: SdpMid {Length} bytes exceeds {Cap} byte cap.",
+                Device.ID,
+                midLen,
+                AgentSignallingLimits.MaxSignallingStringLen);
+            return;
+        }
+
+        await _viewerHubContext.Clients
+            .Client(viewerConnectionId)
+            .SendAsync("ReceiveIceCandidate", candidate);
+    }
+
+    /// <summary>
+    /// Cross-cutting authorisation helper for the two agent → server
+    /// signalling methods (<see cref="SendSdpAnswer"/> /
+    /// <see cref="SendIceCandidate"/>). Validates that:
+    /// <list type="bullet">
+    /// <item>the routing fields are non-empty,</item>
+    /// <item><paramref name="sessionId"/> resolves to a session in the cache,</item>
+    /// <item>the session's <c>DeviceId</c> matches the calling agent's <c>Device.ID</c>
+    /// (cross-device routing prevention),</item>
+    /// <item><paramref name="viewerConnectionId"/> appears in the
+    /// session's <c>ViewerList</c> (cross-viewer routing prevention).</item>
+    /// </list>
+    /// All failures are warn-logged (with the device id, never the
+    /// SDP / candidate body) and translated into a silent return at
+    /// the call site so a hostile / mis-configured agent cannot
+    /// distinguish between "wrong session", "wrong viewer", and
+    /// "session expired".
+    /// </summary>
+    private bool TryAuthorizeViewerSignalling(
+        string sessionId,
+        string viewerConnectionId,
+        out string resolvedViewerConnectionId)
+    {
+        resolvedViewerConnectionId = string.Empty;
+
+        if (string.IsNullOrWhiteSpace(sessionId) ||
+            string.IsNullOrWhiteSpace(viewerConnectionId))
+        {
+            _logger.LogWarning(
+                "Rejecting agent → viewer signalling from device {DeviceId}: empty routing field.",
+                Device?.ID);
+            return false;
+        }
+
+        if (sessionId.Length > AgentSignallingLimits.MaxRoutingStringLen ||
+            viewerConnectionId.Length > AgentSignallingLimits.MaxRoutingStringLen)
+        {
+            _logger.LogWarning(
+                "Rejecting agent → viewer signalling from device {DeviceId}: routing field exceeds {Cap} byte cap.",
+                Device?.ID,
+                AgentSignallingLimits.MaxRoutingStringLen);
+            return false;
+        }
+
+        if (!_remoteControlSessions.TryGetValue(sessionId, out var session))
+        {
+            _logger.LogWarning(
+                "Rejecting agent → viewer signalling from device {DeviceId}: session {SessionId} not in cache.",
+                Device?.ID,
+                sessionId);
+            return false;
+        }
+
+        if (!string.Equals(session.DeviceId, Device?.ID, StringComparison.Ordinal))
+        {
+            _logger.LogWarning(
+                "Rejecting agent → viewer signalling from device {DeviceId}: session {SessionId} belongs to a different device.",
+                Device?.ID,
+                sessionId);
+            return false;
+        }
+
+        if (!session.ViewerList.Contains(viewerConnectionId))
+        {
+            _logger.LogWarning(
+                "Rejecting agent → viewer signalling from device {DeviceId}: viewer {ViewerConnectionId} not in session {SessionId} viewer list.",
+                Device?.ID,
+                viewerConnectionId,
+                sessionId);
+            return false;
+        }
+
+        resolvedViewerConnectionId = viewerConnectionId;
+        return true;
+    }
+
     public Task SendLogs(string logChunk, string requesterConnectionId)
     {
         var message = new ReceiveLogsMessage(logChunk);
