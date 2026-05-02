@@ -41,7 +41,7 @@ impl LinuxDesktopProviders {
     pub fn for_current_desktop() -> Result<DesktopProviders, LinuxProvidersError> {
         #[cfg(not(target_os = "linux"))]
         {
-            return Err(LinuxProvidersError::WrongHost);
+            Err(LinuxProvidersError::WrongHost)
         }
         #[cfg(target_os = "linux")]
         {

@@ -78,7 +78,7 @@ impl MouseInput for XdotoolMouseInput {
             (ScrollAxis::Horizontal, std::cmp::Ordering::Less) => "6",
             (_, std::cmp::Ordering::Equal) => return Ok(()),
         };
-        let clicks = (delta.unsigned_abs() / 120).max(1).min(32);
+        let clicks = (delta.unsigned_abs() / 120).clamp(1, 32);
         for _ in 0..clicks {
             run_xdotool(["click", button]).await?;
         }

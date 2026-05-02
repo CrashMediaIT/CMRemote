@@ -42,7 +42,7 @@ impl MacOsDesktopProviders {
     pub fn for_current_desktop() -> Result<DesktopProviders, MacOsProvidersError> {
         #[cfg(not(target_os = "macos"))]
         {
-            return Err(MacOsProvidersError::WrongHost);
+            Err(MacOsProvidersError::WrongHost)
         }
         #[cfg(target_os = "macos")]
         {
