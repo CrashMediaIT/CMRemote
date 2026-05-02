@@ -26,6 +26,11 @@ use cmremote_wire::ConnectionInfo;
 use tokio::sync::watch;
 use tracing::info;
 
+#[cfg(target_os = "linux")]
+use cmremote_platform_linux::LinuxDesktopProviders;
+#[cfg(target_os = "macos")]
+use cmremote_platform_macos::MacOsDesktopProviders;
+
 use crate::cli::CliArgs;
 use crate::handlers::AgentHandlers;
 use crate::transport::signalling::HubBoundSignallingEgress;
@@ -109,8 +114,8 @@ pub async fn run(cli: CliArgs) -> Result<(), RuntimeError> {
         stage_dir,
     });
 
-    // Slice R7.n.4 — per-host bundle of desktop capability providers
-    // (capturer + mouse + keyboard + clipboard). On Windows we try
+    // Slice R7.n.4/R7.o — per-host bundle of desktop capability providers
+    // (capturer + encoder + mouse + keyboard + clipboard). On Windows we try
     // `WindowsDesktopProviders::for_primary_output`, which composes
     // the DXGI capturer with the three `SendInput` / `CF_UNICODETEXT`
     // drivers and gates construction on `WindowsSessionInfo` so an
@@ -122,8 +127,10 @@ pub async fn run(cli: CliArgs) -> Result<(), RuntimeError> {
     // warn-logged and falls back to the `NotSupported` bundle so the
     // agent always starts; the desktop dispatch surface then
     // surfaces a structured "not supported on <OS>" failure to the
-    // operator. On every other host today, the not-supported bundle
-    // is the only available bundle.
+    // operator. Linux and macOS now follow the same pattern through
+    // their own platform crates: provider construction verifies the
+    // required host command surfaces before returning a concrete
+    // bundle, and any missing prerequisite falls back to NotSupported.
     let desktop_providers = Arc::new(build_desktop_providers());
 
     // Slice R7 — desktop transport. By default, until the WebRTC
@@ -218,15 +225,18 @@ fn log_startup_banner(info: &ConnectionInfo, host: &cmremote_platform::DeviceSna
     );
 }
 
-/// Construct the per-host [`DesktopProviders`] bundle (slice R7.n.4).
+/// Construct the per-host [`DesktopProviders`] bundle (slice R7.n.4/R7.o).
 ///
 /// On Windows attempts the real DXGI capturer + `SendInput` /
 /// `CF_UNICODETEXT` drivers via
 /// [`cmremote_platform_windows::WindowsDesktopProviders::for_primary_output`].
+/// On Linux attempts the XWD/ffmpeg/xdotool/clipboard-command bundle
+/// via [`cmremote_platform_linux::LinuxDesktopProviders::for_current_desktop`].
+/// On macOS attempts the screencapture/ffmpeg/AppleScript/cliclick
+/// bundle via [`cmremote_platform_macos::MacOsDesktopProviders::for_current_desktop`].
 /// Falls back to [`DesktopProviders::not_supported_for_current_host`]
 /// (with a warn-log naming the failure mode) on any error so the
-/// agent always starts. On every other host the not-supported
-/// bundle is the only available bundle.
+/// agent always starts.
 fn build_desktop_providers() -> DesktopProviders {
     #[cfg(target_os = "windows")]
     {
@@ -250,7 +260,49 @@ fn build_desktop_providers() -> DesktopProviders {
             }
         }
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "linux")]
+    {
+        match LinuxDesktopProviders::for_current_desktop() {
+            Ok(bundle) => {
+                info!(
+                    "desktop providers: Linux XWD capture + ffmpeg H.264 encoder + \
+                     xdotool input + wl-clipboard/xclip clipboard"
+                );
+                bundle
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "failed to construct Linux desktop providers \
+                     (missing xwd/xdotool/ffmpeg/clipboard tools or no desktop session); \
+                     falling back to NotSupported bundle"
+                );
+                DesktopProviders::not_supported_for_current_host()
+            }
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        match MacOsDesktopProviders::for_current_desktop() {
+            Ok(bundle) => {
+                info!(
+                    "desktop providers: macOS screencapture + ffmpeg H.264 encoder + \
+                     AppleScript/cliclick input + pbcopy/pbpaste clipboard"
+                );
+                bundle
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "failed to construct macOS desktop providers \
+                     (missing screencapture/ffmpeg/osascript/cliclick/pbcopy/pbpaste \
+                     or no authorised desktop session); falling back to NotSupported bundle"
+                );
+                DesktopProviders::not_supported_for_current_host()
+            }
+        }
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
     {
         info!(
             "desktop providers: NotSupported bundle (no concrete drivers available \

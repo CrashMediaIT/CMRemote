@@ -1,0 +1,22 @@
+# Source: CMRemote, clean-room implementation.
+
+[package]
+name = "cmremote-platform-linux"
+description = "Linux-specific desktop capture / input providers for the CMRemote agent."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+cmremote-platform = { path = "../cmremote-platform" }
+async-trait = "0.1"
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tokio = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }

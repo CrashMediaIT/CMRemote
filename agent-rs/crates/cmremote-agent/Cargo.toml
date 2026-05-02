@@ -23,6 +23,8 @@ cmremote-platform = { path = "../cmremote-platform" }
 # call `WindowsDesktopProviders::for_primary_output` behind a
 # `cfg(target_os = "windows")` without `--exclude` gymnastics in CI.
 cmremote-platform-windows = { path = "../cmremote-platform-windows" }
+cmremote-platform-linux = { path = "../cmremote-platform-linux" }
+cmremote-platform-macos = { path = "../cmremote-platform-macos" }
 
 tokio = { workspace = true }
 tracing = { workspace = true }

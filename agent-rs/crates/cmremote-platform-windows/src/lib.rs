@@ -80,8 +80,7 @@ pub use capture::{WindowsCaptureError, WindowsDesktopCapturer};
 
 #[cfg(target_os = "windows")]
 pub use encoder::{
-    WindowsEncoderError, WindowsVideoEncoder, WindowsVideoEncoderConfig,
-    WindowsVideoEncoderFactory,
+    WindowsEncoderError, WindowsVideoEncoder, WindowsVideoEncoderConfig, WindowsVideoEncoderFactory,
 };
 
 #[cfg(target_os = "windows")]

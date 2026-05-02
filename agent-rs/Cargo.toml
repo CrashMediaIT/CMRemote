@@ -12,6 +12,8 @@ members = [
     "crates/cmremote-wire",
     "crates/cmremote-platform",
     "crates/cmremote-platform-windows",
+    "crates/cmremote-platform-linux",
+    "crates/cmremote-platform-macos",
     "crates/cmremote-agent",
 ]
 
