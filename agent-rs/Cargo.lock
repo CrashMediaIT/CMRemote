@@ -340,6 +340,8 @@ dependencies = [
  "anyhow",
  "async-trait",
  "cmremote-platform",
+ "cmremote-platform-linux",
+ "cmremote-platform-macos",
  "cmremote-platform-windows",
  "cmremote-wire",
  "futures-util",
@@ -372,6 +374,28 @@ dependencies = [
  "tracing",
  "uuid",
  "webrtc",
+]
+
+[[package]]
+name = "cmremote-platform-linux"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "cmremote-platform",
+ "thiserror",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "cmremote-platform-macos"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "cmremote-platform",
+ "thiserror",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

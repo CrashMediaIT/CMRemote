@@ -20,6 +20,7 @@
 pub mod backoff;
 pub mod connect;
 pub mod session;
+pub mod signalling;
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -41,6 +42,7 @@ pub use session::{
 
 use crate::dispatch::{make_on_record, InvocationTracker};
 use crate::handlers::AgentHandlers;
+use crate::transport::signalling::HubBoundSignallingEgress;
 
 /// Errors surfaced from the transport layer to the runtime.
 #[derive(Debug, thiserror::Error)]
@@ -59,9 +61,17 @@ pub enum TransportError {
 ///
 /// Runs until either `shutdown` flips to `true` (cooperative stop
 /// from the runtime) or the server quarantines the agent.
+///
+/// `signalling_egress` is the long-lived hub-bound egress shared
+/// with the WebRTC desktop driver. The reconnect loop **binds** it
+/// to the per-connection outbound channel as soon as the handshake
+/// completes, and **unbinds** it on every session exit so a
+/// signalling call made during a reconnect window is dropped (with
+/// a warn log) rather than queued onto a stale channel.
 pub async fn run_until_shutdown(
     info: ConnectionInfo,
     handlers: Arc<AgentHandlers>,
+    signalling_egress: Arc<HubBoundSignallingEgress>,
     mut shutdown: watch::Receiver<bool>,
 ) -> Result<(), TransportError> {
     let mut backoff = Backoff::new();
@@ -145,6 +155,14 @@ pub async fn run_until_shutdown(
         let (outbound_tx, mut outbound_rx) =
             mpsc::channel::<tokio_tungstenite::tungstenite::Message>(64);
 
+        // Slice R7.n.7 — bind the hub-bound signalling egress to
+        // this fresh outbound channel + the negotiated encoding so
+        // any locally-produced WebRTC SDP answer / ICE candidate
+        // reaches the server. The bind is replaced (not appended)
+        // each connection, so a reconnect cleanly switches the
+        // egress over to the new channel.
+        signalling_egress.bind(encoding, outbound_tx.clone());
+
         // Fresh per-connection invocation-ID tracker.
         let tracker = Arc::new(Mutex::new(InvocationTracker::default()));
 
@@ -153,6 +171,11 @@ pub async fn run_until_shutdown(
         // Steady state: read loop + ping ticker + outbound drain, all
         // racing the shutdown signal.
         let exit = run_session(ws, encoding, &mut shutdown, &mut outbound_rx, on_record).await;
+
+        // Unbind so any signalling call made during the reconnect
+        // window is warn-logged + dropped instead of queued onto
+        // the now-stale channel.
+        signalling_egress.unbind();
 
         match exit {
             Ok(SessionExit::LocalShutdown) => return Ok(()),
