@@ -132,6 +132,140 @@ impl CaptureSink for DiscardingCaptureSink {
 }
 
 // ---------------------------------------------------------------------------
+// LateBoundCaptureSink — slice R7.n.6.
+// ---------------------------------------------------------------------------
+
+/// `CaptureSink` whose downstream is bound *after* construction.
+///
+/// The slice R7.n.5 capture pump is spawned by the WebRTC driver as
+/// soon as `RemoteControl` opens the session, but the per-session
+/// downstream sink (encoder + WebRTC video track) is built later
+/// when the peer connection is constructed (on
+/// `ProvideIceServers` / `SendSdpOffer`). This adapter lets the
+/// pump start immediately and have its frames quietly dropped
+/// (and counted) until [`Self::bind`] swaps in the real downstream.
+///
+/// ## Threading
+///
+/// Uses a [`std::sync::RwLock`] over the inner `Arc` slot. The lock
+/// is held only for the duration of a `clone()` of the inner `Arc`
+/// (or a `replace`) — never across an `await` — so the read-side
+/// contention stays comparable to a plain `Mutex` clone of an
+/// `Arc`. This intentionally avoids `tokio::sync::RwLock` because
+/// the pump's `consume` path cannot safely await another task while
+/// holding a lock that the egress / signalling path may need.
+///
+/// ## Counters
+///
+/// - [`Self::dropped_before_bind`] counts frames dropped because no
+///   downstream was bound. Useful for the runtime audit log so an
+///   operator can tell how much capture work was wasted between
+///   `RemoteControl` and the first `RTCPeerConnection` build.
+/// - Errors from the bound downstream propagate to the pump
+///   verbatim; the late-bound sink does **not** swallow them.
+#[derive(Default)]
+pub struct LateBoundCaptureSink {
+    inner: std::sync::RwLock<Option<Arc<dyn CaptureSink>>>,
+    dropped_before_bind: std::sync::atomic::AtomicU64,
+}
+
+impl std::fmt::Debug for LateBoundCaptureSink {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // The wrapped `dyn CaptureSink` has no `Debug` bound — and
+        // a real downstream may be the WebRTC video track sink,
+        // whose Debug impl would touch the upstream RTP packetizer
+        // state. Report only the bookkeeping shape.
+        f.debug_struct("LateBoundCaptureSink")
+            .field("bound", &self.is_bound())
+            .field("dropped_before_bind", &self.dropped_before_bind())
+            .finish()
+    }
+}
+
+impl LateBoundCaptureSink {
+    /// Build a sink with no downstream — every `consume` drops the
+    /// frame and bumps [`Self::dropped_before_bind`] until
+    /// [`Self::bind`] is called.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Install (or replace) the downstream sink. Subsequent
+    /// `consume` calls forward into `sink` until [`Self::unbind`]
+    /// or another `bind` is invoked. Cheap — one short write-lock
+    /// over an `Option<Arc<…>>` swap.
+    pub fn bind(&self, sink: Arc<dyn CaptureSink>) {
+        let mut g = self
+            .inner
+            .write()
+            .expect("LateBoundCaptureSink rwlock poisoned");
+        *g = Some(sink);
+    }
+
+    /// Drop the downstream sink, returning to the "drop and count"
+    /// behaviour. Used by the WebRTC driver when the peer
+    /// connection is closed but the underlying session is still
+    /// live (e.g. between `change_windows_session` and the next
+    /// `ProvideIceServers`).
+    pub fn unbind(&self) {
+        let mut g = self
+            .inner
+            .write()
+            .expect("LateBoundCaptureSink rwlock poisoned");
+        *g = None;
+    }
+
+    /// Number of frames dropped because no downstream was bound at
+    /// the time. Monotonically increases for the lifetime of the
+    /// sink; never reset by `bind` / `unbind`.
+    ///
+    /// Read with [`Ordering::Relaxed`] because the counter is
+    /// telemetry-only — it never gates control flow elsewhere, so
+    /// no happens-before edge with another atomic is required.
+    /// The counter itself is monotonically increasing, so a
+    /// possibly-stale read just under-reports for one observation
+    /// window; the next read picks up the rest.
+    pub fn dropped_before_bind(&self) -> u64 {
+        self.dropped_before_bind
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// `true` when a downstream is currently bound.
+    pub fn is_bound(&self) -> bool {
+        self.inner
+            .read()
+            .expect("LateBoundCaptureSink rwlock poisoned")
+            .is_some()
+    }
+}
+
+#[async_trait]
+impl CaptureSink for LateBoundCaptureSink {
+    async fn consume(&self, frame: CapturedFrame) -> Result<(), DesktopMediaError> {
+        // Clone the inner `Arc` under the read lock and release the
+        // lock *before* awaiting the downstream — the downstream's
+        // `consume` may itself take an internal lock, so holding
+        // ours across the await would risk a cross-lock deadlock
+        // with the WebRTC driver's PC-build path.
+        let bound = {
+            let g = self
+                .inner
+                .read()
+                .expect("LateBoundCaptureSink rwlock poisoned");
+            g.clone()
+        };
+        match bound {
+            Some(sink) => sink.consume(frame).await,
+            None => {
+                self.dropped_before_bind
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                Ok(())
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // CaptureStats
 // ---------------------------------------------------------------------------
 
@@ -729,5 +863,81 @@ mod tests {
             // Spin once so the runtime sees the abort.
             tokio::task::yield_now().await;
         });
+    }
+
+    // ---------------------------------------------------------------
+    // LateBoundCaptureSink — slice R7.n.6.
+    // ---------------------------------------------------------------
+
+    fn frame() -> CapturedFrame {
+        CapturedFrame::black(2, 2).unwrap()
+    }
+
+    #[tokio::test]
+    async fn late_bound_sink_drops_and_counts_before_bind() {
+        let s = LateBoundCaptureSink::new();
+        assert!(!s.is_bound());
+        for _ in 0..3 {
+            s.consume(frame()).await.unwrap();
+        }
+        assert_eq!(s.dropped_before_bind(), 3);
+    }
+
+    #[tokio::test]
+    async fn late_bound_sink_forwards_after_bind() {
+        let s = LateBoundCaptureSink::new();
+        let down = Arc::new(DiscardingCaptureSink::new());
+        s.bind(down.clone() as Arc<dyn CaptureSink>);
+        assert!(s.is_bound());
+        for _ in 0..4 {
+            s.consume(frame()).await.unwrap();
+        }
+        assert_eq!(down.frames_dropped(), 4);
+        // No frames should be counted as "dropped before bind" once
+        // a downstream is wired.
+        assert_eq!(s.dropped_before_bind(), 0);
+    }
+
+    #[tokio::test]
+    async fn late_bound_sink_unbind_returns_to_drop_and_count() {
+        let s = LateBoundCaptureSink::new();
+        let down = Arc::new(DiscardingCaptureSink::new());
+        s.bind(down.clone() as Arc<dyn CaptureSink>);
+        s.consume(frame()).await.unwrap();
+        s.unbind();
+        assert!(!s.is_bound());
+        s.consume(frame()).await.unwrap();
+        assert_eq!(down.frames_dropped(), 1);
+        assert_eq!(s.dropped_before_bind(), 1);
+    }
+
+    #[tokio::test]
+    async fn late_bound_sink_propagates_downstream_errors() {
+        struct Failing;
+        #[async_trait]
+        impl CaptureSink for Failing {
+            async fn consume(&self, _frame: CapturedFrame) -> Result<(), DesktopMediaError> {
+                Err(DesktopMediaError::Io("downstream broken".into()))
+            }
+        }
+        let s = LateBoundCaptureSink::new();
+        s.bind(Arc::new(Failing));
+        let e = s.consume(frame()).await.unwrap_err();
+        assert!(format!("{e}").contains("downstream broken"));
+    }
+
+    #[tokio::test]
+    async fn late_bound_sink_replace_swaps_downstream() {
+        let s = LateBoundCaptureSink::new();
+        let first = Arc::new(DiscardingCaptureSink::new());
+        let second = Arc::new(DiscardingCaptureSink::new());
+        s.bind(first.clone() as Arc<dyn CaptureSink>);
+        s.consume(frame()).await.unwrap();
+        // Replace the downstream — subsequent frames go to `second`.
+        s.bind(second.clone() as Arc<dyn CaptureSink>);
+        s.consume(frame()).await.unwrap();
+        s.consume(frame()).await.unwrap();
+        assert_eq!(first.frames_dropped(), 1);
+        assert_eq!(second.frames_dropped(), 2);
     }
 }

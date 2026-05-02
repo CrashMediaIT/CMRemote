@@ -52,6 +52,7 @@ use cmremote_platform::desktop::DesktopProviders;
 use thiserror::Error;
 
 use crate::capture::{WindowsCaptureError, WindowsDesktopCapturer};
+use crate::encoder::{WindowsEncoderError, WindowsVideoEncoderFactory};
 use crate::input::{WindowsClipboard, WindowsKeyboardInput, WindowsMouseInput};
 use crate::session::{WindowsSessionError, WindowsSessionInfo};
 
@@ -77,6 +78,14 @@ pub enum WindowsProvidersError {
     /// Failed to construct the DXGI desktop capturer.
     #[error(transparent)]
     Capture(#[from] WindowsCaptureError),
+
+    /// Failed to construct the Media Foundation H.264 encoder
+    /// factory (slice R7.n.6). Surfaces a `WindowsEncoderError`
+    /// — almost always `BadConfig` since the factory only
+    /// validates the pinned config, never touches Media
+    /// Foundation itself.
+    #[error(transparent)]
+    Encoder(#[from] WindowsEncoderError),
 }
 
 /// Factory namespace for Windows desktop bundles.
@@ -130,8 +139,10 @@ impl WindowsDesktopProviders {
             return Err(WindowsProvidersError::NotInteractive(session));
         }
         let capturer = WindowsDesktopCapturer::for_primary_output()?;
+        let encoder_factory = WindowsVideoEncoderFactory::default_1080p_30fps()?;
         Ok(DesktopProviders {
             capturer: Arc::new(capturer),
+            encoder_factory: Arc::new(encoder_factory),
             mouse: Arc::new(WindowsMouseInput::new()),
             keyboard: Arc::new(WindowsKeyboardInput::new()),
             clipboard: Arc::new(WindowsClipboard::new()),
@@ -198,6 +209,7 @@ mod tests {
         // Smoke-check trait-object slots so a future refactor can't
         // accidentally swap a slot for the wrong concrete type.
         let _: &dyn cmremote_platform::desktop::DesktopCapturer = &*bundle.capturer;
+        let _: &dyn cmremote_platform::desktop::EncoderFactory = &*bundle.encoder_factory;
         let _: &dyn cmremote_platform::desktop::MouseInput = &*bundle.mouse;
         let _: &dyn cmremote_platform::desktop::KeyboardInput = &*bundle.keyboard;
         let _: &dyn cmremote_platform::desktop::Clipboard = &*bundle.clipboard;
