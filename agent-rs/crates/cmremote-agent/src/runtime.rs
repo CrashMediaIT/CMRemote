@@ -28,6 +28,7 @@ use tracing::info;
 
 use crate::cli::CliArgs;
 use crate::handlers::AgentHandlers;
+use crate::transport::signalling::HubBoundSignallingEgress;
 use crate::transport::{self, TransportError};
 
 /// Errors surfaced from the agent runtime.
@@ -147,18 +148,28 @@ pub async fn run(cli: CliArgs) -> Result<(), RuntimeError> {
     // and pushes captured frames into the sink. Until slice R7.n.6
     // lands the Media Foundation H.264 encoder, the sink discards
     // every frame after counting it.
+    // Slice R7.n.7 — hub-bound signalling egress. Built once for the
+    // whole agent lifetime; the transport reconnect loop re-binds it
+    // to each fresh per-connection outbound channel via
+    // `bind` / `unbind`. When the workspace is built without the
+    // `webrtc-driver` feature, the `WebRtcDesktopTransport` is not
+    // constructed at all and the egress remains unbound — its impl
+    // is a no-op in that build.
+    let signalling_egress = Arc::new(HubBoundSignallingEgress::new());
+
     #[cfg(not(feature = "webrtc-driver"))]
     let desktop: Arc<dyn DesktopTransportProvider> = Arc::new(
         NotSupportedDesktopTransport::for_current_host(info.organization_id.clone()),
     );
     #[cfg(feature = "webrtc-driver")]
     let desktop: Arc<dyn DesktopTransportProvider> =
-        Arc::new(WebRtcDesktopTransport::with_providers(
+        Arc::new(WebRtcDesktopTransport::with_providers_and_egress(
             cmremote_platform::HostOs::current(),
             info.organization_id.clone(),
             desktop_providers.clone(),
             Arc::new(cmremote_platform::desktop::DiscardingCaptureSink::new()),
             cmremote_platform::desktop::CapturePumpConfig::default(),
+            signalling_egress.clone(),
         ));
 
     let handlers = Arc::new(AgentHandlers {
@@ -183,7 +194,8 @@ pub async fn run(cli: CliArgs) -> Result<(), RuntimeError> {
         let _ = shutdown_tx.send(true);
     });
 
-    let transport_result = transport::run_until_shutdown(info, handlers, shutdown_rx).await;
+    let transport_result =
+        transport::run_until_shutdown(info, handlers, signalling_egress, shutdown_rx).await;
 
     // Make sure the signal task has finished — otherwise we leak it
     // for the (vanishingly small) window between transport exit and

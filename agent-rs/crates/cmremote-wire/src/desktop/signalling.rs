@@ -204,6 +204,72 @@ pub struct IceCandidate {
 }
 
 // ---------------------------------------------------------------------------
+// Slice R7.n.7 — server-bound (agent → hub) signalling DTOs.
+//
+// The inbound shapes above (`SdpOffer`, `SdpAnswer`, `IceCandidate`)
+// carry every operator-identity string the .NET hub passes from the
+// viewer to the agent. The reverse path is narrower: the .NET hub
+// already knows which operator initiated the negotiation (it is the
+// originator of the matching `SendSdpOffer` invocation), so the
+// agent only needs to re-state the routing fields (`session_id`,
+// `viewer_connection_id`) plus the SDP / ICE payload itself. Smaller
+// outbound DTOs keep the agent's memory footprint bounded and avoid
+// re-emitting attacker-controlled identity strings on every trickled
+// candidate.
+// ---------------------------------------------------------------------------
+
+/// `SendSdpAnswer(answer)` — server-bound counterpart of [`SdpAnswer`].
+///
+/// The agent invokes this hub method with a locally-produced SDP
+/// answer once its WebRTC peer connection has accepted the viewer's
+/// offer. The wire shape is **PascalCase** so the .NET `AgentHub`
+/// can deserialise the SignalR arguments array directly into the
+/// matching `AgentSdpAnswerDto`.
+///
+/// `sdp` is length-capped at [`MAX_SDP_BYTES`] before the agent
+/// emits the invocation; the hub MUST re-validate before forwarding
+/// to the viewer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "PascalCase")]
+pub struct AgentSdpAnswer {
+    /// SignalR connection id of the viewer this answer is destined
+    /// for. Echoed verbatim from the matching inbound [`SdpOffer`].
+    pub viewer_connection_id: String,
+    /// Server-issued session UUID — same identity as
+    /// [`crate::RemoteControlSessionRequest::session_id`].
+    pub session_id: String,
+    /// Raw SDP blob produced by the agent's `RTCPeerConnection`.
+    pub sdp: String,
+}
+
+/// `SendIceCandidate(candidate)` — server-bound counterpart of
+/// [`IceCandidate`].
+///
+/// Emitted once per locally-trickled ICE candidate, plus once with
+/// an empty `candidate` string and `None` mid / mline index to
+/// signal end-of-candidates (RFC 8838 marker).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "PascalCase")]
+pub struct AgentIceCandidate {
+    /// SignalR connection id of the viewer the candidate is
+    /// destined for.
+    pub viewer_connection_id: String,
+    /// Session UUID.
+    pub session_id: String,
+    /// `candidate:` line, RFC 5245 / 8445 grammar. Empty string is
+    /// the end-of-candidates marker.
+    pub candidate: String,
+    /// `a=mid` of the m-line this candidate belongs to. Absent for
+    /// the end-of-candidates marker.
+    #[serde(default)]
+    pub sdp_mid: Option<String>,
+    /// 0-based index of the m-line this candidate belongs to.
+    /// Absent for the end-of-candidates marker.
+    #[serde(default)]
+    pub sdp_mline_index: Option<u16>,
+}
+
+// ---------------------------------------------------------------------------
 // Slice R7.i — ICE / TURN server configuration.
 //
 // The future WebRTC peer connection needs to know which STUN / TURN
@@ -478,6 +544,73 @@ mod tests {
         assert_eq!(back, req);
         let back2: IceCandidate = from_msgpack(&to_msgpack(&req).unwrap()).unwrap();
         assert_eq!(back2, req);
+    }
+
+    #[test]
+    fn agent_sdp_answer_round_trip_pascal_case_and_msgpack() {
+        let req = AgentSdpAnswer {
+            viewer_connection_id: "viewer-1".into(),
+            session_id: "11111111-2222-3333-4444-555555555555".into(),
+            sdp: "v=0\r\n".into(),
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        // PascalCase wire form — must match the .NET AgentSdpAnswerDto.
+        assert!(
+            json.contains("\"ViewerConnectionId\":\"viewer-1\""),
+            "{json}"
+        );
+        assert!(json.contains("\"SessionId\":"), "{json}");
+        assert!(json.contains("\"Sdp\":"), "{json}");
+        // Must NOT carry operator-identity strings (smaller than the
+        // inbound SdpAnswer on purpose).
+        assert!(!json.contains("RequesterName"), "{json}");
+        assert!(!json.contains("OrgId"), "{json}");
+        assert!(!json.contains("OrgName"), "{json}");
+        let back: AgentSdpAnswer = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, req);
+        let back2: AgentSdpAnswer = from_msgpack(&to_msgpack(&req).unwrap()).unwrap();
+        assert_eq!(back2, req);
+    }
+
+    #[test]
+    fn agent_ice_candidate_round_trip_includes_optional_fields() {
+        let req = AgentIceCandidate {
+            viewer_connection_id: "viewer-1".into(),
+            session_id: "11111111-2222-3333-4444-555555555555".into(),
+            candidate: "candidate:1 1 UDP 2130706431 192.0.2.1 12345 typ host".into(),
+            sdp_mid: Some("0".into()),
+            sdp_mline_index: Some(0),
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(
+            json.contains("\"ViewerConnectionId\":\"viewer-1\""),
+            "{json}"
+        );
+        assert!(json.contains("\"Candidate\":"), "{json}");
+        assert!(json.contains("\"SdpMid\":\"0\""), "{json}");
+        assert!(json.contains("\"SdpMlineIndex\":0"), "{json}");
+        assert!(!json.contains("RequesterName"), "{json}");
+        let back: AgentIceCandidate = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, req);
+        let back2: AgentIceCandidate = from_msgpack(&to_msgpack(&req).unwrap()).unwrap();
+        assert_eq!(back2, req);
+    }
+
+    #[test]
+    fn agent_ice_candidate_end_of_candidates_marker_serialises_with_null_mid_and_index() {
+        let req = AgentIceCandidate {
+            viewer_connection_id: "viewer-1".into(),
+            session_id: "11111111-2222-3333-4444-555555555555".into(),
+            candidate: String::new(),
+            sdp_mid: None,
+            sdp_mline_index: None,
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(json.contains("\"Candidate\":\"\""), "{json}");
+        assert!(json.contains("\"SdpMid\":null"), "{json}");
+        assert!(json.contains("\"SdpMlineIndex\":null"), "{json}");
+        let back: AgentIceCandidate = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, req);
     }
 
     #[test]
