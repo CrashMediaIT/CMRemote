@@ -238,44 +238,43 @@ fn key_name(key: &KeyCode) -> Result<String, DesktopInputError> {
             validate_char(*c)?;
             Ok(c.to_string())
         }
-        KeyCode::Named(n) => named_key(*n).map(str::to_owned),
+        KeyCode::Named(n) => named_key(*n),
     }
 }
 
-fn named_key(key: NamedKey) -> Result<&'static str, DesktopInputError> {
-    Ok(match key {
-        NamedKey::Enter => "Return",
-        NamedKey::Tab => "Tab",
-        NamedKey::Backspace => "BackSpace",
-        NamedKey::Delete => "Delete",
-        NamedKey::Escape => "Escape",
-        NamedKey::Space => "space",
-        NamedKey::ArrowLeft => "Left",
-        NamedKey::ArrowRight => "Right",
-        NamedKey::ArrowUp => "Up",
-        NamedKey::ArrowDown => "Down",
-        NamedKey::Home => "Home",
-        NamedKey::End => "End",
-        NamedKey::PageUp => "Page_Up",
-        NamedKey::PageDown => "Page_Down",
-        NamedKey::ShiftLeft => "Shift_L",
-        NamedKey::ShiftRight => "Shift_R",
-        NamedKey::ControlLeft => "Control_L",
-        NamedKey::ControlRight => "Control_R",
-        NamedKey::AltLeft => "Alt_L",
-        NamedKey::AltRight => "Alt_R",
-        NamedKey::MetaLeft => "Super_L",
-        NamedKey::MetaRight => "Super_R",
-        NamedKey::CapsLock => "Caps_Lock",
-        NamedKey::F(n) if (1..=24).contains(&n) => {
-            return Ok(Box::leak(format!("F{n}").into_boxed_str()))
-        }
+fn named_key(key: NamedKey) -> Result<String, DesktopInputError> {
+    let name = match key {
+        NamedKey::Enter => "Return".to_owned(),
+        NamedKey::Tab => "Tab".to_owned(),
+        NamedKey::Backspace => "BackSpace".to_owned(),
+        NamedKey::Delete => "Delete".to_owned(),
+        NamedKey::Escape => "Escape".to_owned(),
+        NamedKey::Space => "space".to_owned(),
+        NamedKey::ArrowLeft => "Left".to_owned(),
+        NamedKey::ArrowRight => "Right".to_owned(),
+        NamedKey::ArrowUp => "Up".to_owned(),
+        NamedKey::ArrowDown => "Down".to_owned(),
+        NamedKey::Home => "Home".to_owned(),
+        NamedKey::End => "End".to_owned(),
+        NamedKey::PageUp => "Page_Up".to_owned(),
+        NamedKey::PageDown => "Page_Down".to_owned(),
+        NamedKey::ShiftLeft => "Shift_L".to_owned(),
+        NamedKey::ShiftRight => "Shift_R".to_owned(),
+        NamedKey::ControlLeft => "Control_L".to_owned(),
+        NamedKey::ControlRight => "Control_R".to_owned(),
+        NamedKey::AltLeft => "Alt_L".to_owned(),
+        NamedKey::AltRight => "Alt_R".to_owned(),
+        NamedKey::MetaLeft => "Super_L".to_owned(),
+        NamedKey::MetaRight => "Super_R".to_owned(),
+        NamedKey::CapsLock => "Caps_Lock".to_owned(),
+        NamedKey::F(n) if (1..=24).contains(&n) => format!("F{n}"),
         NamedKey::F(_) => {
             return Err(DesktopInputError::InvalidParameters(
                 "function key out of range".into(),
             ))
         }
-    })
+    };
+    Ok(name)
 }
 
 fn validate_text(text: &str) -> Result<(), DesktopInputError> {
@@ -288,20 +287,13 @@ fn validate_text(text: &str) -> Result<(), DesktopInputError> {
 fn validate_char(c: char) -> Result<(), DesktopInputError> {
     if c == '\0'
         || (c.is_ascii_control() && c != '\n' && c != '\r' && c != '\t')
-        || is_bidi_override(c)
+        || matches!(c, '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
     {
         return Err(DesktopInputError::InvalidParameters(
             "refused control/bidi character".into(),
         ));
     }
     Ok(())
-}
-
-fn is_bidi_override(c: char) -> bool {
-    matches!(
-        c,
-        '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}'
-    )
 }
 
 #[cfg(test)]
