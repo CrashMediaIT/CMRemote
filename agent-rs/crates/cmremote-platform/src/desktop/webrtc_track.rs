@@ -139,7 +139,11 @@ impl WebRtcVideoTrackSink {
     /// The first chunk gets `Duration::ZERO`; non-monotonic
     /// timestamps (clock rewinds) get `Duration::ZERO` as well so
     /// the upstream packetizer never sees a negative-duration
-    /// sample. Updates the running cursor on every call.
+    /// sample (the packetizer expects non-negative durations and
+    /// uses them to advance its 90 kHz RTP timestamp; a zero-
+    /// duration sample re-emits the previous packet timestamp,
+    /// which is preferable to a panic or a silent wraparound).
+    /// Updates the running cursor on every call.
     fn compute_duration(&self, chunk_micros: u64) -> Duration {
         let mut g = self
             .last_chunk_micros

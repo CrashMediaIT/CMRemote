@@ -45,14 +45,27 @@
 //!   `<host_os>`" failure on every other host. The Windows-side
 //!   driver lands in a follow-up slice.
 //!
-//! The capture-pump → encoder → RTP-track wiring (slice R7.n.6,
-//! Media Foundation H.264 encoder) is still pending — the pump
-//! pushes captured frames into the configured `CaptureSink`, which
-//! defaults to [`super::DiscardingCaptureSink`] until the encoder
-//! lands. The peer connection is therefore fully negotiable today
-//! but does not yet emit media; the operator gets a connected RTP
-//! transport with no track. That gap is documented in the R7 row of
-//! `ROADMAP.md`.
+//! ## Slice R7.n.6 — capture-pump → encoder → RTP-track wiring
+//!
+//! Each `RTCPeerConnection` is built with a freshly-attached H.264
+//! [`webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSample`]
+//! whose `RTCRtpSender` is fed by the per-session capture pump
+//! through a chained [`super::EncoderCaptureSink`] →
+//! [`super::WebRtcVideoTrackSink`]. The per-session
+//! [`super::LateBoundCaptureSink`] is the seam that lets the pump
+//! start at `RemoteControl` time (before the PC exists) and have
+//! its frames forwarded to the encoder→track sink as soon as the
+//! PC is built. PLI feedback from the viewer is forwarded to
+//! `request_keyframe()` on the encoder via a per-PC `read_rtcp`
+//! task.
+//!
+//! On hosts that do not register an encoder driver (the
+//! `DesktopProviders::encoder_factory` is the
+//! [`super::NotSupportedEncoderFactory`] default), the driver
+//! still negotiates the peer connection — it just skips the
+//! `add_track` step and logs a structured `info!`. The operator
+//! gets a connected RTP transport with no media, exactly the same
+//! state as before R7.n.6 landed.
 //!
 //! ## Why a feature flag (`webrtc-driver`)
 //!

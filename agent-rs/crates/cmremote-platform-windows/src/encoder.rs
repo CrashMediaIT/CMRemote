@@ -69,7 +69,8 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use cmremote_platform::desktop::{
-    bgra_to_nv12, CapturedFrame, DesktopMediaError, EncodedVideoChunk, VideoEncoder,
+    bgra_to_nv12, CapturedFrame, DesktopMediaError, EncodedVideoChunk, EncoderFactory,
+    VideoEncoder,
 };
 use thiserror::Error;
 use tracing::{debug, warn};
@@ -923,6 +924,52 @@ impl VideoEncoder for WindowsVideoEncoder {
 }
 
 // ---------------------------------------------------------------------------
+// EncoderFactory impl — slice R7.n.6.
+// ---------------------------------------------------------------------------
+
+/// `EncoderFactory` that builds a fresh [`WindowsVideoEncoder`] per
+/// session from a pinned [`WindowsVideoEncoderConfig`]. The
+/// [`WebRtcDesktopTransport`](cmremote_platform::desktop::WebRtcDesktopTransport)
+/// invokes [`Self::build`] once per `RTCPeerConnection` so each
+/// session gets a private MFT instance with its own frame counter,
+/// keyframe-request flag, and Media Foundation startup guard — none
+/// of that state is safe to share across two viewers.
+///
+/// Stateless apart from the config: cheap to clone via `Arc`.
+pub struct WindowsVideoEncoderFactory {
+    config: WindowsVideoEncoderConfig,
+}
+
+impl WindowsVideoEncoderFactory {
+    /// Build a factory that hands out encoders configured with
+    /// `config`. Validates `config` once up front so a bad config
+    /// surfaces at agent startup rather than on the first
+    /// signalling call.
+    pub fn new(config: WindowsVideoEncoderConfig) -> Result<Self, WindowsEncoderError> {
+        config.validate()?;
+        Ok(Self { config })
+    }
+
+    /// Convenience constructor using
+    /// [`WindowsVideoEncoderConfig::default_1080p_30fps`].
+    pub fn default_1080p_30fps() -> Result<Self, WindowsEncoderError> {
+        Self::new(WindowsVideoEncoderConfig::default_1080p_30fps())
+    }
+
+    /// Borrow the pinned config.
+    pub fn config(&self) -> WindowsVideoEncoderConfig {
+        self.config
+    }
+}
+
+impl EncoderFactory for WindowsVideoEncoderFactory {
+    fn build(&self) -> Result<Arc<dyn VideoEncoder>, DesktopMediaError> {
+        let enc = WindowsVideoEncoder::new(self.config).map_err(DesktopMediaError::from)?;
+        Ok(Arc::new(enc))
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests (config validation only — the COM path needs a Windows
 // host; an `#[ignore]`d smoke test follows so it can be exercised
 // manually with `cargo test -- --ignored` on a Win10+ machine).
@@ -1002,6 +1049,31 @@ mod tests {
         }
         .into();
         assert!(matches!(e, DesktopMediaError::Io(_)));
+    }
+
+    #[test]
+    fn factory_validates_config_at_construction_not_at_build() {
+        // Constructing with an invalid config must surface the
+        // BadConfig error eagerly, before any Media Foundation
+        // call. This keeps a misconfigured agent failing fast at
+        // startup rather than on the first signalling round-trip.
+        let mut bad = WindowsVideoEncoderConfig::default_1080p_30fps();
+        bad.fps = 0;
+        let e = WindowsVideoEncoderFactory::new(bad).unwrap_err();
+        assert!(format!("{e}").contains("fps"));
+    }
+
+    #[test]
+    fn factory_default_preserves_default_config_shape() {
+        let f = WindowsVideoEncoderFactory::default_1080p_30fps()
+            .expect("default config must validate");
+        assert_eq!(f.config(), WindowsVideoEncoderConfig::default_1080p_30fps());
+    }
+
+    #[test]
+    fn factory_is_object_safe_through_encoder_factory_trait() {
+        let f = WindowsVideoEncoderFactory::default_1080p_30fps().unwrap();
+        let _: Box<dyn EncoderFactory> = Box::new(f);
     }
 
     /// Smoke test that constructs the encoder and encodes a single

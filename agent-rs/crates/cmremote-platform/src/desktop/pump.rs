@@ -218,6 +218,13 @@ impl LateBoundCaptureSink {
     /// Number of frames dropped because no downstream was bound at
     /// the time. Monotonically increases for the lifetime of the
     /// sink; never reset by `bind` / `unbind`.
+    ///
+    /// Read with [`Ordering::Relaxed`] because the counter is
+    /// telemetry-only — it never gates control flow elsewhere, so
+    /// no happens-before edge with another atomic is required.
+    /// The counter itself is monotonically increasing, so a
+    /// possibly-stale read just under-reports for one observation
+    /// window; the next read picks up the rest.
     pub fn dropped_before_bind(&self) -> u64 {
         self.dropped_before_bind
             .load(std::sync::atomic::Ordering::Relaxed)
