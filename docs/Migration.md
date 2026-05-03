@@ -9,7 +9,7 @@ CMRemote v2 supports a non-destructive cut-over from the legacy Docker image to 
 
 Both paths compose the same `MigrationRunner`, readers, converters, and PostgreSQL writers.
 
-## What is migrated in the current M2 set
+## What is migrated in the current migration set
 
 | Entity | Preserved data | Notes |
 |---|---|---|
