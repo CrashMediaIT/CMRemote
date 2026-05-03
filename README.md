@@ -59,6 +59,22 @@ You can enable HTTP logging to see all requests and responses in the server logs
 
 After changing the above, you must restart the container for the changes to take effect.
 
+## Rust Agent Remote Control
+
+CMRemote's Rust agent desktop transport is designed for unattended access. A
+valid remote-control session does not require a person at the controlled device
+to approve a prompt. Instead, the agent emits a host-local connected notification
+when a session starts and a disconnected notification when it ends.
+
+Current notification backends are:
+
+- Windows: `msg.exe`
+- Linux: `notify-send` when available, otherwise structured logs
+- macOS: `osascript display notification` when available, otherwise structured logs
+
+All notification text is sanitised before display and never includes access
+keys, TURN credentials, clipboard contents, or typed text.
+
 ## Build and Debug Instructions (Windows 11)
 
 The following steps will configure your Windows 11 machine for building the Remotely server and clients.
@@ -107,7 +123,9 @@ All other configuration is done in the Server Config page once you're logged in.
 - DataRetentionInDays: How long logs and other data will be kept on the server. Set to -1 to retain indefinitely (not recommended).
 - DBProvider: Determines which of the three connection strings (at the top) will be used. The appropriate DB provider for the database type is automatically loaded in code.
 - EnableWindowsEventLog: Whether to also add server log entries to the Windows Event Log.
-- EnforceAttendedAccess: Clients will be prompted to allow unattended remote control attempts.
+- EnforceAttendedAccess: Legacy attended-access setting. The Rust agent's R7
+  desktop transport is unattended by design and uses connection notifications
+  instead of local approval prompts.
 - EnableRemoteControlRecording: Whether to save recordings of remote control sessions on the server.
   - They will be saved in `/app/AppData/recordings`.
   - Their retention is governed by `DataRetentionInDays`.
@@ -116,7 +134,10 @@ All other configuration is done in the Server Config page once you're logged in.
 - MaxOrganizationCount: By default, one organization can exist on the server, which is created automatically when the first account is registered. Afterward, self-registration will be disabled.
   - Set this to -1 or increase it to a specific number to allow multi-tenancy.
 - RedirectToHttps: Whether ASP.NET Core will redirect all traffic from HTTP to HTTPS. This is independent of Caddy, Nginx, and IIS configurations that do the same.
-- RemoteControlNotifyUsers: Whether to show a notification to the end user when an unattended remote control session starts.
+- RemoteControlNotifyUsers: Whether legacy clients show a notification to the
+  end user when an unattended remote control session starts. The Rust agent
+  always emits connected/disconnected notifications when its desktop transport
+  accepts a session.
 - RemoteControlRequiresAuthentication: Whether the remote control page requires authentication to establish a connection.
 - Require2FA: Require users to set up 2FA before they can use the main app.
 - Smpt-: SMTP settings for auto-generated system emails (such as registration and password reset).
