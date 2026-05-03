@@ -66,7 +66,7 @@ The Rust agent's remote-control path is designed for unattended access:
 - Notification text is sanitised and must not include access keys, TURN credentials, clipboard contents, or typed text.
 - WebRTC signalling payload size caps are mirrored in Rust and .NET.
 
-The `Desktop E2E lab` GitHub Actions workflow validates the current browser/viewer DTO → .NET hub → Rust WebRTC transport contract that can run on hosted CI. Full browser/video lab coverage still requires runner-level WebRTC/display support.
+The `Desktop E2E lab` GitHub Actions workflow validates the browser/viewer DTO → .NET hub → Rust WebRTC transport contract, no-prompt notification lifecycle, and a hosted Linux Xvfb media path that captures the desktop with `xwd` and encodes H.264 with `ffmpeg`.
 
 ## Release integrity
 

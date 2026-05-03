@@ -94,6 +94,7 @@ impl LinuxDesktopProviders {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cmremote_platform::desktop::SessionNotification;
 
     #[test]
     fn unchecked_bundle_has_all_slots() {
@@ -104,5 +105,47 @@ mod tests {
         let _: &dyn cmremote_platform::desktop::KeyboardInput = &*bundle.keyboard;
         let _: &dyn cmremote_platform::desktop::Clipboard = &*bundle.clipboard;
         let _: &dyn cmremote_platform::desktop::SessionNotifier = &*bundle.notifier;
+    }
+
+    /// Hosted-CI/lab validation for the Linux desktop stack. Run under
+    /// Xvfb with `xwd`, `xdotool`, `xclip`, `ffmpeg`, and `notify-send`
+    /// installed:
+    ///
+    /// `xvfb-run -a cargo test -p cmremote-platform-linux desktop_lab -- --ignored --nocapture`
+    #[tokio::test]
+    #[ignore = "requires Xvfb and native Linux desktop helper binaries"]
+    async fn desktop_lab_captures_encodes_and_notifies_without_prompting() {
+        let bundle = LinuxDesktopProviders::build_checked().expect("linux providers");
+
+        let notification = SessionNotification::sanitised(
+            "11111111-2222-3333-4444-555555555555",
+            "Lab Viewer",
+            "CMRemote Lab",
+            "viewer-conn",
+        )
+        .expect("valid notification");
+        bundle.notifier.session_connected(&notification).await;
+
+        let frame = bundle
+            .capturer
+            .capture_next_frame()
+            .await
+            .expect("xwd frame");
+        assert!(frame.width > 0);
+        assert!(frame.height > 0);
+        assert_eq!(frame.stride, frame.width * 4);
+        assert_eq!(frame.bgra.len(), (frame.stride * frame.height) as usize);
+
+        let encoder = bundle.encoder_factory.build().expect("ffmpeg encoder");
+        encoder.request_keyframe();
+        let encoded = encoder.encode(&frame).await.expect("h264 frame");
+        assert!(!encoded.bytes.is_empty());
+        assert_eq!(encoded.timestamp_micros, frame.timestamp_micros);
+        assert!(encoded.is_keyframe);
+
+        bundle
+            .notifier
+            .session_disconnected(&notification, "desktop-lab-complete")
+            .await;
     }
 }

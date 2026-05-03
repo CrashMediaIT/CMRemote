@@ -7,6 +7,7 @@
 #   browser/viewer signalling DTOs -> .NET AgentHub routing tests
 #   .NET hub method surface -> Rust WebRTC desktop transport lifecycle
 #   unattended notification connected/disconnected events with no local prompt
+#   Xvfb Linux desktop capture -> ffmpeg H.264 encode
 
 name: Desktop E2E lab
 
@@ -40,6 +41,19 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Install Linux desktop lab dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            ffmpeg \
+            libnotify-bin \
+            wl-clipboard \
+            x11-apps \
+            x11-xserver-utils \
+            xclip \
+            xdotool \
+            xvfb
+
       - name: Restore .NET test projects
         run: |
           dotnet restore Tests/Server.Tests/Server.Tests.csproj
@@ -54,3 +68,7 @@ jobs:
       - name: Validate Rust WebRTC session, notification, and video-track lifecycle
         working-directory: agent-rs
         run: cargo test -p cmremote-platform --features webrtc-driver desktop::webrtc::tests -- --nocapture
+
+      - name: Validate Linux desktop capture and H.264 media lab
+        working-directory: agent-rs
+        run: xvfb-run -a --server-args="-screen 0 1280x720x24" cargo test -p cmremote-platform-linux desktop_lab -- --ignored --nocapture

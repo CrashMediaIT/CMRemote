@@ -301,12 +301,13 @@ a follow-up integration job tracked separately.
 
 The next milestones are now:
 
-1. **End-to-end desktop validation** *(🟡 CI contract shipped; full display lab pending)* —
+1. **End-to-end desktop validation** *(✅ hosted lab shipped; hardware-browser lab pending)* —
    the `Desktop E2E lab` workflow now pins the browser/viewer DTO → .NET hub →
    Rust WebRTC transport contract, including unattended connected/disconnected
-   notification and no-prompt assertions. The remaining follow-up is a runner
-   with real display/WebRTC media capture so the lab can assert rendered video
-   frames instead of the hosted-CI transport/track lifecycle.
+   notification and no-prompt assertions. It also runs a Linux Xvfb media lab
+   that captures a real X11 frame with `xwd` and encodes H.264 with `ffmpeg`.
+   The remaining follow-up is a hardware/browser runner that renders and
+   pixel-checks frames inside a real browser WebRTC stack.
 2. **M5 — Tests & docs** *(✅ shipped)* — `LegacyToV2ConverterGoldenVectorTests`
    fixtures under `Tests/Migration.Legacy.Tests/Fixtures/legacy-to-v2/`,
    [`Setup-Wizard.md`](docs/Setup-Wizard.md) operator guide,
