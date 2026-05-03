@@ -21,6 +21,9 @@ pub enum LinuxProvidersError {
     /// Screen capture driver construction failed.
     #[error(transparent)]
     Capture(#[from] LinuxCaptureError),
+    /// No X11 desktop display is available.
+    #[error("DISPLAY is not set; no X11 desktop session is available")]
+    NoDisplay,
     /// Encoder construction failed.
     #[error(transparent)]
     Encoder(#[from] LinuxEncoderError),
@@ -52,6 +55,9 @@ impl LinuxDesktopProviders {
 
     /// Build after checking command prerequisites.
     pub fn build_checked() -> Result<DesktopProviders, LinuxProvidersError> {
+        if std::env::var_os("DISPLAY").is_none() {
+            return Err(LinuxProvidersError::NoDisplay);
+        }
         let capturer = XwdDesktopCapturer::new()?;
         let encoder_factory = FfmpegH264EncoderFactory::new()?;
         let mouse = XdotoolMouseInput::new()?;
