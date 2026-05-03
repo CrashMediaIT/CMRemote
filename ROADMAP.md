@@ -310,10 +310,11 @@ The next milestones are now:
    fixtures under `Tests/Migration.Legacy.Tests/Fixtures/legacy-to-v2/`,
    [`Setup-Wizard.md`](docs/Setup-Wizard.md) operator guide,
    [`Migration.md`](docs/Migration.md) admin guide.
-3. **Track S remaining** — S5 (CycloneDX SBOM + Sigstore cosign + SLSA v1.0
-   build provenance for every tagged release), S6 `ConnectionInfo.json`
-   file-mode unit test (once the agent's write path lands with the enrolment
-   slice).
+3. **Track S remaining** — S5's release-side CycloneDX SBOM + Sigstore cosign
+   + SLSA v1.0 provenance pipeline is now wired into tagged releases; the
+   remaining S5 close-out is agent-side cosign certificate verification before
+   install. S6 still needs the `ConnectionInfo.json` file-mode unit test once
+   the agent's write path lands with the enrolment slice.
 4. **Live-Postgres integration coverage** (unchanged).
 5. **Clean-room server modules 3–6** — `Server.Services` data / auth /
    circuit split (Module 3), `Server.Hubs` dispatch rewrite (Module 4),
@@ -432,17 +433,18 @@ Still queued under S2 (not yet shipped): `cargo-vet` audit set,
   replays the same vector corpus against the server dispatch layer
   so divergence is caught on both sides of the wire.
 
-**S5 — Release integrity: SBOM + signed builds *(🔜)*.**
+**S5 — Release integrity: SBOM + signed builds *(🟡 release-side shipped; agent verifier pending)*.**
 
-- Generate a **CycloneDX** SBOM for both the Rust agent
-  (`cargo-cyclonedx`) and the .NET server (`dotnet-CycloneDX`) on
-  every tagged release and attach it to the GitHub release assets.
-- Sign release binaries with **Sigstore cosign** in keyless mode from
-  the release workflow; publish both the signature and the
-  Rekor log entry as release assets.
-- Generate **SLSA v1.0** build provenance via the
-  `slsa-framework/slsa-github-generator` reusable workflow.
-- The agent installer (PR E / slice R8) refuses to install a build
+- ✅ Generate **CycloneDX** SBOMs for the Rust agent workspace
+  (`cargo-cyclonedx` 0.5.9) and the .NET server (`dotnet-CycloneDX`
+  6.2.0) on every tagged release and attach them to the GitHub release
+  assets.
+- ✅ Sign release binaries with **Sigstore cosign** in keyless mode from
+  the release workflow; publish cosign bundle files as release assets.
+- ✅ Generate **SLSA v1.0** build provenance through GitHub artifact
+  attestations (`actions/attest-build-provenance`) over the release
+  asset set.
+- 🔜 The agent installer (PR E / slice R8) refuses to install a build
   whose cosign signature does not verify against the published
   certificate identity, closing the loop between the release process
   and the agent-upgrade pipeline (M3) which already requires a
