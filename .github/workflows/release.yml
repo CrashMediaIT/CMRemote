@@ -251,3 +251,75 @@ jobs:
             out/*
           draft: true
           generate_release_notes: true
+
+      - name: Verify tagged draft release assets
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          GH_REF_NAME: ${{ github.ref_name }}
+          GH_WORKFLOW_REF: ${{ github.workflow_ref }}
+        run: |
+          set -euo pipefail
+
+          release_json="$(gh api "repos/${GH_REPO}/releases/tags/${GH_REF_NAME}")"
+          draft="$(jq -r '.draft' <<<"$release_json")"
+          if [ "$draft" != "true" ]; then
+              echo "Expected ${GH_REF_NAME} release to remain a draft, got draft=${draft}." >&2
+              exit 1
+          fi
+
+          rm -rf verify-release
+          mkdir verify-release
+          gh release download "$GH_REF_NAME" --repo "$GH_REPO" --dir verify-release
+
+          expected_assets="$(mktemp)"
+          actual_assets="$(mktemp)"
+          find out -maxdepth 1 -type f -printf '%f\n' | sort > "$expected_assets"
+          find verify-release -maxdepth 1 -type f -printf '%f\n' | sort > "$actual_assets"
+          if ! diff -u "$expected_assets" "$actual_assets"; then
+              echo "Downloaded draft-release assets do not match generated assets." >&2
+              exit 1
+          fi
+
+          manifest="verify-release/publisher-manifest.json"
+          if [ ! -s "$manifest" ]; then
+              echo "publisher-manifest.json was not downloaded from the draft release." >&2
+              exit 1
+          fi
+
+          build_count="$(jq '.builds | length' "$manifest")"
+          if [ "$build_count" -eq 0 ]; then
+              echo "publisher-manifest.json contains no builds." >&2
+              exit 1
+          fi
+
+          expected_signed_by="https://github.com/${GH_REPO}/.github/workflows/release.yml@refs/tags/${GH_REF_NAME}"
+          jq -r '.builds[] | @base64' "$manifest" | while read -r encoded; do
+              build="$(printf '%s' "$encoded" | base64 -d)"
+              file="$(jq -r '.file' <<<"$build")"
+              signature="$(jq -r '.signature' <<<"$build")"
+              expected_sha="$(jq -r '.sha256' <<<"$build")"
+              signed_by="$(jq -r '.signedBy' <<<"$build")"
+
+              if [ "$signed_by" != "$expected_signed_by" ]; then
+                  echo "Unexpected signedBy for ${file}: ${signed_by}" >&2
+                  exit 1
+              fi
+
+              if [ ! -s "verify-release/$file" ]; then
+                  echo "Manifest artifact ${file} is missing from downloaded release assets." >&2
+                  exit 1
+              fi
+
+              if [ ! -s "verify-release/$signature" ]; then
+                  echo "Manifest signature ${signature} is missing from downloaded release assets." >&2
+                  exit 1
+              fi
+
+              actual_sha="$(sha256sum "verify-release/$file" | awk '{print $1}')"
+              if [ "$actual_sha" != "$expected_sha" ]; then
+                  echo "SHA-256 mismatch for ${file}: manifest=${expected_sha} downloaded=${actual_sha}" >&2
+                  exit 1
+              fi
+          done
