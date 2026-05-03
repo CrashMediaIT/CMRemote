@@ -104,11 +104,7 @@ impl Default for HubBoundSignallingEgress {
 
 impl std::fmt::Debug for HubBoundSignallingEgress {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let bound = self
-            .binding
-            .read()
-            .map(|g| g.is_some())
-            .unwrap_or(false);
+        let bound = self.binding.read().map(|g| g.is_some()).unwrap_or(false);
         f.debug_struct("HubBoundSignallingEgress")
             .field("bound", &bound)
             .finish()
@@ -169,8 +165,7 @@ impl HubBoundSignallingEgress {
 fn encode_invocation(invocation: &HubInvocation, encoding: HubProtocol) -> Message {
     match encoding {
         HubProtocol::Json => {
-            let bytes =
-                serde_json::to_vec(invocation).expect("hub invocation JSON serialisation");
+            let bytes = serde_json::to_vec(invocation).expect("hub invocation JSON serialisation");
             let framed = write_json_record(&bytes);
             Message::Text(String::from_utf8(framed).expect("valid utf-8"))
         }
@@ -452,8 +447,8 @@ mod tests {
 
         let inv = drain_one_invocation(&mut rx, HubProtocol::Json).await;
         assert_eq!(inv.target, "SendIceCandidate");
-        let dto: AgentIceCandidate = serde_json::from_value(inv.arguments[0].clone())
-            .expect("AgentIceCandidate round-trip");
+        let dto: AgentIceCandidate =
+            serde_json::from_value(inv.arguments[0].clone()).expect("AgentIceCandidate round-trip");
         assert_eq!(dto.viewer_connection_id, "viewer");
         assert_eq!(dto.sdp_mid.as_deref(), Some("0"));
         assert_eq!(dto.sdp_mline_index, Some(0));
