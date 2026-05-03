@@ -127,9 +127,12 @@ function Protect-ConnectionInfoAcl($Path) {
 	$Acl.SetAccessRuleProtection($true, $false)
 
 	$AccessRules = @(
+		# LocalSystem: service account writes enrolment/token updates.
 		@("S-1-5-18", [System.Security.AccessControl.FileSystemRights]::FullControl),
+		# Built-in Administrators: installer and operators can repair config.
 		@("S-1-5-32-544", [System.Security.AccessControl.FileSystemRights]::FullControl),
-		@("S-1-5-32-545", [System.Security.AccessControl.FileSystemRights]::ReadAndExecute)
+		# Built-in Users: desktop process can read only the bootstrap config.
+		@("S-1-5-32-545", [System.Security.AccessControl.FileSystemRights]::Read)
 	)
 
 	foreach ($AccessRule in $AccessRules) {
