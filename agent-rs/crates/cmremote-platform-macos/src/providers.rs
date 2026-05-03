@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use cmremote_platform::desktop::DesktopProviders;
+use cmremote_platform::desktop::{DesktopProviders, LoggingSessionNotifier};
 use thiserror::Error;
 
 use crate::capture::{BmpDesktopCapturer, MacOsCaptureError};
@@ -12,6 +12,7 @@ use crate::encoder::{FfmpegH264EncoderFactory, MacOsEncoderError};
 use crate::input::{
     AppleScriptKeyboardInput, AppleScriptMouseInput, MacOsClipboard, MacOsInputError,
 };
+use crate::notification::MacOsSessionNotifier;
 
 /// Errors surfaced by [`MacOsDesktopProviders::for_current_desktop`].
 #[derive(Debug, Error)]
@@ -57,12 +58,23 @@ impl MacOsDesktopProviders {
         let mouse = AppleScriptMouseInput::new()?;
         let keyboard = AppleScriptKeyboardInput::new()?;
         let clipboard = MacOsClipboard::new()?;
+        let notifier: Arc<dyn cmremote_platform::desktop::SessionNotifier> =
+            match MacOsSessionNotifier::new() {
+                Some(n) => Arc::new(n),
+                None => {
+                    tracing::warn!(
+                        "osascript not found; desktop-session notifications will be logged only"
+                    );
+                    Arc::new(LoggingSessionNotifier)
+                }
+            };
         Ok(DesktopProviders {
             capturer: Arc::new(capturer),
             encoder_factory: Arc::new(encoder_factory),
             mouse: Arc::new(mouse),
             keyboard: Arc::new(keyboard),
             clipboard: Arc::new(clipboard),
+            notifier,
         })
     }
 
@@ -75,6 +87,7 @@ impl MacOsDesktopProviders {
             mouse: Arc::new(AppleScriptMouseInput),
             keyboard: Arc::new(AppleScriptKeyboardInput),
             clipboard: Arc::new(MacOsClipboard),
+            notifier: Arc::new(LoggingSessionNotifier),
         }
     }
 }
@@ -91,5 +104,6 @@ mod tests {
         let _: &dyn cmremote_platform::desktop::MouseInput = &*bundle.mouse;
         let _: &dyn cmremote_platform::desktop::KeyboardInput = &*bundle.keyboard;
         let _: &dyn cmremote_platform::desktop::Clipboard = &*bundle.clipboard;
+        let _: &dyn cmremote_platform::desktop::SessionNotifier = &*bundle.notifier;
     }
 }

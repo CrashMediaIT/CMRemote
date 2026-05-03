@@ -115,7 +115,7 @@ use super::webrtc_pc::{
     translate_ice_candidate, translate_ice_config, PeerConnectionFactory, PeerConnectionRegistry,
 };
 use super::webrtc_track::{new_h264_video_track, WebRtcVideoTrackSink};
-use super::DesktopTransportProvider;
+use super::{DesktopTransportProvider, SessionNotification};
 use crate::HostOs;
 
 /// Stable string baked into every "platform method not implemented"
@@ -201,6 +201,11 @@ pub struct WebRtcDesktopTransport {
     /// invokes the server-bound `SendSdpAnswer` /
     /// `SendIceCandidate` hub methods.
     egress: Arc<dyn SignallingEgress>,
+    /// Sanitised notification payloads for currently open sessions.
+    /// Stored separately from the session registry so close paths can
+    /// emit a disconnected notification after removing the registry
+    /// record.
+    notifications: Arc<Mutex<HashMap<String, SessionNotification>>>,
 }
 
 impl WebRtcDesktopTransport {
@@ -249,6 +254,7 @@ impl WebRtcDesktopTransport {
             peer_connections: Arc::new(PeerConnectionRegistry::new()),
             pc_alive: Arc::new(Mutex::new(HashMap::new())),
             egress: Arc::new(LoggingSignallingEgress),
+            notifications: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
@@ -316,6 +322,7 @@ impl WebRtcDesktopTransport {
             peer_connections: Arc::new(PeerConnectionRegistry::new()),
             pc_alive: Arc::new(Mutex::new(HashMap::new())),
             egress,
+            notifications: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -360,6 +367,49 @@ impl WebRtcDesktopTransport {
 
     fn expected_org(&self) -> Option<&str> {
         self.expected_org_id.as_deref()
+    }
+
+    /// Store and emit the best-effort local connected notification
+    /// for a freshly accepted unattended desktop session.
+    async fn notify_connected(&self, request: &RemoteControlSessionRequest) {
+        let notification = match SessionNotification::sanitised(
+            request.session_id.clone(),
+            request.requester_name.clone(),
+            request.org_name.clone(),
+            request.user_connection_id.clone(),
+        ) {
+            Ok(n) => n,
+            Err(e) => {
+                tracing::warn!(
+                    session_id = %request.session_id,
+                    error = %e,
+                    event = "desktop-session-notification-invalid",
+                    "could not build desktop session notification from guarded request",
+                );
+                return;
+            }
+        };
+        self.notifications
+            .lock()
+            .await
+            .insert(request.session_id.clone(), notification.clone());
+        self.providers
+            .notifier
+            .session_connected(&notification)
+            .await;
+    }
+
+    /// Remove and emit the best-effort local disconnected
+    /// notification for `session_id` if a connected notification was
+    /// previously emitted.
+    async fn notify_disconnected(&self, session_id: &str, reason: &str) {
+        let notification = self.notifications.lock().await.remove(session_id);
+        if let Some(notification) = notification {
+            self.providers
+                .notifier
+                .session_disconnected(&notification, reason)
+                .await;
+        }
     }
 
     /// Spawn a fresh pump for `session_id`, replacing (and stopping)
@@ -575,10 +625,14 @@ impl WebRtcDesktopTransport {
         // `Connected` / `Closed` transitions reflect the actual
         // peer-connection state.
         let sessions_for_state = self.sessions.clone();
+        let notifications_for_state = self.notifications.clone();
+        let notifier_for_state = self.providers.notifier.clone();
         let session_id_for_state = session_id.to_string();
         let alive_for_state = alive;
         pc.on_peer_connection_state_change(Box::new(move |state| {
             let sessions = sessions_for_state.clone();
+            let notifications = notifications_for_state.clone();
+            let notifier = notifier_for_state.clone();
             let session_id = session_id_for_state.clone();
             let alive = alive_for_state.clone();
             Box::pin(async move {
@@ -603,6 +657,12 @@ impl WebRtcDesktopTransport {
                     | RTCPeerConnectionState::Closed
                     | RTCPeerConnectionState::Disconnected => {
                         sessions.close(&session_id, CloseReason::Explicit);
+                        let notification = notifications.lock().await.remove(&session_id);
+                        if let Some(notification) = notification {
+                            notifier
+                                .session_disconnected(&notification, CloseReason::Explicit.as_str())
+                                .await;
+                        }
                     }
                     _ => {}
                 }
@@ -728,11 +788,9 @@ impl WebRtcDesktopTransport {
             loop {
                 match sender_for_pli.read_rtcp().await {
                     Ok((packets, _)) => {
-                        let saw_pli = packets.iter().any(|p| {
-                            p.as_any()
-                                .downcast_ref::<PictureLossIndication>()
-                                .is_some()
-                        });
+                        let saw_pli = packets
+                            .iter()
+                            .any(|p| p.as_any().downcast_ref::<PictureLossIndication>().is_some());
                         if saw_pli {
                             tracing::debug!(
                                 session_id = %session_id_for_pli,
@@ -769,6 +827,8 @@ impl WebRtcDesktopTransport {
             sessions.sweep_idle(now)
         };
         for id in &evicted {
+            self.notify_disconnected(id, CloseReason::IdleTimeout.as_str())
+                .await;
             self.stop_pump(id, CloseReason::IdleTimeout.as_str()).await;
             self.close_peer_connection(id, CloseReason::IdleTimeout.as_str())
                 .await;
@@ -827,8 +887,13 @@ impl DesktopTransportProvider for WebRtcDesktopTransport {
         // building the pump / PC, so the audit trail records the
         // open even if the pump / PC construction fails downstream.
         let mut sessions = self.sessions.lock().await;
-        let _outcome = sessions.open(&request.session_id, &request.user_connection_id);
+        let outcome = sessions.open(&request.session_id, &request.user_connection_id);
         drop(sessions);
+        if matches!(outcome, super::OpenOutcome::Replaced { .. }) {
+            self.notify_disconnected(&request.session_id, CloseReason::Replaced.as_str())
+                .await;
+        }
+        self.notify_connected(request).await;
         // Slice R7.m — replace-on-duplicate also closes any prior
         // peer connection (mirrors the registry's `Replaced`
         // semantics). Done before the new pump spawns so the
@@ -895,6 +960,8 @@ impl DesktopTransportProvider for WebRtcDesktopTransport {
         let mut sessions = self.sessions.lock().await;
         sessions.close(&request.session_id, CloseReason::Explicit);
         drop(sessions);
+        self.notify_disconnected(&request.session_id, "change-windows-session")
+            .await;
         self.stop_pump(&request.session_id, "change-windows-session")
             .await;
         self.close_peer_connection(&request.session_id, "change-windows-session")
@@ -1133,6 +1200,9 @@ impl DesktopTransportProvider for WebRtcDesktopTransport {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::desktop::notification::testing::{
+        CapturedNotificationEvent, CapturingSessionNotifier,
+    };
     use crate::desktop::signalling_egress::testing::{CapturedSignal, CapturingSignallingEgress};
 
     const VALID_SESSION_ID: &str = "11111111-2222-3333-4444-555555555555";
@@ -1274,6 +1344,21 @@ a=max-message-size:262144\r\n";
         (t, egress)
     }
 
+    fn transport_with_notifications() -> (WebRtcDesktopTransport, CapturingSessionNotifier) {
+        let notifier = CapturingSessionNotifier::new();
+        let mut providers = DesktopProviders::not_supported_for(HostOs::Linux);
+        providers.notifier = Arc::new(notifier.clone());
+        let sink: Arc<dyn CaptureSink> = Arc::new(DiscardingCaptureSink::new());
+        let t = WebRtcDesktopTransport::with_providers(
+            HostOs::Linux,
+            Some(VALID_ORG_ID.into()),
+            Arc::new(providers),
+            sink,
+            CapturePumpConfig::default(),
+        );
+        (t, notifier)
+    }
+
     // -----------------------------------------------------------------
     // Happy path: RemoteControl opens the session; subsequent
     // signalling methods drive the registry into the right state and
@@ -1294,6 +1379,67 @@ a=max-message-size:262144\r\n";
         // No PC yet — built lazily on first signalling.
         drop(sessions);
         assert!(!p.has_peer_connection(VALID_SESSION_ID).await);
+    }
+
+    #[tokio::test]
+    async fn remote_control_emits_unattended_connected_notification_without_prompting() {
+        let (p, notifier) = transport_with_notifications();
+        let r = p.remote_control(&rc_req()).await;
+        assert!(r.success, "{r:?}");
+        let events = notifier.events().await;
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            CapturedNotificationEvent::Connected(n) => {
+                assert_eq!(n.session_id, VALID_SESSION_ID);
+                assert_eq!(n.requester_name, "Alice");
+                assert_eq!(n.org_name, "Acme");
+                assert_eq!(n.viewer_connection_id, "viewer-1");
+            }
+            other => panic!("expected connected notification, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn change_windows_session_emits_disconnected_notification() {
+        let (p, notifier) = transport_with_notifications();
+        let _ = p.remote_control(&rc_req()).await;
+        let r = p.change_windows_session(&change_session_req()).await;
+        assert!(r.success, "{r:?}");
+        let events = notifier.events().await;
+        assert_eq!(events.len(), 2);
+        assert!(matches!(events[0], CapturedNotificationEvent::Connected(_)));
+        match &events[1] {
+            CapturedNotificationEvent::Disconnected(n, reason) => {
+                assert_eq!(n.session_id, VALID_SESSION_ID);
+                assert_eq!(reason, "change-windows-session");
+            }
+            other => panic!("expected disconnected notification, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn duplicate_remote_control_emits_disconnect_then_new_connect_notification() {
+        let (p, notifier) = transport_with_notifications();
+        let _ = p.remote_control(&rc_req()).await;
+        let mut req = rc_req();
+        req.user_connection_id = "viewer-2".into();
+        let r = p.remote_control(&req).await;
+        assert!(r.success, "{r:?}");
+        let events = notifier.events().await;
+        assert_eq!(events.len(), 3);
+        assert!(matches!(events[0], CapturedNotificationEvent::Connected(_)));
+        match &events[1] {
+            CapturedNotificationEvent::Disconnected(_, reason) => {
+                assert_eq!(reason, CloseReason::Replaced.as_str());
+            }
+            other => panic!("expected replacement disconnect, got {other:?}"),
+        }
+        match &events[2] {
+            CapturedNotificationEvent::Connected(n) => {
+                assert_eq!(n.viewer_connection_id, "viewer-2");
+            }
+            other => panic!("expected replacement connect, got {other:?}"),
+        }
     }
 
     #[tokio::test]
@@ -1818,9 +1964,7 @@ a=max-message-size:262144\r\n";
     // upstream `webrtc-rs` PC machinery is real.
     // -----------------------------------------------------------------
 
-    use crate::desktop::media::{
-        CapturedFrame, EncoderFactory, VideoEncoder,
-    };
+    use crate::desktop::media::{CapturedFrame, EncoderFactory, VideoEncoder};
 
     /// Stub `VideoEncoder` that emits fixed-size dummy chunks.
     /// Used to exercise the R7.n.6 wiring without depending on a
@@ -1834,8 +1978,10 @@ a=max-message-size:262144\r\n";
         async fn encode(
             &self,
             frame: &CapturedFrame,
-        ) -> Result<crate::desktop::media::EncodedVideoChunk, crate::desktop::media::DesktopMediaError>
-        {
+        ) -> Result<
+            crate::desktop::media::EncodedVideoChunk,
+            crate::desktop::media::DesktopMediaError,
+        > {
             let mut s = self.seen.lock().unwrap();
             *s += 1;
             Ok(crate::desktop::media::EncodedVideoChunk {
@@ -1851,9 +1997,7 @@ a=max-message-size:262144\r\n";
     /// fresh stub encoder.
     struct StubEncoderFactory;
     impl EncoderFactory for StubEncoderFactory {
-        fn build(
-            &self,
-        ) -> Result<Arc<dyn VideoEncoder>, crate::desktop::media::DesktopMediaError> {
+        fn build(&self) -> Result<Arc<dyn VideoEncoder>, crate::desktop::media::DesktopMediaError> {
             Ok(Arc::new(StubEncoder::default()))
         }
     }
@@ -1908,8 +2052,9 @@ a=max-message-size:262144\r\n";
             .expect("PC built by on_provide_ice_servers");
         let transceivers = pc.get_transceivers().await;
         assert!(
-            transceivers.iter().any(|t| t.kind()
-                == webrtc::rtp_transceiver::rtp_codec::RTPCodecType::Video),
+            transceivers
+                .iter()
+                .any(|t| t.kind() == webrtc::rtp_transceiver::rtp_codec::RTPCodecType::Video),
             "PC must carry a video transceiver after attach_video_track ran",
         );
     }
@@ -1958,8 +2103,7 @@ a=max-message-size:262144\r\n";
             pc.get_transceivers()
                 .await
                 .iter()
-                .all(|t| t.kind()
-                    != webrtc::rtp_transceiver::rtp_codec::RTPCodecType::Video),
+                .all(|t| t.kind() != webrtc::rtp_transceiver::rtp_codec::RTPCodecType::Video),
             "PC must NOT carry a video transceiver when the encoder factory is NotSupported",
         );
     }

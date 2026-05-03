@@ -4,7 +4,8 @@
 //!
 //! The agent's WebRTC desktop transport needs four collaborating
 //! providers — a screen capturer, a mouse-input driver, a
-//! keyboard-input driver, and a clipboard driver — all configured
+//! keyboard-input driver, a clipboard driver, and a session
+//! notifier — all configured
 //! for the same host. Slices R7.h (input traits), R7.c (capture
 //! traits), and R7.n (Windows DXGI / `SendInput` impls) ship the
 //! individual building blocks; this module wires them into a
@@ -15,7 +16,7 @@
 //!
 //! A trait would force every consumer to call four accessor
 //! methods and clone four `Arc`s on every WebRTC track / data
-//! channel construction. The bundle is *data* — four `Arc<dyn
+//! channel construction. The bundle is *data* — `Arc<dyn
 //! …>` slots — so a plain struct is the simplest representation
 //! and keeps `DesktopProviders` `Clone`-able and `Send + Sync`
 //! without further trait gymnastics.
@@ -39,10 +40,11 @@
 //! `DesktopProviders` is purely a container — it neither validates
 //! nor mediates calls into the underlying providers. The trait
 //! contracts on [`DesktopCapturer`], [`MouseInput`],
-//! [`KeyboardInput`], and [`Clipboard`] are unchanged; in
-//! particular the consent gate ([`super::consent`]) and the wire
-//! envelope guards ([`super::guards`]) remain the responsibility
-//! of the call site that *uses* a slot, not the bundle itself.
+//! [`KeyboardInput`], [`Clipboard`], and [`SessionNotifier`] are
+//! unchanged; in particular the notification emission
+//! ([`super::notification`]) and the wire envelope guards
+//! ([`super::guards`]) remain the responsibility of the call site
+//! that *uses* a slot, not the bundle itself.
 
 use std::sync::Arc;
 
@@ -53,6 +55,7 @@ use super::input::{
 use super::media::{
     DesktopCapturer, EncoderFactory, NotSupportedDesktopCapturer, NotSupportedEncoderFactory,
 };
+use super::notification::{LoggingSessionNotifier, SessionNotifier};
 use crate::HostOs;
 
 /// Owned bundle of the four desktop-capability providers for one
@@ -78,6 +81,9 @@ pub struct DesktopProviders {
     pub keyboard: Arc<dyn KeyboardInput>,
     /// Reads / writes the host's text clipboard.
     pub clipboard: Arc<dyn Clipboard>,
+    /// Emits host-local connected / disconnected notifications for
+    /// unattended desktop sessions.
+    pub notifier: Arc<dyn SessionNotifier>,
 }
 
 impl DesktopProviders {
@@ -98,6 +104,7 @@ impl DesktopProviders {
             mouse: Arc::new(NotSupportedMouseInput::new(host_os)),
             keyboard: Arc::new(NotSupportedKeyboardInput::new(host_os)),
             clipboard: Arc::new(NotSupportedClipboard::new(host_os)),
+            notifier: Arc::new(LoggingSessionNotifier),
         }
     }
 
@@ -123,6 +130,7 @@ impl std::fmt::Debug for DesktopProviders {
             .field("mouse", &"<dyn MouseInput>")
             .field("keyboard", &"<dyn KeyboardInput>")
             .field("clipboard", &"<dyn Clipboard>")
+            .field("notifier", &"<dyn SessionNotifier>")
             .finish()
     }
 }
@@ -167,6 +175,18 @@ mod tests {
         assert!(e.to_string().contains("Linux"), "{e}");
         let e = p.clipboard.write_text("hi").await.unwrap_err();
         assert!(e.to_string().contains("Linux"), "{e}");
+
+        p.notifier
+            .session_connected(
+                &crate::desktop::SessionNotification::sanitised(
+                    "11111111-2222-3333-4444-555555555555",
+                    "Alice",
+                    "Acme",
+                    "viewer-1",
+                )
+                .unwrap(),
+            )
+            .await;
     }
 
     #[test]

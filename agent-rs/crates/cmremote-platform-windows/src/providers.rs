@@ -54,6 +54,7 @@ use thiserror::Error;
 use crate::capture::{WindowsCaptureError, WindowsDesktopCapturer};
 use crate::encoder::{WindowsEncoderError, WindowsVideoEncoderFactory};
 use crate::input::{WindowsClipboard, WindowsKeyboardInput, WindowsMouseInput};
+use crate::notification::WindowsSessionNotifier;
 use crate::session::{WindowsSessionError, WindowsSessionInfo};
 
 /// Errors surfaced by [`WindowsDesktopProviders::for_primary_output`].
@@ -146,6 +147,7 @@ impl WindowsDesktopProviders {
             mouse: Arc::new(WindowsMouseInput::new()),
             keyboard: Arc::new(WindowsKeyboardInput::new()),
             clipboard: Arc::new(WindowsClipboard::new()),
+            notifier: Arc::new(WindowsSessionNotifier),
         })
     }
 }
@@ -213,5 +215,6 @@ mod tests {
         let _: &dyn cmremote_platform::desktop::MouseInput = &*bundle.mouse;
         let _: &dyn cmremote_platform::desktop::KeyboardInput = &*bundle.keyboard;
         let _: &dyn cmremote_platform::desktop::Clipboard = &*bundle.clipboard;
+        let _: &dyn cmremote_platform::desktop::SessionNotifier = &*bundle.notifier;
     }
 }

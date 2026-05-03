@@ -64,11 +64,11 @@ use cmremote_wire::{
 
 use crate::HostOs;
 
-pub mod consent;
 pub mod encoder_sink;
 pub mod guards;
 pub mod input;
 pub mod media;
+pub mod notification;
 pub mod nv12;
 pub mod providers;
 pub mod pump;
@@ -81,10 +81,6 @@ pub(crate) mod webrtc_pc;
 #[cfg(feature = "webrtc-driver")]
 pub mod webrtc_track;
 
-pub use consent::{
-    ConsentDecision, ConsentPrompter, ConsentRequest, DenyAllConsentPrompter,
-    DEFAULT_CONSENT_TIMEOUT,
-};
 pub use encoder_sink::{DiscardingEncodedChunkSink, EncodedChunkSink, EncoderCaptureSink};
 pub use input::{
     Clipboard, DesktopInputError, KeyCode, KeyboardInput, MouseButton, MouseInput, NamedKey,
@@ -95,6 +91,7 @@ pub use media::{
     NotSupportedDesktopCapturer, NotSupportedEncoderFactory, NotSupportedVideoEncoder,
     VideoEncoder,
 };
+pub use notification::{LoggingSessionNotifier, SessionNotification, SessionNotifier};
 pub use nv12::{bgra_to_nv12, Nv12Frame};
 pub use providers::DesktopProviders;
 pub use pump::{
@@ -118,8 +115,8 @@ pub use webrtc_track::{
 /// Each method maps 1:1 to one of the four desktop hub invocations
 /// the .NET server can issue. The agent's dispatcher decodes the
 /// invocation into the matching request DTO and forwards it here;
-/// the provider is responsible for everything from consent prompting
-/// to capture / encode / WebRTC plumbing.
+/// the provider is responsible for everything from unattended-session
+/// notification to capture / encode / WebRTC plumbing.
 ///
 /// All methods take `&self` and return the same generic result type
 /// so the agent's hub-completion layer does not need a per-method

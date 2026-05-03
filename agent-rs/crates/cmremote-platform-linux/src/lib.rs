@@ -22,11 +22,13 @@
 pub mod capture;
 pub mod encoder;
 pub mod input;
+pub mod notification;
 pub mod providers;
 
 pub use capture::{LinuxCaptureError, XwdDesktopCapturer};
 pub use encoder::{FfmpegH264Encoder, FfmpegH264EncoderFactory, LinuxEncoderError};
 pub use input::{LinuxClipboard, LinuxInputError, XdotoolKeyboardInput, XdotoolMouseInput};
+pub use notification::NotifySendSessionNotifier;
 pub use providers::{LinuxDesktopProviders, LinuxProvidersError};
 
 /// Return `true` when `program` can be found on `PATH`.
