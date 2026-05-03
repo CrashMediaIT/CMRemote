@@ -296,13 +296,7 @@ jobs:
           fi
 
           expected_signed_by="https://github.com/${GH_REPO}/.github/workflows/release.yml@refs/tags/${GH_REF_NAME}"
-          while read -r encoded; do
-              build="$(printf '%s' "$encoded" | base64 -d)"
-              file="$(jq -r '.file' <<<"$build")"
-              signature="$(jq -r '.signature' <<<"$build")"
-              expected_sha="$(jq -r '.sha256' <<<"$build")"
-              signed_by="$(jq -r '.signedBy' <<<"$build")"
-
+          while IFS=$'\t' read -r file signature expected_sha signed_by; do
               if [ "$signed_by" != "$expected_signed_by" ]; then
                   echo "Unexpected signedBy for ${file}: ${signed_by}" >&2
                   exit 1
@@ -323,4 +317,4 @@ jobs:
                   echo "SHA-256 mismatch for ${file}: manifest=${expected_sha} downloaded=${actual_sha}" >&2
                   exit 1
               fi
-          done < <(jq -r '.builds[] | @base64' "$manifest")
+          done < <(jq -r '.builds[] | [.file, .signature, .sha256, .signedBy] | @tsv' "$manifest")
