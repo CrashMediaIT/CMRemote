@@ -122,6 +122,31 @@ function Uninstall-Remotely {
 	Remove-NetFirewallRule -Name "Remotely Desktop Unattended" -ErrorAction SilentlyContinue
 }
 
+function Protect-ConnectionInfoAcl($Path) {
+	$Acl = Get-Acl -Path $Path
+	$Acl.SetAccessRuleProtection($true, $false)
+
+	$AccessRules = @(
+		# LocalSystem: service account writes enrolment/token updates.
+		@("S-1-5-18", [System.Security.AccessControl.FileSystemRights]::FullControl),
+		# Built-in Administrators: installer and operators can repair config.
+		@("S-1-5-32-544", [System.Security.AccessControl.FileSystemRights]::FullControl),
+		# Built-in Users: desktop process can read only the bootstrap config.
+		@("S-1-5-32-545", [System.Security.AccessControl.FileSystemRights]::Read)
+	)
+
+	foreach ($AccessRule in $AccessRules) {
+		$Identity = New-Object System.Security.Principal.SecurityIdentifier($AccessRule[0])
+		$Rule = New-Object System.Security.AccessControl.FileSystemAccessRule(
+			$Identity,
+			$AccessRule[1],
+			[System.Security.AccessControl.AccessControlType]::Allow)
+		$Acl.AddAccessRule($Rule)
+	}
+
+	Set-Acl -Path $Path -AclObject $Acl
+}
+
 function Install-Remotely {
 	$HeadResponse = Invoke-WebRequest -Uri "$HostName/Content/Remotely-Win-$Platform.zip" -Method Head -UseBasicParsing
 	$ETag = $HeadResponse.Headers["ETag"]
@@ -177,7 +202,9 @@ function Install-Remotely {
 
 	Expand-Archive -Path "$env:TEMP\Remotely-Win-$Platform.zip" -DestinationPath "$InstallPath" -Force
 
-	New-Item -ItemType File -Path "$InstallPath\ConnectionInfo.json" -Value (ConvertTo-Json -InputObject $ConnectionInfo) -Force
+	$ConnectionInfoPath = "$InstallPath\ConnectionInfo.json"
+	New-Item -ItemType File -Path $ConnectionInfoPath -Value (ConvertTo-Json -InputObject $ConnectionInfo) -Force
+	Protect-ConnectionInfoAcl $ConnectionInfoPath
 
 	New-Item -ItemType File -Path "$InstallPath\etag.txt" -Value $ETag -Force
 

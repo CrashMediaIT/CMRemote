@@ -1,12 +1,38 @@
 @import url('open-iconic/font/css/open-iconic-bootstrap.min.css');
 
+:root {
+    --cmremote-navy: #071d2b;
+    --cmremote-blue: #0a75bc;
+    --cmremote-cyan: #34c3ff;
+    --cmremote-orange: #ff8a00;
+    --cmremote-link: #0a75bc;
+}
+
 html, body {
     font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
     overscroll-behavior-y: contain;
 }
 
 a, .btn-link {
-    color: #0366d6;
+    color: var(--cmremote-link);
+}
+
+.btn-primary {
+    background-color: var(--cmremote-blue);
+    border-color: var(--cmremote-blue);
+}
+
+.btn-primary:hover,
+.btn-primary:focus {
+    background-color: #085f99;
+    border-color: #085f99;
+}
+
+.logo-title {
+    color: white;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
 }
 
 /*.btn-primary {

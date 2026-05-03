@@ -19,6 +19,7 @@ This repository is mid-rewrite and **not production-deployable yet**. Use the ro
 | Rust agent architecture and local commands | [`agent-rs/README.md`](agent-rs/README.md) |
 | Agent packaging and release artifacts | [`agent-rs/packaging/README.md`](agent-rs/packaging/README.md) |
 | Publisher manifest contract | [`docs/publisher-manifest.md`](docs/publisher-manifest.md) |
+| Operator deployment runbook | [`docs/operator-deployment-runbook.md`](docs/operator-deployment-runbook.md) |
 | Wire protocol and frozen vectors | [`docs/wire-protocol.md`](docs/wire-protocol.md) |
 | Setup wizard operator guide | [`docs/Setup-Wizard.md`](docs/Setup-Wizard.md) |
 | Legacy migration guide | [`docs/Migration.md`](docs/Migration.md) |

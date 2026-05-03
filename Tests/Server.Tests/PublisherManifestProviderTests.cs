@@ -62,6 +62,8 @@ public class PublisherManifestProviderTests
                     file = "cmremote-agent.deb",
                     size = 12345L,
                     sha256 = new string('a', 64),
+                    signature = "cmremote-agent.deb.cosign.bundle",
+                    signedBy = "https://github.com/CrashMediaIT/CMRemote/.github/workflows/release.yml@refs/tags/v2.0.0",
                 },
             },
         });
@@ -232,6 +234,8 @@ public class PublisherManifestProviderTests
                     file = "cmremote-agent.deb",
                     size = 12345L,
                     sha256 = new string('a', 64),
+                    signature = "cmremote-agent.deb.cosign.bundle",
+                    signedBy = "https://github.com/CrashMediaIT/CMRemote/.github/workflows/release.yml@refs/tags/v2.0.0",
                 },
             },
         });

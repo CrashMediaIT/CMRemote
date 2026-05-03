@@ -98,7 +98,7 @@ jobs:
       # ----- C# build for CodeQL ------------------------------------
       - name: Build .NET solution
         if: matrix.language == 'csharp'
-        run: dotnet build Remotely.sln --configuration Release --nologo
+        run: dotnet build Remotely.sln --configuration Release --nologo -p:EnableWindowsTargeting=true
 
       # ----- Rust build is handled by autobuild ---------------------
       - name: Autobuild (rust)
