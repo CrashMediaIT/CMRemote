@@ -326,9 +326,21 @@ mod tests {
         let f = make_frame(2, 2, |_, _| [0, 0xff, 0, 0xff]);
         let n = bgra_to_nv12(&f).unwrap();
         // Allow ±1 rounding tolerance.
-        assert!(n.y.iter().all(|&v| v.abs_diff(144) <= 1), "Y={:?}", n.y);
-        assert!(n.uv[0].abs_diff(54) <= 1, "U={} (expected ~54)", n.uv[0]);
-        assert!(n.uv[1].abs_diff(34) <= 1, "V={} (expected ~34)", n.uv[1]);
+        assert!(
+            n.y.iter().all(|&v| v.abs_diff(144) <= 1),
+            "Y={:?}",
+            n.y
+        );
+        assert!(
+            n.uv[0].abs_diff(54) <= 1,
+            "U={} (expected ~54)",
+            n.uv[0]
+        );
+        assert!(
+            n.uv[1].abs_diff(34) <= 1,
+            "V={} (expected ~34)",
+            n.uv[1]
+        );
     }
 
     #[test]
@@ -339,7 +351,11 @@ mod tests {
         //   V ≈ 110
         let f = make_frame(2, 2, |_, _| [0xff, 0, 0, 0xff]);
         let n = bgra_to_nv12(&f).unwrap();
-        assert!(n.y.iter().all(|&v| v.abs_diff(41) <= 1), "Y={:?}", n.y);
+        assert!(
+            n.y.iter().all(|&v| v.abs_diff(41) <= 1),
+            "Y={:?}",
+            n.y
+        );
         assert!(n.uv[0].abs_diff(240) <= 1, "U={}", n.uv[0]);
         assert!(n.uv[1].abs_diff(110) <= 1, "V={}", n.uv[1]);
     }

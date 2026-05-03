@@ -69,7 +69,8 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use cmremote_platform::desktop::{
-    bgra_to_nv12, CapturedFrame, DesktopMediaError, EncodedVideoChunk, EncoderFactory, VideoEncoder,
+    bgra_to_nv12, CapturedFrame, DesktopMediaError, EncodedVideoChunk, EncoderFactory,
+    VideoEncoder,
 };
 use thiserror::Error;
 use tracing::{debug, warn};
@@ -77,17 +78,19 @@ use tracing::{debug, warn};
 use windows::core::GUID;
 use windows::Win32::Media::MediaFoundation::{
     CLSID_MSH264EncoderMFT, IMFMediaBuffer, IMFMediaType, IMFSample, IMFTransform,
-    MFCreateMediaType, MFCreateMemoryBuffer, MFCreateSample, MFMediaType_Video,
-    MFSampleExtension_CleanPoint, MFShutdown, MFStartup, MFVideoFormat_H264, MFVideoFormat_NV12,
-    MFVideoInterlace_Progressive, MFSTARTUP_FULL, MFT_MESSAGE_COMMAND_FLUSH,
-    MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, MFT_MESSAGE_NOTIFY_END_OF_STREAM,
-    MFT_MESSAGE_NOTIFY_END_STREAMING, MFT_MESSAGE_NOTIFY_START_OF_STREAM, MFT_OUTPUT_DATA_BUFFER,
-    MFT_OUTPUT_STREAM_INFO, MFT_OUTPUT_STREAM_PROVIDES_SAMPLES, MF_E_TRANSFORM_NEED_MORE_INPUT,
-    MF_MT_AVG_BITRATE, MF_MT_FRAME_RATE, MF_MT_FRAME_SIZE, MF_MT_INTERLACE_MODE, MF_MT_MAJOR_TYPE,
-    MF_MT_PIXEL_ASPECT_RATIO, MF_MT_SUBTYPE, MF_VERSION,
+    MFCreateMediaType, MFCreateMemoryBuffer, MFCreateSample, MFShutdown, MFStartup,
+    MFSampleExtension_CleanPoint, MFVideoFormat_H264, MFVideoFormat_NV12, MFMediaType_Video,
+    MFSTARTUP_FULL, MFT_MESSAGE_COMMAND_FLUSH, MFT_MESSAGE_NOTIFY_BEGIN_STREAMING,
+    MFT_MESSAGE_NOTIFY_END_OF_STREAM, MFT_MESSAGE_NOTIFY_END_STREAMING,
+    MFT_MESSAGE_NOTIFY_START_OF_STREAM, MFT_OUTPUT_DATA_BUFFER,
+    MFT_OUTPUT_STREAM_INFO, MFT_OUTPUT_STREAM_PROVIDES_SAMPLES,
+    MF_E_TRANSFORM_NEED_MORE_INPUT, MF_MT_AVG_BITRATE, MF_MT_FRAME_RATE,
+    MF_MT_FRAME_SIZE, MF_MT_INTERLACE_MODE, MF_MT_MAJOR_TYPE,
+    MF_MT_PIXEL_ASPECT_RATIO, MF_MT_SUBTYPE, MFVideoInterlace_Progressive, MF_VERSION,
 };
 use windows::Win32::System::Com::{
-    CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED,
+    CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER,
+    COINIT_MULTITHREADED,
 };
 
 // ---------------------------------------------------------------------------
@@ -213,9 +216,7 @@ impl WindowsVideoEncoderConfig {
     /// every failure mode so the runtime can log + fall back.
     pub fn validate(&self) -> Result<(), WindowsEncoderError> {
         if self.width == 0 || self.height == 0 {
-            return Err(WindowsEncoderError::BadConfig(
-                "dimensions must be non-zero".into(),
-            ));
+            return Err(WindowsEncoderError::BadConfig("dimensions must be non-zero".into()));
         }
         if self.width % 2 != 0 || self.height % 2 != 0 {
             return Err(WindowsEncoderError::BadConfig(
@@ -426,24 +427,9 @@ impl WindowsVideoEncoder {
                     step: "MFCreateMediaType(out)",
                     hresult: fmt_hresult(&e),
                 })?;
-            set_guid(
-                &media_type,
-                &MF_MT_MAJOR_TYPE,
-                &MFMediaType_Video,
-                "MAJOR_TYPE(out)",
-            )?;
-            set_guid(
-                &media_type,
-                &MF_MT_SUBTYPE,
-                &MFVideoFormat_H264,
-                "SUBTYPE(out)",
-            )?;
-            set_u32(
-                &media_type,
-                &MF_MT_AVG_BITRATE,
-                config.bitrate_bps,
-                "AVG_BITRATE",
-            )?;
+            set_guid(&media_type, &MF_MT_MAJOR_TYPE, &MFMediaType_Video, "MAJOR_TYPE(out)")?;
+            set_guid(&media_type, &MF_MT_SUBTYPE, &MFVideoFormat_H264, "SUBTYPE(out)")?;
+            set_u32(&media_type, &MF_MT_AVG_BITRATE, config.bitrate_bps, "AVG_BITRATE")?;
             set_u32(
                 &media_type,
                 &MF_MT_INTERLACE_MODE,
@@ -491,18 +477,8 @@ impl WindowsVideoEncoder {
                     step: "MFCreateMediaType(in)",
                     hresult: fmt_hresult(&e),
                 })?;
-            set_guid(
-                &media_type,
-                &MF_MT_MAJOR_TYPE,
-                &MFMediaType_Video,
-                "MAJOR_TYPE(in)",
-            )?;
-            set_guid(
-                &media_type,
-                &MF_MT_SUBTYPE,
-                &MFVideoFormat_NV12,
-                "SUBTYPE(in)",
-            )?;
+            set_guid(&media_type, &MF_MT_MAJOR_TYPE, &MFMediaType_Video, "MAJOR_TYPE(in)")?;
+            set_guid(&media_type, &MF_MT_SUBTYPE, &MFVideoFormat_NV12, "SUBTYPE(in)")?;
             set_u32(
                 &media_type,
                 &MF_MT_INTERLACE_MODE,
@@ -553,12 +529,14 @@ impl WindowsVideoEncoder {
                 want_h: self.config.height,
             });
         }
-        let nv12 =
-            bgra_to_nv12(frame).map_err(|e| WindowsEncoderError::BadConfig(e.to_string()))?;
-        let mut inner = self.inner.lock().map_err(|_| WindowsEncoderError::Encode {
-            step: "lock",
-            hresult: "encoder mutex poisoned".into(),
-        })?;
+        let nv12 = bgra_to_nv12(frame).map_err(|e| WindowsEncoderError::BadConfig(e.to_string()))?;
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|_| WindowsEncoderError::Encode {
+                step: "lock",
+                hresult: "encoder mutex poisoned".into(),
+            })?;
         let frame_index = inner.frames_in;
         inner.frames_in = inner.frames_in.saturating_add(1);
 
@@ -586,12 +564,13 @@ impl WindowsVideoEncoder {
         // Push into the MFT. SAFETY: `inner.transform` is valid;
         // the sample we built above outlives this call.
         unsafe {
-            inner.transform.ProcessInput(0, &sample, 0).map_err(|e| {
-                WindowsEncoderError::Encode {
+            inner
+                .transform
+                .ProcessInput(0, &sample, 0)
+                .map_err(|e| WindowsEncoderError::Encode {
                     step: "ProcessInput",
                     hresult: fmt_hresult(&e),
-                }
-            })?;
+                })?;
         }
 
         // Drain output. The synchronous H.264 MFT may emit zero or
@@ -601,7 +580,8 @@ impl WindowsVideoEncoder {
         // still drain them so the next ProcessInput doesn't see
         // stale state.
         // SAFETY: see `drain_output`'s SAFETY notes.
-        let (bytes, is_keyframe) = unsafe { drain_output(&inner.transform, force_keyframe)? };
+        let (bytes, is_keyframe) =
+            unsafe { drain_output(&inner.transform, force_keyframe)? };
 
         Ok(EncodedVideoChunk {
             bytes,
@@ -630,13 +610,12 @@ unsafe fn build_nv12_sample(
     sample_duration_100ns: i64,
     force_keyframe: bool,
 ) -> Result<IMFSample, WindowsEncoderError> {
-    let total_len: u32 =
-        (y.len() + uv.len())
-            .try_into()
-            .map_err(|_| WindowsEncoderError::Encode {
-                step: "buffer-size",
-                hresult: "NV12 plane size exceeds u32".into(),
-            })?;
+    let total_len: u32 = (y.len() + uv.len())
+        .try_into()
+        .map_err(|_| WindowsEncoderError::Encode {
+            step: "buffer-size",
+            hresult: "NV12 plane size exceeds u32".into(),
+        })?;
 
     let buffer: IMFMediaBuffer =
         MFCreateMemoryBuffer(total_len).map_err(|e| WindowsEncoderError::Encode {
@@ -665,10 +644,12 @@ unsafe fn build_nv12_sample(
     // `max_len` checked above.
     std::ptr::copy_nonoverlapping(y.as_ptr(), data, y.len());
     std::ptr::copy_nonoverlapping(uv.as_ptr(), data.add(y.len()), uv.len());
-    buffer.Unlock().map_err(|e| WindowsEncoderError::Encode {
-        step: "IMFMediaBuffer::Unlock",
-        hresult: fmt_hresult(&e),
-    })?;
+    buffer
+        .Unlock()
+        .map_err(|e| WindowsEncoderError::Encode {
+            step: "IMFMediaBuffer::Unlock",
+            hresult: fmt_hresult(&e),
+        })?;
     buffer
         .SetCurrentLength(total_len)
         .map_err(|e| WindowsEncoderError::Encode {
@@ -727,15 +708,15 @@ unsafe fn drain_output(
     let mut chunk_bytes: Vec<u8> = Vec::new();
     let mut observed_keyframe = false;
     loop {
-        let stream_info: MFT_OUTPUT_STREAM_INFO =
-            transform
-                .GetOutputStreamInfo(0)
-                .map_err(|e| WindowsEncoderError::Encode {
-                    step: "GetOutputStreamInfo",
-                    hresult: fmt_hresult(&e),
-                })?;
-        let provides_samples =
-            (stream_info.dwFlags & MFT_OUTPUT_STREAM_PROVIDES_SAMPLES.0 as u32) != 0;
+        let stream_info: MFT_OUTPUT_STREAM_INFO = transform
+            .GetOutputStreamInfo(0)
+            .map_err(|e| WindowsEncoderError::Encode {
+                step: "GetOutputStreamInfo",
+                hresult: fmt_hresult(&e),
+            })?;
+        let provides_samples = (stream_info.dwFlags
+            & MFT_OUTPUT_STREAM_PROVIDES_SAMPLES.0 as u32)
+            != 0;
 
         // Either the MFT allocates the sample or we do — the H.264
         // encoder MFT normally allocates, but we handle both for
@@ -743,12 +724,10 @@ unsafe fn drain_output(
         let mut owned_sample: Option<IMFSample> = if provides_samples {
             None
         } else {
-            let buf: IMFMediaBuffer =
-                MFCreateMemoryBuffer(stream_info.cbSize.max(1)).map_err(|e| {
-                    WindowsEncoderError::Encode {
-                        step: "alloc-output-buffer",
-                        hresult: fmt_hresult(&e),
-                    }
+            let buf: IMFMediaBuffer = MFCreateMemoryBuffer(stream_info.cbSize.max(1))
+                .map_err(|e| WindowsEncoderError::Encode {
+                    step: "alloc-output-buffer",
+                    hresult: fmt_hresult(&e),
                 })?;
             let s: IMFSample = MFCreateSample().map_err(|e| WindowsEncoderError::Encode {
                 step: "alloc-output-sample",
@@ -848,7 +827,10 @@ unsafe fn read_sample_bytes(sample: &IMFSample) -> Result<(Vec<u8>, bool), Windo
     // `MFSampleExtension_CleanPoint`. Absence of the attribute is
     // treated as "not a keyframe" (the H.264 encoder MFT always
     // sets it explicitly on IDRs).
-    let is_keyframe = sample.GetUINT32(&MFSampleExtension_CleanPoint).unwrap_or(0) != 0;
+    let is_keyframe = sample
+        .GetUINT32(&MFSampleExtension_CleanPoint)
+        .unwrap_or(0)
+        != 0;
     Ok((bytes, is_keyframe))
 }
 
@@ -1049,13 +1031,11 @@ mod tests {
 
     #[test]
     fn windows_encoder_error_maps_to_invalid_parameters_for_config_errors() {
-        let e: DesktopMediaError = WindowsEncoderError::BadConfig("bad".into()).into();
+        let e: DesktopMediaError =
+            WindowsEncoderError::BadConfig("bad".into()).into();
         assert!(matches!(e, DesktopMediaError::InvalidParameters(_)));
         let e: DesktopMediaError = WindowsEncoderError::FrameSizeMismatch {
-            got_w: 1,
-            got_h: 2,
-            want_w: 3,
-            want_h: 4,
+            got_w: 1, got_h: 2, want_w: 3, want_h: 4,
         }
         .into();
         assert!(matches!(e, DesktopMediaError::InvalidParameters(_)));
