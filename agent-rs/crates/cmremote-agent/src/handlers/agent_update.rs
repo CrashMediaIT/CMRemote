@@ -33,13 +33,15 @@
 //! manifest dispatcher's audit trail rather than an apparent silent
 //! success.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use cmremote_platform::packages::{
     compute_sha256_hex, ct_eq_hex, ArtifactDownloader, DownloadError, DownloadRequest,
+    ProcessCommand, ProcessRunner, TokioProcessRunner,
 };
+use cmremote_platform::HostOs;
 use cmremote_wire::HubInvocation;
 use tracing::{info, warn};
 
@@ -52,6 +54,12 @@ pub const AGENT_UPDATE_DOWNLOAD_TIMEOUT: std::time::Duration =
 /// The Rust agent itself is < 50 MiB stripped; 256 MiB is enough
 /// headroom for the .msi/.deb/.rpm wrapper without being adversarial.
 pub const MAX_AGENT_UPDATE_BYTES: u64 = 256 * 1024 * 1024;
+
+/// Hard wall-clock cap for the platform package installer. Package
+/// manager invocations are allowed to restart services, but should not
+/// hang the agent-upgrade worker indefinitely.
+pub const AGENT_UPDATE_INSTALL_TIMEOUT: std::time::Duration =
+    std::time::Duration::from_secs(30 * 60);
 
 /// Lowercase-hex SHA-256 string length.
 const SHA256_HEX_LEN: usize = 64;
@@ -119,6 +127,119 @@ impl AgentUpdateInstaller for StubAgentUpdateInstaller {
     }
 }
 
+/// Process-backed package installer for R8 self-updates.
+///
+/// The publisher manifest resolves to one of the package formats the
+/// release workflow emits (`.deb`, `.rpm`, `.msi`, `.pkg`). This
+/// installer maps the staged artifact extension to the native package
+/// manager for the current OS and invokes it through the same injected
+/// [`ProcessRunner`] abstraction used by R6 package installs, so tests
+/// can pin argv construction without running a real package manager.
+pub struct PackageAgentUpdateInstaller {
+    host_os: HostOs,
+    runner: Arc<dyn ProcessRunner>,
+}
+
+impl PackageAgentUpdateInstaller {
+    /// Build an installer for the current host using
+    /// [`TokioProcessRunner`].
+    pub fn for_current_host() -> Self {
+        Self::new(HostOs::current(), Arc::new(TokioProcessRunner))
+    }
+
+    /// Build an installer for `host_os` with an injected runner.
+    pub fn new(host_os: HostOs, runner: Arc<dyn ProcessRunner>) -> Self {
+        Self { host_os, runner }
+    }
+
+    fn command_for_artifact(
+        &self,
+        artifact_path: &Path,
+    ) -> Result<ProcessCommand, AgentUpdateError> {
+        let ext = artifact_path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        let artifact = artifact_path.display().to_string();
+        let (program, args) = match (self.host_os, ext.as_str()) {
+            (HostOs::Linux, "deb") => (
+                PathBuf::from("/usr/bin/dpkg"),
+                vec!["-i".to_string(), artifact],
+            ),
+            (HostOs::Linux, "rpm") => (
+                PathBuf::from("/usr/bin/rpm"),
+                vec!["-Uvh".to_string(), artifact],
+            ),
+            (HostOs::Windows, "msi") => (
+                windows_msiexec_path(),
+                vec![
+                    "/i".to_string(),
+                    artifact,
+                    "/qn".to_string(),
+                    "/norestart".to_string(),
+                ],
+            ),
+            (HostOs::MacOs, "pkg") => (
+                PathBuf::from("/usr/sbin/installer"),
+                vec![
+                    "-pkg".to_string(),
+                    artifact,
+                    "-target".to_string(),
+                    "/".to_string(),
+                ],
+            ),
+            _ => {
+                return Err(AgentUpdateError::Installer(format!(
+                    "no self-update installer is available for {:?} artifact '.{}'",
+                    self.host_os,
+                    if ext.is_empty() {
+                        "<none>"
+                    } else {
+                        ext.as_str()
+                    }
+                )));
+            }
+        };
+
+        Ok(ProcessCommand::new(
+            program,
+            args,
+            AGENT_UPDATE_INSTALL_TIMEOUT,
+        ))
+    }
+}
+
+#[async_trait]
+impl AgentUpdateInstaller for PackageAgentUpdateInstaller {
+    async fn install(
+        &self,
+        artifact_path: PathBuf,
+        _version: String,
+    ) -> Result<(), AgentUpdateError> {
+        let command = self.command_for_artifact(&artifact_path)?;
+        let outcome = self.runner.run(command).await;
+        let _ = std::fs::remove_file(&artifact_path);
+        if let Some(error) = outcome.error {
+            return Err(AgentUpdateError::Installer(error));
+        }
+        if outcome.exit_code != 0 {
+            return Err(AgentUpdateError::Installer(format!(
+                "package installer exited with code {}",
+                outcome.exit_code
+            )));
+        }
+        Ok(())
+    }
+}
+
+fn windows_msiexec_path() -> PathBuf {
+    let root = std::env::var_os("SystemRoot")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(r"C:\Windows"));
+    root.join("System32").join("msiexec.exe")
+}
+
 /// The collaborators required to handle `InstallAgentUpdate`. A single
 /// instance is shared between concurrent invocations.
 #[derive(Clone)]
@@ -158,7 +279,10 @@ pub async fn handle_install_agent_update(
     if let Err(e) = std::fs::create_dir_all(&ctx.stage_dir) {
         return Err(AgentUpdateError::Io(e.to_string()).to_string());
     }
-    let leaf = format!("cmremote-agent-{version}.update");
+    let leaf = match artifact_extension_from_url(&download_url) {
+        Some(ext) => format!("cmremote-agent-{version}.{ext}"),
+        None => format!("cmremote-agent-{version}.update"),
+    };
 
     let dl_request = DownloadRequest {
         url: download_url,
@@ -261,6 +385,24 @@ fn is_safe_version(v: &str) -> bool {
         .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-' || b == b'+')
 }
 
+fn artifact_extension_from_url(url: &str) -> Option<&'static str> {
+    let path = url
+        .split(['?', '#'])
+        .next()
+        .unwrap_or(url)
+        .rsplit('/')
+        .next()
+        .unwrap_or_default();
+    let ext = path.rsplit_once('.')?.1.to_ascii_lowercase();
+    match ext.as_str() {
+        "deb" => Some("deb"),
+        "rpm" => Some("rpm"),
+        "msi" => Some("msi"),
+        "pkg" => Some("pkg"),
+        _ => None,
+    }
+}
+
 fn translate_download_error(e: &DownloadError) -> AgentUpdateError {
     match e {
         DownloadError::NotConfigured => AgentUpdateError::Download(
@@ -283,7 +425,7 @@ mod tests {
     use std::fs;
     use std::sync::Mutex;
 
-    use cmremote_platform::packages::{DownloadedArtifact, RejectingDownloader};
+    use cmremote_platform::packages::{DownloadedArtifact, ProcessOutcome, RejectingDownloader};
     use cmremote_wire::HubMessageKind;
     use tempfile::TempDir;
 
@@ -303,6 +445,42 @@ mod tests {
         bytes: Vec<u8>,
         last: Mutex<Option<DownloadRequest>>,
         canned: Mutex<Option<DownloadError>>,
+    }
+
+    struct FakeRunner {
+        last: Mutex<Option<ProcessCommand>>,
+        outcome: Mutex<ProcessOutcome>,
+    }
+
+    impl FakeRunner {
+        fn with_exit(exit_code: i32) -> Arc<Self> {
+            Arc::new(Self {
+                last: Mutex::new(None),
+                outcome: Mutex::new(ProcessOutcome {
+                    exit_code,
+                    ..ProcessOutcome::default()
+                }),
+            })
+        }
+
+        fn with_error(error: &str) -> Arc<Self> {
+            Arc::new(Self {
+                last: Mutex::new(None),
+                outcome: Mutex::new(ProcessOutcome {
+                    exit_code: -1,
+                    error: Some(error.to_string()),
+                    ..ProcessOutcome::default()
+                }),
+            })
+        }
+    }
+
+    #[async_trait]
+    impl ProcessRunner for FakeRunner {
+        async fn run(&self, command: ProcessCommand) -> ProcessOutcome {
+            *self.last.lock().unwrap() = Some(command);
+            self.outcome.lock().unwrap().clone()
+        }
     }
     impl FakeDl {
         fn ok(bytes: Vec<u8>) -> Arc<Self> {
@@ -415,7 +593,7 @@ mod tests {
         );
         let err = handle_install_agent_update(
             &inv(vec![
-                "https://example.com/x".into(),
+                "https://example.com/cmremote-agent.msi".into(),
                 "1.2.3".into(),
                 "not-a-real-sha".into(),
             ]),
@@ -436,7 +614,7 @@ mod tests {
         );
         let err = handle_install_agent_update(
             &inv(vec![
-                "https://example.com/x".into(),
+                "https://example.com/cmremote-agent.msi".into(),
                 "1.2.3; rm -rf /".into(),
                 "a".repeat(64).into(),
             ]),
@@ -496,7 +674,7 @@ mod tests {
         let c = ctx(&tmp, dl, installer.clone());
         let result = handle_install_agent_update(
             &inv(vec![
-                "https://example.com/x".into(),
+                "https://example.com/cmremote-agent.msi".into(),
                 "1.2.3".into(),
                 sha.into(),
             ]),
@@ -509,6 +687,7 @@ mod tests {
         assert_eq!(last.1, "1.2.3");
         // The staged file's contents should match what we delivered.
         assert_eq!(fs::read(&last.0).unwrap(), bytes);
+        assert_eq!(last.0.extension().and_then(|e| e.to_str()), Some("msi"));
     }
 
     #[tokio::test]
@@ -534,6 +713,144 @@ mod tests {
         assert!(entries.is_empty(), "leftover files: {entries:?}");
     }
 
+    #[tokio::test]
+    async fn package_installer_invokes_dpkg_for_deb_and_cleans_up() {
+        let tmp = TempDir::new().unwrap();
+        let artifact = tmp.path().join("cmremote-agent_2.0.0_amd64.deb");
+        fs::write(&artifact, b"deb").unwrap();
+        let runner = FakeRunner::with_exit(0);
+        let installer = PackageAgentUpdateInstaller::new(HostOs::Linux, runner.clone());
+
+        installer
+            .install(artifact.clone(), "2.0.0".into())
+            .await
+            .unwrap();
+
+        let cmd = runner.last.lock().unwrap().clone().unwrap();
+        assert_eq!(cmd.program, PathBuf::from("/usr/bin/dpkg"));
+        assert_eq!(
+            cmd.args,
+            vec!["-i".to_string(), artifact.display().to_string()]
+        );
+        assert_eq!(cmd.timeout, AGENT_UPDATE_INSTALL_TIMEOUT);
+        assert!(
+            !artifact.exists(),
+            "installer owns and removes staged artifact"
+        );
+    }
+
+    #[tokio::test]
+    async fn package_installer_invokes_rpm_for_rpm() {
+        let tmp = TempDir::new().unwrap();
+        let artifact = tmp.path().join("cmremote-agent-2.0.0-1.x86_64.rpm");
+        fs::write(&artifact, b"rpm").unwrap();
+        let runner = FakeRunner::with_exit(0);
+        let installer = PackageAgentUpdateInstaller::new(HostOs::Linux, runner.clone());
+
+        installer
+            .install(artifact.clone(), "2.0.0".into())
+            .await
+            .unwrap();
+
+        let cmd = runner.last.lock().unwrap().clone().unwrap();
+        assert_eq!(cmd.program, PathBuf::from("/usr/bin/rpm"));
+        assert_eq!(
+            cmd.args,
+            vec!["-Uvh".to_string(), artifact.display().to_string()]
+        );
+    }
+
+    #[test]
+    fn package_installer_maps_windows_msi_and_macos_pkg_commands() {
+        let runner = FakeRunner::with_exit(0);
+        let windows = PackageAgentUpdateInstaller::new(HostOs::Windows, runner.clone());
+        let cmd = windows
+            .command_for_artifact(Path::new(r"C:\Temp\cmremote-agent.msi"))
+            .unwrap();
+        assert!(cmd
+            .program
+            .ends_with(Path::new("System32").join("msiexec.exe")));
+        assert_eq!(
+            cmd.args,
+            vec![
+                "/i".to_string(),
+                r"C:\Temp\cmremote-agent.msi".to_string(),
+                "/qn".to_string(),
+                "/norestart".to_string(),
+            ]
+        );
+
+        let mac = PackageAgentUpdateInstaller::new(HostOs::MacOs, runner);
+        let cmd = mac
+            .command_for_artifact(Path::new("/tmp/cmremote-agent.pkg"))
+            .unwrap();
+        assert_eq!(cmd.program, PathBuf::from("/usr/sbin/installer"));
+        assert_eq!(
+            cmd.args,
+            vec![
+                "-pkg".to_string(),
+                "/tmp/cmremote-agent.pkg".to_string(),
+                "-target".to_string(),
+                "/".to_string(),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn package_installer_refuses_wrong_artifact_for_host_without_runner_call() {
+        let tmp = TempDir::new().unwrap();
+        let artifact = tmp.path().join("cmremote-agent.msi");
+        fs::write(&artifact, b"msi").unwrap();
+        let runner = FakeRunner::with_exit(0);
+        let installer = PackageAgentUpdateInstaller::new(HostOs::Linux, runner.clone());
+
+        let err = installer
+            .install(artifact.clone(), "2.0.0".into())
+            .await
+            .unwrap_err();
+
+        assert!(err.to_string().contains("no self-update installer"));
+        assert!(runner.last.lock().unwrap().is_none());
+        assert!(
+            artifact.exists(),
+            "handler cleanup owns pre-install refusal"
+        );
+    }
+
+    #[tokio::test]
+    async fn package_installer_reports_runner_error_and_cleans_up() {
+        let tmp = TempDir::new().unwrap();
+        let artifact = tmp.path().join("cmremote-agent.deb");
+        fs::write(&artifact, b"deb").unwrap();
+        let runner = FakeRunner::with_error("Timed out.");
+        let installer = PackageAgentUpdateInstaller::new(HostOs::Linux, runner);
+
+        let err = installer
+            .install(artifact.clone(), "2.0.0".into())
+            .await
+            .unwrap_err();
+
+        assert!(err.to_string().contains("Timed out"));
+        assert!(!artifact.exists());
+    }
+
+    #[tokio::test]
+    async fn package_installer_reports_nonzero_exit_and_cleans_up() {
+        let tmp = TempDir::new().unwrap();
+        let artifact = tmp.path().join("cmremote-agent.deb");
+        fs::write(&artifact, b"deb").unwrap();
+        let runner = FakeRunner::with_exit(42);
+        let installer = PackageAgentUpdateInstaller::new(HostOs::Linux, runner);
+
+        let err = installer
+            .install(artifact.clone(), "2.0.0".into())
+            .await
+            .unwrap_err();
+
+        assert!(err.to_string().contains("42"));
+        assert!(!artifact.exists());
+    }
+
     #[test]
     fn lower_hex_sha256_validator() {
         assert!(is_lower_hex_sha256(&"a".repeat(64)));
@@ -552,5 +869,29 @@ mod tests {
         assert!(!is_safe_version(""));
         assert!(!is_safe_version("1.2.3 ; rm"));
         assert!(!is_safe_version("1.2.3$(whoami)"));
+    }
+
+    #[test]
+    fn artifact_extension_from_url_accepts_supported_package_extensions_only() {
+        assert_eq!(
+            artifact_extension_from_url("https://example.com/cmremote-agent.deb"),
+            Some("deb")
+        );
+        assert_eq!(
+            artifact_extension_from_url("https://example.com/cmremote-agent.RPM?sig=1"),
+            Some("rpm")
+        );
+        assert_eq!(
+            artifact_extension_from_url("https://example.com/cmremote-agent.pkg#fragment"),
+            Some("pkg")
+        );
+        assert_eq!(
+            artifact_extension_from_url("https://example.com/cmremote-agent.tar.gz"),
+            None
+        );
+        assert_eq!(
+            artifact_extension_from_url("https://example.com/noext"),
+            None
+        );
     }
 }

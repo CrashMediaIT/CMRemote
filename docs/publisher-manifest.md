@@ -135,3 +135,29 @@ Per-spec vectors live under [`publisher-manifest-samples/`](./publisher-manifest
 `Tests/Server.Tests/PublisherManifestTests.cs` and
 `Tests/Server.Tests/ManifestBackedAgentUpgradeDispatcherTests.cs`
 replay both vectors.
+
+## Rust-agent install handoff
+
+After the M3 dispatcher resolves a build, it invokes the Rust agent's
+`InstallAgentUpdate(downloadUrl, version, sha256)` hub method. The agent:
+
+1. downloads the artifact through the same R6 `ArtifactDownloader` used by
+   package installs;
+2. re-computes SHA-256 over the staged bytes and compares it to the manifest
+   value in constant time;
+3. stages the verified artifact under the agent update staging directory; and
+4. invokes the native package installer with fixed argv slots selected only by
+   artifact extension and host OS.
+
+The current command mapping is:
+
+| Host | Artifact | Command |
+|---|---|---|
+| Linux | `.deb` | `/usr/bin/dpkg -i <artifact>` |
+| Linux | `.rpm` | `/usr/bin/rpm -Uvh <artifact>` |
+| Windows | `.msi` | `%SystemRoot%\System32\msiexec.exe /i <artifact> /qn /norestart` |
+| macOS | `.pkg` | `/usr/sbin/installer -pkg <artifact> -target /` |
+
+Unsupported host/artifact combinations fail closed with a structured installer
+error. The agent never shells out through a command string and removes the
+staged artifact after the native installer exits.

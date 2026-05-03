@@ -102,15 +102,17 @@ pub async fn run(cli: CliArgs) -> Result<(), RuntimeError> {
     composite.register_default_handlers(cache_dir, server_host, downloader.clone());
     let packages = Arc::new(composite);
 
-    // Slice M3 (now lit up by R6): the agent self-update handler
-    // shares the same downloader as the package providers. The
-    // installer is platform-specific and not yet implemented; until
-    // then the stub installer surfaces a clean structured failure so
-    // the manifest dispatcher's audit trail is honest about the
-    // missing capability.
+    // Slice R8: the agent self-update handler shares the same
+    // downloader as the package providers, then hands the verified
+    // artifact to the native package installer selected from the
+    // staged file extension (.deb/.rpm/.msi/.pkg). Unsupported
+    // host/artifact combinations still surface a clean structured
+    // failure so the manifest dispatcher's audit trail is honest.
     let agent_update = Arc::new(crate::handlers::agent_update::AgentUpdateContext {
         downloader,
-        installer: Arc::new(crate::handlers::agent_update::StubAgentUpdateInstaller),
+        installer: Arc::new(
+            crate::handlers::agent_update::PackageAgentUpdateInstaller::for_current_host(),
+        ),
         stage_dir,
     });
 
