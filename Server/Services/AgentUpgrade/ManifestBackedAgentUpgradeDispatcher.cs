@@ -24,16 +24,17 @@ namespace Remotely.Server.Services.AgentUpgrade;
 ///         match. None or multiple → return null with a warning log.</item>
 ///   <item>If the entry's version equals the device's current version,
 ///         return null (already on target).</item>
-///   <item>Optionally enforce <see cref="AgentUpgradeManifestOptions.RequireSignature"/>:
-///         skip entries without a cosign bundle field.</item>
+///   <item>Enforce S5 release integrity: skip entries without cosign
+///         bundle metadata.</item>
 /// </list>
 ///
 /// <para>Dispatch verifies the SHA-256 announced by the manifest against
 /// the bytes the agent receives (the agent re-checks on its side too —
 /// belt and braces). The dispatch path itself is intentionally simple:
-/// the agent receives the resolved download URL via the existing M3
-/// <c>InstallAgentUpdate</c> hub method (added with this slice) and
-/// drives the download / install / restart sequence locally.</para>
+/// the agent receives the resolved download URL and cosign metadata via
+/// the existing M3 <c>InstallAgentUpdate</c> hub method (added with this
+/// slice) and drives the download / verify / install / restart sequence
+/// locally.</para>
 /// </summary>
 public class ManifestBackedAgentUpgradeDispatcher : IAgentUpgradeDispatcher
 {
@@ -132,11 +133,10 @@ public class ManifestBackedAgentUpgradeDispatcher : IAgentUpgradeDispatcher
 
         var build = matches[0];
 
-        if (_options.RequireSignature &&
-            (string.IsNullOrEmpty(build.Signature) || string.IsNullOrEmpty(build.SignedBy)))
+        if (string.IsNullOrEmpty(build.Signature) || string.IsNullOrEmpty(build.SignedBy))
         {
             _logger.LogWarning(
-                "ResolveTarget: manifest entry for Target={target} Format={format} has no signature, but RequireSignature=true.",
+                "ResolveTarget: manifest entry for Target={target} Format={format} has no signature; refusing unsigned agent update.",
                 routing.Value.Target, routing.Value.Format);
             return null;
         }
@@ -148,15 +148,30 @@ public class ManifestBackedAgentUpgradeDispatcher : IAgentUpgradeDispatcher
             return null;
         }
 
-        // Resolve the relative `file` against the manifest URL so the
-        // agent gets an absolute download URL.
-        var downloadUri = ResolveDownloadUri(channel, build.File);
+        // Resolve the relative file names against the manifest URL so
+        // the agent gets absolute artifact + cosign-bundle URLs.
+        var downloadUri = ResolveManifestSiblingUri(channel, build.File);
         if (downloadUri is null)
         {
             return null;
         }
 
-        return new AgentUpgradeTarget(build.AgentVersion, build.Sha256, downloadUri);
+        Uri? signatureUri = null;
+        if (!string.IsNullOrWhiteSpace(build.Signature))
+        {
+            signatureUri = ResolveManifestSiblingUri(channel, build.Signature);
+            if (signatureUri is null)
+            {
+                return null;
+            }
+        }
+
+        return new AgentUpgradeTarget(
+            build.AgentVersion,
+            build.Sha256,
+            downloadUri,
+            signatureUri,
+            build.SignedBy);
     }
 
     public async Task<AgentUpgradeDispatchResult> DispatchAsync(
@@ -175,7 +190,9 @@ public class ManifestBackedAgentUpgradeDispatcher : IAgentUpgradeDispatcher
         if (target is null ||
             string.IsNullOrWhiteSpace(target.Version) ||
             string.IsNullOrWhiteSpace(target.Sha256) ||
-            target.DownloadUri is null)
+            target.DownloadUri is null ||
+            target.SignatureUri is null ||
+            string.IsNullOrWhiteSpace(target.SignedBy))
         {
             return AgentUpgradeDispatchResult.Fail("Resolved target is incomplete.");
         }
@@ -191,6 +208,14 @@ public class ManifestBackedAgentUpgradeDispatcher : IAgentUpgradeDispatcher
                 $"Refusing to dispatch upgrade — download URI scheme '{target.DownloadUri.Scheme}' is not allowed.");
         }
 
+        if (!target.SignatureUri.IsAbsoluteUri ||
+            (target.SignatureUri.Scheme != Uri.UriSchemeHttps &&
+             target.SignatureUri.Scheme != Uri.UriSchemeFile))
+        {
+            return AgentUpgradeDispatchResult.Fail(
+                $"Refusing to dispatch upgrade — signature URI scheme '{target.SignatureUri.Scheme}' is not allowed.");
+        }
+
         if (!_sessionCache.TryGetConnectionId(status.DeviceId, out var connectionId))
         {
             // Device offline — the orchestrator's on-connect path will
@@ -204,7 +229,9 @@ public class ManifestBackedAgentUpgradeDispatcher : IAgentUpgradeDispatcher
             await _agentHub.Clients.Client(connectionId).InstallAgentUpdate(
                 target.DownloadUri.ToString(),
                 target.Version,
-                target.Sha256);
+                target.Sha256,
+                target.SignatureUri.ToString(),
+                target.SignedBy);
         }
         catch (Exception ex)
         {
@@ -249,7 +276,7 @@ public class ManifestBackedAgentUpgradeDispatcher : IAgentUpgradeDispatcher
         }
     }
 
-    private Uri? ResolveDownloadUri(string channel, string file)
+    private Uri? ResolveManifestSiblingUri(string channel, string file)
     {
         if (!_options.ManifestUrls.TryGetValue(channel, out var source) ||
             string.IsNullOrWhiteSpace(source))

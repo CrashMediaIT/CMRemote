@@ -57,6 +57,9 @@ public interface IAgentHubClient
     /// (slice R8 — the M3 manifest-backed agent-upgrade dispatcher).
     /// The agent MUST recompute the SHA-256 of the downloaded artifact
     /// and refuse to install if it doesn't match <paramref name="sha256"/>.
+    /// When <paramref name="signatureUrl"/> and <paramref name="signedBy"/>
+    /// are supplied, the Rust agent MUST verify the Sigstore cosign bundle
+    /// against the published certificate identity before installer handoff.
     /// On success the agent restarts and re-handshakes with its new
     /// <c>AgentVersion</c>; the dispatcher observes that bump via the
     /// session cache and marks the upgrade row Succeeded.
@@ -74,7 +77,19 @@ public interface IAgentHubClient
     /// Expected lowercase-hex SHA-256 of the artifact bytes from the
     /// publisher manifest. The agent re-verifies independently.
     /// </param>
-    Task InstallAgentUpdate(string downloadUrl, string version, string sha256);
+    /// <param name="signatureUrl">
+    /// Absolute https URL pointing at the Sigstore cosign bundle for the
+    /// artifact. Required for signed-release channels.
+    /// </param>
+    /// <param name="signedBy">
+    /// Expected certificate identity from the publisher manifest.
+    /// </param>
+    Task InstallAgentUpdate(
+        string downloadUrl,
+        string version,
+        string sha256,
+        string signatureUrl,
+        string signedBy);
 
     Task RemoteControl(
         Guid sessionId, 

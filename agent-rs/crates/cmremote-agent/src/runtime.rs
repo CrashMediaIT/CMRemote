@@ -102,16 +102,20 @@ pub async fn run(cli: CliArgs) -> Result<(), RuntimeError> {
     composite.register_default_handlers(cache_dir, server_host, downloader.clone());
     let packages = Arc::new(composite);
 
-    // Slice R8: the agent self-update handler shares the same
-    // downloader as the package providers, then hands the verified
-    // artifact to the native package installer selected from the
-    // staged file extension (.deb/.rpm/.msi/.pkg). Unsupported
-    // host/artifact combinations still surface a clean structured
-    // failure so the manifest dispatcher's audit trail is honest.
+    // Slice R8/S5: the agent self-update handler shares the same
+    // downloader as the package providers, verifies the SHA-256 and
+    // Sigstore cosign bundle, then hands the verified artifact to the
+    // native package installer selected from the staged file extension
+    // (.deb/.rpm/.msi/.pkg). Unsupported host/artifact combinations
+    // still surface a clean structured failure so the manifest
+    // dispatcher's audit trail is honest.
     let agent_update = Arc::new(crate::handlers::agent_update::AgentUpdateContext {
         downloader,
         installer: Arc::new(
             crate::handlers::agent_update::PackageAgentUpdateInstaller::for_current_host(),
+        ),
+        signature_verifier: Arc::new(
+            crate::handlers::agent_update::CosignBundleVerifier::from_env(),
         ),
         stage_dir,
     });

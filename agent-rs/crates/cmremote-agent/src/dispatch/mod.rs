@@ -168,10 +168,11 @@ pub enum MethodName {
     DeleteLogs,
     /// Stub — agent log retrieval.
     GetLogs,
-    /// `InstallAgentUpdate(downloadUrl, version, sha256)` — agent
-    /// self-update. Slice R6/M3 ships the fetch + SHA-256 verify
-    /// path, sharing the same `ArtifactDownloader` as the package
-    /// providers. The platform-specific binary swap lives behind the
+    /// `InstallAgentUpdate(downloadUrl, version, sha256,
+    /// signatureUrl, signedBy)` — agent self-update. Slice R6/M3/S5
+    /// ships the fetch + SHA-256 + cosign-bundle verify path, sharing
+    /// the same `ArtifactDownloader` as the package providers. The
+    /// platform-specific binary swap lives behind the
     /// `AgentUpdateInstaller` trait; until a real installer is
     /// registered the handler returns a structured "no installer
     /// configured" failure (as opposed to silently succeeding) so the

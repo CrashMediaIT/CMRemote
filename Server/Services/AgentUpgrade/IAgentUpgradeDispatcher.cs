@@ -46,7 +46,12 @@ public interface IAgentUpgradeDispatcher
 /// <summary>
 /// Resolved target build the orchestrator wants the device to land on.
 /// </summary>
-public record AgentUpgradeTarget(string Version, string Sha256, Uri DownloadUri);
+public record AgentUpgradeTarget(
+    string Version,
+    string Sha256,
+    Uri DownloadUri,
+    Uri? SignatureUri = null,
+    string? SignedBy = null);
 
 /// <summary>
 /// Outcome of a single dispatch attempt. <see cref="Succeeded"/> is set

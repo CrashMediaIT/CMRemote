@@ -1,0 +1,56 @@
+# Source: CMRemote, clean-room implementation.
+#
+# End-to-end desktop validation lab gate. This is intentionally
+# workflow_dispatch-first because the full browser/video harness needs
+# runner-level WebRTC/display support; the jobs below pin the deployability
+# contract that can run on hosted CI today:
+#   browser/viewer signalling DTOs -> .NET AgentHub routing tests
+#   .NET hub method surface -> Rust WebRTC desktop transport lifecycle
+#   unattended notification connected/disconnected events with no local prompt
+
+name: Desktop E2E lab
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "Server/**"
+      - "Shared/**"
+      - "Tests/Server.Tests/**"
+      - "Tests/Shared.Tests/**"
+      - "agent-rs/**"
+      - ".github/workflows/desktop-e2e-lab.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  hub-agent-webrtc:
+    name: browser hub -> Rust WebRTC contract
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install .NET SDK
+        uses: actions/setup-dotnet@v3.0.3
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Restore .NET test projects
+        run: |
+          dotnet restore Tests/Server.Tests/Server.Tests.csproj
+          dotnet restore Tests/Shared.Tests/Shared.Tests.csproj
+
+      - name: Validate viewer/browser signalling DTOs
+        run: dotnet test Tests/Shared.Tests/Shared.Tests.csproj --no-restore --filter FullyQualifiedName~WebRtcSignallingDtoTests
+
+      - name: Validate .NET hub signalling and remote-control routing
+        run: dotnet test Tests/Server.Tests/Server.Tests.csproj --no-restore --filter FullyQualifiedName~AgentHubTests
+
+      - name: Validate Rust WebRTC session, notification, and video-track lifecycle
+        working-directory: agent-rs
+        run: cargo test -p cmremote-platform --features webrtc-driver desktop::webrtc::tests -- --nocapture

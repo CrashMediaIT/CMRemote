@@ -42,10 +42,10 @@ public class AgentUpgradeManifestOptions
     public string DefaultChannel { get; set; } = "stable";
 
     /// <summary>
-    /// When <c>true</c>, manifest entries without a <c>signature</c>
-    /// field are skipped — only cosign-signed builds are dispatched.
-    /// Default is <c>false</c> in this slice; will flip to <c>true</c>
-    /// once Track S / S5 lands the cosign verifier on the agent side.
+    /// Legacy compatibility knob retained for existing configuration
+    /// files. S5 close-out now makes signature metadata mandatory for
+    /// agent-update dispatch regardless of this value because the Rust
+    /// agent verifies the cosign bundle before installer handoff.
     /// </summary>
     public bool RequireSignature { get; set; }
 

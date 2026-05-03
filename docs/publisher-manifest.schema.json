@@ -52,7 +52,9 @@
         "format",
         "file",
         "size",
-        "sha256"
+        "sha256",
+        "signature",
+        "signedBy"
       ],
       "properties": {
         "agentVersion": {

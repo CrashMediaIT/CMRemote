@@ -290,7 +290,16 @@ public static class PublisherManifestParser
         {
             return $"sha256 is not a 64-char lower-case hex string: '{b.Sha256}'.";
         }
-        if (!string.IsNullOrEmpty(b.Signature) && string.IsNullOrEmpty(b.SignedBy))
+        if (string.IsNullOrWhiteSpace(b.Signature))
+        {
+            return "signature is required.";
+        }
+        if (!_safeFileRegex.IsMatch(b.Signature) ||
+            b.Signature.Contains("..", StringComparison.Ordinal))
+        {
+            return $"signature '{b.Signature}' contains an unsafe character or '..' segment.";
+        }
+        if (string.IsNullOrEmpty(b.SignedBy))
         {
             return "signedBy is required when signature is present.";
         }

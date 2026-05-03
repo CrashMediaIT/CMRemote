@@ -301,20 +301,22 @@ a follow-up integration job tracked separately.
 
 The next milestones are now:
 
-1. **End-to-end desktop validation** — Track R implementation is complete; add
-   the browser → .NET hub → Rust agent → WebRTC video integration job as a CI /
-   lab test, including assertions that unattended sessions show host-local
-   connected / disconnected notifications and never require local approval
-   prompts.
+1. **End-to-end desktop validation** *(🟡 CI contract shipped; full display lab pending)* —
+   the `Desktop E2E lab` workflow now pins the browser/viewer DTO → .NET hub →
+   Rust WebRTC transport contract, including unattended connected/disconnected
+   notification and no-prompt assertions. The remaining follow-up is a runner
+   with real display/WebRTC media capture so the lab can assert rendered video
+   frames instead of the hosted-CI transport/track lifecycle.
 2. **M5 — Tests & docs** *(✅ shipped)* — `LegacyToV2ConverterGoldenVectorTests`
    fixtures under `Tests/Migration.Legacy.Tests/Fixtures/legacy-to-v2/`,
    [`Setup-Wizard.md`](docs/Setup-Wizard.md) operator guide,
    [`Migration.md`](docs/Migration.md) admin guide.
-3. **Track S remaining** — S5's release-side CycloneDX SBOM + Sigstore cosign
-   + SLSA v1.0 provenance pipeline is now wired into tagged releases; the
-   remaining S5 close-out is agent-side cosign certificate verification before
-   install. S6 still needs the `ConnectionInfo.json` file-mode unit test once
-   the agent's write path lands with the enrolment slice.
+3. **Track S remaining** — S5 is now closed for release and agent handoff:
+   tagged releases produce SBOMs/signatures/provenance, the server dispatches
+   cosign bundle metadata, and the Rust agent verifies the bundle before native
+   installer handoff. S6 has a secure `ConnectionInfo.json` write path and Unix
+   `0600` test; the remaining follow-up is a Windows service-installer ACL test
+   once the enrolment writer is wired into that installer.
 4. **Live-Postgres integration coverage** (unchanged).
 5. **Clean-room server modules 3–6** — `Server.Services` data / auth /
    circuit split (Module 3), `Server.Hubs` dispatch rewrite (Module 4),
@@ -433,7 +435,7 @@ Still queued under S2 (not yet shipped): `cargo-vet` audit set,
   replays the same vector corpus against the server dispatch layer
   so divergence is caught on both sides of the wire.
 
-**S5 — Release integrity: SBOM + signed builds *(🟡 release-side shipped; agent verifier pending)*.**
+**S5 — Release integrity: SBOM + signed builds *(✅ shipped)*.**
 
 - ✅ Generate **CycloneDX** SBOMs for the Rust agent workspace
   (`cargo-cyclonedx` 0.5.9) and the .NET server (`dotnet-CycloneDX`
@@ -444,7 +446,7 @@ Still queued under S2 (not yet shipped): `cargo-vet` audit set,
 - ✅ Generate **SLSA v1.0** build provenance through GitHub artifact
   attestations (`actions/attest-build-provenance`) over the release
   asset set.
-- 🔜 The agent installer (PR E / slice R8) refuses to install a build
+- ✅ The agent installer (PR E / slice R8) refuses to install a build
   whose cosign signature does not verify against the published
   certificate identity, closing the loop between the release process
   and the agent-upgrade pipeline (M3) which already requires a
@@ -469,11 +471,12 @@ Still queued under S2 (not yet shipped): `cargo-vet` audit set,
   `debug_redacts_organization_token` in
   [`crates/cmremote-wire/src/connection_info.rs`](agent-rs/crates/cmremote-wire/src/connection_info.rs))
   — already shipped with slice R1a; pinned here as the S6 deliverable.
-- 🔜 Add a unit test under `cmremote-platform` that asserts
-  `ConnectionInfo.json` is written with file-mode `0600` on Unix and
-  an equivalent ACL check on Windows, once the agent's *write* path
-  for `ConnectionInfo.json` lands (today's runtime only reads the
-  file; writes will land with the enrolment slice).
+- ✅ `cmremote-agent::config::save_secure` writes `ConnectionInfo.json`
+  through the enrolment-ready write seam and pins Unix mode `0600` in
+  unit coverage.
+- 🔜 Add the Windows service-installer ACL regression once the enrolment
+  flow writes `ConnectionInfo.json` through the Windows installer/service
+  account context.
 
 **S7 — Runtime security posture *(✅ shipped — headers + per-org rate limits + signed MSI URLs + immutable audit log).***
 

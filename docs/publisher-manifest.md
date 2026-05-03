@@ -66,7 +66,7 @@ A publisher manifest is a single UTF-8 JSON document. Top-level keys
 | `file` | string | yes | File name of the artifact (no path components — the dispatcher resolves it relative to the manifest's URL). MUST match the regex `^[A-Za-z0-9._-]+$` and MUST NOT contain `..`. |
 | `size` | integer | yes | Size of the artifact in bytes. Consumers SHOULD compare this against the bytes they actually downloaded before computing the SHA-256 — a mismatch is a hard failure. |
 | `sha256` | string | yes | Lower-case hex SHA-256 over the artifact bytes. Consumers MUST refuse to install a build whose computed SHA-256 does not match this value. Constant-time comparison is recommended. |
-| `signature` | string | no | Path (relative to the manifest URL) to a Sigstore cosign bundle (`.sig` + Rekor entry) over the artifact. When the consumer is configured to require cosign verification (`AgentUpgrade:RequireSignature=true`, default `false` until agent-side certificate verification lands), an entry without a `signature` is treated as unavailable. |
+| `signature` | string | yes for agent updates | Path (relative to the manifest URL) to a Sigstore cosign bundle (`.sig` + Rekor entry) over the artifact. S5 close-out makes this mandatory for manifest-backed agent upgrades; entries without it are treated as unavailable. |
 | `signedBy` | string | no | Cosign certificate identity expected on the bundle (e.g. `"https://github.com/CrashMediaIT/CMRemote/.github/workflows/release.yml@refs/tags/v2.0.0"`). Required when `signature` is present. |
 
 ## Trust rules
@@ -83,9 +83,9 @@ self-upgrade flow) MUST:
 4. After downloading the artifact: compare the byte length against
    `size` (hard failure on mismatch) and the SHA-256 against `sha256`
    using a constant-time comparison (hard failure on mismatch).
-5. When configured to require signatures (S5): verify the cosign
-   bundle named by `signature` against the certificate identity
-   named by `signedBy`, using the publisher's pinned Rekor public key.
+5. For manifest-backed agent upgrades: verify the cosign bundle named
+   by `signature` against the certificate identity named by `signedBy`
+   before installer handoff.
 
 A consumer MUST NOT:
 
@@ -139,14 +139,16 @@ replay both vectors.
 ## Rust-agent install handoff
 
 After the M3 dispatcher resolves a build, it invokes the Rust agent's
-`InstallAgentUpdate(downloadUrl, version, sha256)` hub method. The agent:
+`InstallAgentUpdate(downloadUrl, version, sha256, signatureUrl, signedBy)` hub method. The agent:
 
 1. downloads the artifact through the same R6 `ArtifactDownloader` used by
    package installs;
 2. re-computes SHA-256 over the staged bytes and compares it to the manifest
    value in constant time;
-3. stages the verified artifact under the agent update staging directory; and
-4. invokes the native package installer with fixed argv slots selected only by
+3. downloads the cosign bundle and verifies it against `signedBy` and the
+   GitHub Actions OIDC issuer with `cosign verify-blob`;
+4. stages the verified artifact under the agent update staging directory; and
+5. invokes the native package installer with fixed argv slots selected only by
    artifact extension and host OS.
 
 The current command mapping is:
