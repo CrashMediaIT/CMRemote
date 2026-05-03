@@ -954,6 +954,7 @@ impl VideoEncoder for WindowsVideoEncoder {
 /// of that state is safe to share across two viewers.
 ///
 /// Stateless apart from the config: cheap to clone via `Arc`.
+#[derive(Debug)]
 pub struct WindowsVideoEncoderFactory {
     config: WindowsVideoEncoderConfig,
 }
