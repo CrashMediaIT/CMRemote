@@ -37,7 +37,7 @@ This roadmap is therefore organised in three bands:
 
 ## Band 1 — Rewrite & cut-over *(top priority)*
 
-### Current focus *(Rust agent Track R slices **R0–R8 complete**; next stage is post-R end-to-end validation + **M5 Tests & docs** / Track S remaining — May 2026)*
+### Current focus *(Rust agent Track R slices **R0–R8 complete**; **M5 Tests & docs shipped**; next stage is post-R end-to-end validation / Track S remaining — May 2026)*
 
 Module 0 (wire-protocol spec + JSON test-vector corpus), slice **R1a**
 (`cmremote-wire` JSON round-trip + redacting `Debug`), slice **R1b**
@@ -306,8 +306,10 @@ The next milestones are now:
    lab test, including assertions that unattended sessions show host-local
    connected / disconnected notifications and never require local approval
    prompts.
-2. **M5 — Tests & docs** — `LegacyToV2ConverterTests` golden-vector fixtures,
-   `Setup-Wizard.md` operator guide, `Migration.md` admin guide.
+2. **M5 — Tests & docs** *(✅ shipped)* — `LegacyToV2ConverterGoldenVectorTests`
+   fixtures under `Tests/Migration.Legacy.Tests/Fixtures/legacy-to-v2/`,
+   [`Setup-Wizard.md`](docs/Setup-Wizard.md) operator guide,
+   [`Migration.md`](docs/Migration.md) admin guide.
 3. **Track S remaining** — S5 (CycloneDX SBOM + Sigstore cosign + SLSA v1.0
    build provenance for every tagged release), S6 `ConnectionInfo.json`
    file-mode unit test (once the agent's write path lands with the enrolment

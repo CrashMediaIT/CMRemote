@@ -1,0 +1,13 @@
+{
+  "legacy": {
+    "id": "org-golden-001",
+    "organizationName": "  Crash Media Remote  ",
+    "isDefaultOrganization": true
+  },
+  "expected": {
+    "id": "org-golden-001",
+    "organizationName": "Crash Media Remote",
+    "isDefaultOrganization": true,
+    "packageManagerEnabled": false
+  }
+}
