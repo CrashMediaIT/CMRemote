@@ -325,4 +325,4 @@ jobs:
                   echo "SHA-256 mismatch for ${file}: manifest=${expected_sha} downloaded=${actual_sha}" >&2
                   exit 1
               fi
-          done < "$build_rows"
+          done < "$build_rows" || exit 1
