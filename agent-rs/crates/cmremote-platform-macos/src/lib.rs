@@ -17,11 +17,13 @@
 pub mod capture;
 pub mod encoder;
 pub mod input;
+pub mod notification;
 pub mod providers;
 
 pub use capture::{BmpDesktopCapturer, MacOsCaptureError};
 pub use encoder::{FfmpegH264Encoder, FfmpegH264EncoderFactory, MacOsEncoderError};
 pub use input::{AppleScriptKeyboardInput, AppleScriptMouseInput, MacOsClipboard, MacOsInputError};
+pub use notification::MacOsSessionNotifier;
 pub use providers::{MacOsDesktopProviders, MacOsProvidersError};
 
 /// Return `true` when `program` can be found on `PATH`.

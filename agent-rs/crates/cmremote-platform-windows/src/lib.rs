@@ -56,6 +56,9 @@ pub mod encoder;
 #[allow(unsafe_code)]
 pub mod input;
 
+#[cfg(target_os = "windows")]
+pub mod notification;
+
 // `session` is intentionally NOT cfg-gated to `target_os = "windows"`:
 // the pure-logic helpers (`is_session_zero`, `is_in_console_session`,
 // `can_inject_input`) need to be callable from cross-platform code
@@ -80,12 +83,14 @@ pub use capture::{WindowsCaptureError, WindowsDesktopCapturer};
 
 #[cfg(target_os = "windows")]
 pub use encoder::{
-    WindowsEncoderError, WindowsVideoEncoder, WindowsVideoEncoderConfig,
-    WindowsVideoEncoderFactory,
+    WindowsEncoderError, WindowsVideoEncoder, WindowsVideoEncoderConfig, WindowsVideoEncoderFactory,
 };
 
 #[cfg(target_os = "windows")]
 pub use input::{WindowsClipboard, WindowsKeyboardInput, WindowsMouseInput};
+
+#[cfg(target_os = "windows")]
+pub use notification::WindowsSessionNotifier;
 
 pub use session::{WindowsSessionError, WindowsSessionInfo};
 

@@ -101,7 +101,7 @@ pub struct SdpOffer {
     /// Server-issued session UUID — same identity as
     /// [`crate::RemoteControlSessionRequest::session_id`].
     pub session_id: String,
-    /// Operator display name, surfaced in the consent prompt.
+    /// Operator display name, surfaced in the connected notification.
     pub requester_name: String,
     /// Operator organisation name.
     pub org_name: String,

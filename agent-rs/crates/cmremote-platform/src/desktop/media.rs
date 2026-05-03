@@ -38,11 +38,12 @@
 //!
 //! Implementations MUST:
 //!
-//! 1. **Refuse to attach to a display the operator has not consented
-//!    to.** The default consent check lives in the desktop-transport
-//!    provider (see [`super::guards`]); capturers must additionally
-//!    refuse any display id the OS reports as belonging to a
-//!    different user session than the one the agent is running in.
+//! 1. **Refuse to attach to the wrong user's display.** The
+//!    desktop-transport provider accepts unattended sessions only
+//!    after the [`super::guards`] checks pass and emits a connected
+//!    notification; capturers must additionally refuse any display id
+//!    the OS reports as belonging to a different user session than
+//!    the one the agent is running in.
 //! 2. **Bound buffer growth.** Frames are large (a 4K BGRA frame is
 //!    ~33 MiB); implementations must drop frames rather than queue
 //!    them unboundedly when the encoder falls behind.
@@ -395,10 +396,7 @@ mod tests {
     #[test]
     fn not_supported_encoder_factory_returns_structured_error_naming_os() {
         let f = NotSupportedEncoderFactory::new(HostOs::Linux);
-        let err = f
-            .build()
-            .err()
-            .expect("not-supported factory must error");
+        let err = f.build().err().expect("not-supported factory must error");
         let s = err.to_string();
         assert!(s.contains("not supported"), "{s}");
         assert!(s.contains("Linux"), "{s}");

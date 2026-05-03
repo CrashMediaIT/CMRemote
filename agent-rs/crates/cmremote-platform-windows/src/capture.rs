@@ -210,7 +210,7 @@ impl WindowsDesktopCapturer {
     /// Create a capturer attached to the **primary output** of the
     /// **default adapter**. This is the only supported entry point
     /// in slice R7.n; multi-monitor selection lands in a follow-up
-    /// alongside the consent-prompt UI for picking which display to
+    /// alongside the connected-notification UI for picking which display to
     /// share.
     pub fn for_primary_output() -> Result<Self, WindowsCaptureError> {
         Self::with_acquire_timeout(DEFAULT_ACQUIRE_TIMEOUT)

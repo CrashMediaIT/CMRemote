@@ -33,11 +33,11 @@
 //!
 //! Implementations MUST:
 //!
-//! 1. **Refuse to inject any event before the session has cleared
-//!    [`super::consent`].** The default consent prompter denies every
-//!    request; a concrete prompter that asks the operator only fires
-//!    once per session, after the [`super::guards`] envelope checks
-//!    have passed.
+//! 1. **Refuse to inject any event before the desktop session is
+//!    active.** CMRemote is unattended-access software, so there is no
+//!    local approval prompt; input is allowed only after the
+//!    [`super::guards`] envelope checks have passed and the transport
+//!    has emitted the host-local connected notification.
 //! 2. **Bound burst rates.** A flood of `mouse_move` events from a
 //!    hostile viewer must not lock up the host's input queue;
 //!    implementations should coalesce moves to the most recent point
@@ -64,10 +64,10 @@ pub enum DesktopInputError {
     #[error("desktop input is not supported on {0:?}")]
     NotSupported(HostOs),
 
-    /// The viewer's session has not been granted on-host consent
-    /// (see [`super::consent`]); injection is refused fail-closed.
-    #[error("desktop input was denied by on-host consent")]
-    ConsentDenied,
+    /// The viewer's session is not active; injection is refused
+    /// fail-closed.
+    #[error("desktop input was denied because the session is not active")]
+    SessionNotActive,
 
     /// Operating-system or driver I/O error. The string is
     /// implementation-defined and MUST NOT contain the typed text,
@@ -153,7 +153,7 @@ pub trait MouseInput: Send + Sync {
 pub enum KeyCode {
     /// Single textual character. The driver MUST refuse `'\0'`,
     /// other ASCII control characters, and Unicode bidi-override
-    /// code points (the same set the consent / guards modules
+    /// code points (the same set the notification / guards modules
     /// refuse) so a hostile viewer cannot smuggle terminal escapes
     /// or invisible-formatting attacks through key injection.
     Char(char),
@@ -490,8 +490,8 @@ mod tests {
         let s = e.to_string();
         assert!(s.contains("desktop input I/O error"));
         assert!(s.contains("EACCES"));
-        let denied = DesktopInputError::ConsentDenied.to_string();
-        assert!(denied.contains("consent"));
+        let denied = DesktopInputError::SessionNotActive.to_string();
+        assert!(denied.contains("not active"));
         let bad = DesktopInputError::InvalidParameters("F(13)".into()).to_string();
         assert!(bad.contains("invalid"));
     }

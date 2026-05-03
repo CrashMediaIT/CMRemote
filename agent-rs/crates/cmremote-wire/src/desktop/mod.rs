@@ -60,12 +60,12 @@ pub struct RemoteControlSessionRequest {
     /// SignalR connection id of the viewer that initiated the session.
     pub user_connection_id: String,
     /// Display name of the operator initiating the session, surfaced
-    /// in the on-host consent prompt.
+    /// in the on-host connected notification.
     pub requester_name: String,
-    /// Operator organisation name, surfaced in the consent prompt.
+    /// Operator organisation name, surfaced in the connected notification.
     pub org_name: String,
-    /// Operator organisation UUID — the agent's local consent policy
-    /// can compare this against `ConnectionInfo.organization_id` to
+    /// Operator organisation UUID — the agent's cross-org guard
+    /// compares this against `ConnectionInfo.organization_id` to
     /// refuse cross-org sessions.
     pub org_id: String,
 }

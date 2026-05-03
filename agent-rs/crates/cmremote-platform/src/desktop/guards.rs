@@ -18,7 +18,7 @@
 //!    length-capped and refused if they contain control characters,
 //!    embedded NULs, or lone surrogates so they cannot inject
 //!    terminal escapes / shell metacharacters / UI-spoofing strings
-//!    into the consent prompt or the audit log.
+//!    into the connected notification or the audit log.
 //! 3. **Non-canonical session ids.** The .NET hub only ever sends a
 //!    canonical lowercase UUID for `session_id`; any other shape is
 //!    treated as an attack and refused.
@@ -103,7 +103,7 @@ fn is_canonical_lowercase_uuid(s: &str) -> bool {
 /// rejecting them is automatic.
 ///
 /// Public so other safety surfaces in this crate (notably the
-/// [`super::consent`] prompt builder, which renders the same
+/// [`super::notification`] payload builder, which renders the same
 /// operator-supplied strings on the host's screen) reuse exactly
 /// the same contract — keeping the security guarantee uniform.
 pub fn validate_operator_string(field: &str, value: &str) -> Result<(), String> {
@@ -137,7 +137,7 @@ pub fn validate_operator_string(field: &str, value: &str) -> Result<(), String> 
         //   U+2068 FIRST STRONG ISOLATE
         //   U+2069 POP DIRECTIONAL ISOLATE
         // A hostile org name containing any of these can disguise
-        // itself in the on-host consent prompt or audit log.
+        // itself in the on-host connected notification or audit log.
         if matches!(
             c,
             '\u{200E}' | '\u{200F}'

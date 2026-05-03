@@ -240,10 +240,7 @@ mod tests {
         assert_eq!(sink.compute_duration(1_000), Duration::ZERO);
         assert_eq!(sink.compute_duration(1_000), Duration::ZERO);
         // Forward jump produces the expected gap.
-        assert_eq!(
-            sink.compute_duration(34_000),
-            Duration::from_micros(33_000)
-        );
+        assert_eq!(sink.compute_duration(34_000), Duration::from_micros(33_000));
         // Clock rewind clamps to zero rather than underflowing.
         assert_eq!(sink.compute_duration(10_000), Duration::ZERO);
     }
