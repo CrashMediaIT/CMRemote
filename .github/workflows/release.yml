@@ -270,7 +270,8 @@ jobs:
 
           expected_assets="$(mktemp)"
           actual_assets="$(mktemp)"
-          trap 'rm -f "$expected_assets" "$actual_assets"' EXIT
+          build_rows="$(mktemp)"
+          trap 'rm -f "$expected_assets" "$actual_assets" "$build_rows"' EXIT
 
           rm -rf verify-release
           mkdir verify-release
@@ -296,7 +297,14 @@ jobs:
           fi
 
           expected_signed_by="https://github.com/${GH_REPO}/.github/workflows/release.yml@refs/tags/${GH_REF_NAME}"
-          while IFS=$'\t' read -r file signature expected_sha signed_by; do
+          jq -r '.builds[] | [.file, .signature, .sha256, .signedBy] | @tsv' "$manifest" > "$build_rows"
+          tab="$(printf '\t')"
+          while IFS="$tab" read -r file signature expected_sha signed_by; do
+              if [ -z "$file" ] || [ -z "$signature" ] || [ -z "$expected_sha" ] || [ -z "$signed_by" ]; then
+                  echo "Malformed publisher-manifest.json build entry." >&2
+                  exit 1
+              fi
+
               if [ "$signed_by" != "$expected_signed_by" ]; then
                   echo "Unexpected signedBy for ${file}: ${signed_by}" >&2
                   exit 1
@@ -317,4 +325,4 @@ jobs:
                   echo "SHA-256 mismatch for ${file}: manifest=${expected_sha} downloaded=${actual_sha}" >&2
                   exit 1
               fi
-          done < <(jq -r '.builds[] | [.file, .signature, .sha256, .signedBy] | @tsv' "$manifest")
+          done < "$build_rows"
