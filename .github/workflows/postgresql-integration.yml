@@ -1,0 +1,68 @@
+# Source: CMRemote, clean-room implementation.
+name: PostgreSQL integration
+
+on:
+  push:
+    branches: [master, main]
+    paths:
+      - "Server/**"
+      - "Shared/**"
+      - "Tests/Server.Tests/**"
+      - ".github/workflows/postgresql-integration.yml"
+  pull_request:
+    branches: [master, main]
+    paths:
+      - "Server/**"
+      - "Shared/**"
+      - "Tests/Server.Tests/**"
+      - ".github/workflows/postgresql-integration.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  server-postgresql:
+    name: Server.Tests live PostgreSQL
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      CMREMOTE_POSTGRES_CONNECTION_STRING: Host=localhost;Port=5432;Database=postgres;Username=postgres;Password=postgres;Include Error Detail=true
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Restore Server.Tests
+        run: dotnet restore Tests/Server.Tests/Server.Tests.csproj -p:EnableWindowsTargeting=true --nologo
+
+      - name: Run live PostgreSQL integration tests
+        run: >
+          dotnet test Tests/Server.Tests/Server.Tests.csproj
+          --configuration Release
+          --no-restore
+          --nologo
+          -p:EnableWindowsTargeting=true
+          --filter TestCategory=PostgreSqlIntegration
