@@ -26,7 +26,7 @@ public class PublisherManifestParserTests
         string file = "cmremote-agent_1.2.3_amd64.deb",
         long size = 12345,
         string sha256 = SampleSha256,
-        string? signature = null)
+        string? signature = "cmremote-agent_1.2.3_amd64.deb.cosign.bundle")
     {
         var build = new
         {
@@ -37,7 +37,7 @@ public class PublisherManifestParserTests
             size,
             sha256,
             signature,
-            signedBy = signature is null ? null : "ca@crashmedia.ca",
+            signedBy = signature is null ? null : "https://github.com/CrashMediaIT/CMRemote/.github/workflows/release.yml@refs/tags/v1.2.3",
         };
         return JsonSerializer.Serialize(new
         {
@@ -128,6 +128,13 @@ public class PublisherManifestParserTests
     public void Parse_RejectsBadSha256()
     {
         var result = PublisherManifestParser.Parse(ManifestJson(sha256: "DEADBEEF"));
+        Assert.AreEqual(PublisherManifestParseError.InvalidBuildEntry, result.Error);
+    }
+
+    [TestMethod]
+    public void Parse_RejectsMissingSignature()
+    {
+        var result = PublisherManifestParser.Parse(ManifestJson(signature: null));
         Assert.AreEqual(PublisherManifestParseError.InvalidBuildEntry, result.Error);
     }
 

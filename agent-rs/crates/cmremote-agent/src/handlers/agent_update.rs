@@ -2,13 +2,15 @@
 
 //! Agent self-update hub handler (slice M3, gated on slice R6).
 //!
-//! Handles `InstallAgentUpdate(downloadUrl, version, sha256)`. The
+//! Handles `InstallAgentUpdate(downloadUrl, version, sha256,
+//! signatureUrl, signedBy)`. The
 //! handler downloads the new agent artifact via the same
 //! [`ArtifactDownloader`] the package providers use, re-verifies its
 //! SHA-256 against the value the server pushed (the server obtained
-//! it from the publisher manifest), stages it to disk, and hands off
-//! to the OS-appropriate [`AgentUpdateInstaller`] for the actual
-//! binary swap.
+//! it from the publisher manifest), verifies the Sigstore cosign
+//! bundle against the expected certificate identity, stages it to
+//! disk, and hands off to the OS-appropriate [`AgentUpdateInstaller`]
+//! for the actual binary swap.
 //!
 //! ## Why the install is behind a trait
 //!
@@ -61,8 +63,19 @@ pub const MAX_AGENT_UPDATE_BYTES: u64 = 256 * 1024 * 1024;
 pub const AGENT_UPDATE_INSTALL_TIMEOUT: std::time::Duration =
     std::time::Duration::from_secs(30 * 60);
 
+/// Hard wall-clock cap for Sigstore cosign verification.
+pub const AGENT_UPDATE_SIGNATURE_VERIFY_TIMEOUT: std::time::Duration =
+    std::time::Duration::from_secs(5 * 60);
+
+/// Hard cap on the size of a cosign bundle (1 MiB).
+pub const MAX_AGENT_UPDATE_SIGNATURE_BYTES: u64 = 1024 * 1024;
+
 /// Lowercase-hex SHA-256 string length.
 const SHA256_HEX_LEN: usize = 64;
+
+/// GitHub Actions OIDC issuer expected for release-workflow keyless
+/// signatures.
+const GITHUB_ACTIONS_OIDC_ISSUER: &str = "https://token.actions.githubusercontent.com";
 
 /// Performs the platform-specific binary swap once a verified update
 /// artifact is on disk. Implementations must be side-effect-free in
@@ -77,6 +90,20 @@ pub trait AgentUpdateInstaller: Send + Sync {
         &self,
         artifact_path: PathBuf,
         version: String,
+    ) -> Result<(), AgentUpdateError>;
+}
+
+/// Verifies the Sigstore cosign bundle for a staged update artifact
+/// before native package-manager handoff.
+#[async_trait]
+pub trait AgentUpdateSignatureVerifier: Send + Sync {
+    /// Verify `artifact_path` against `bundle_path` and the expected
+    /// certificate identity from the publisher manifest.
+    async fn verify(
+        &self,
+        artifact_path: &Path,
+        bundle_path: &Path,
+        signed_by: &str,
     ) -> Result<(), AgentUpdateError>;
 }
 
@@ -101,12 +128,87 @@ pub enum AgentUpdateError {
     /// SHA-256 of the downloaded bytes did not match the wire value.
     #[error("agent update SHA-256 mismatch — refusing to install")]
     Sha256Mismatch,
+    /// Signature URL did not start with `https://`.
+    #[error("agent update signature URL must be https://")]
+    InsecureSignatureUrl,
+    /// Signature/certificate fields were missing or malformed.
+    #[error("agent update signature metadata is missing or malformed")]
+    BadSignatureMetadata,
+    /// Cosign bundle verification failed.
+    #[error("agent update cosign verification failed: {0}")]
+    SignatureVerification(String),
     /// I/O error while staging or reading the artifact.
     #[error("agent update local I/O error: {0}")]
     Io(String),
     /// Installer rejected the staged artifact.
     #[error("agent update installer error: {0}")]
     Installer(String),
+}
+
+/// Process-backed Sigstore cosign verifier. The agent fails closed if
+/// cosign is missing or returns non-zero.
+pub struct CosignBundleVerifier {
+    runner: Arc<dyn ProcessRunner>,
+    cosign_path: PathBuf,
+}
+
+impl CosignBundleVerifier {
+    /// Build a verifier using [`TokioProcessRunner`]. The executable can
+    /// be overridden with `CMREMOTE_COSIGN`; otherwise `cosign` is
+    /// resolved from PATH.
+    pub fn from_env() -> Self {
+        let cosign_path = std::env::var_os("CMREMOTE_COSIGN")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("cosign"));
+        Self::new(cosign_path, Arc::new(TokioProcessRunner))
+    }
+
+    /// Build a verifier with an injected process runner.
+    pub fn new(cosign_path: PathBuf, runner: Arc<dyn ProcessRunner>) -> Self {
+        Self {
+            runner,
+            cosign_path,
+        }
+    }
+}
+
+#[async_trait]
+impl AgentUpdateSignatureVerifier for CosignBundleVerifier {
+    async fn verify(
+        &self,
+        artifact_path: &Path,
+        bundle_path: &Path,
+        signed_by: &str,
+    ) -> Result<(), AgentUpdateError> {
+        if !is_safe_signed_by(signed_by) {
+            return Err(AgentUpdateError::BadSignatureMetadata);
+        }
+        let command = ProcessCommand::new(
+            self.cosign_path.clone(),
+            vec![
+                "verify-blob".to_string(),
+                "--bundle".to_string(),
+                bundle_path.display().to_string(),
+                "--certificate-identity".to_string(),
+                signed_by.to_string(),
+                "--certificate-oidc-issuer".to_string(),
+                GITHUB_ACTIONS_OIDC_ISSUER.to_string(),
+                artifact_path.display().to_string(),
+            ],
+            AGENT_UPDATE_SIGNATURE_VERIFY_TIMEOUT,
+        );
+        let outcome = self.runner.run(command).await;
+        if let Some(error) = outcome.error {
+            return Err(AgentUpdateError::SignatureVerification(error));
+        }
+        if outcome.exit_code != 0 {
+            return Err(AgentUpdateError::SignatureVerification(format!(
+                "cosign exited with code {}",
+                outcome.exit_code
+            )));
+        }
+        Ok(())
+    }
 }
 
 /// Default [`AgentUpdateInstaller`] — returns a structured failure for
@@ -248,11 +350,14 @@ pub struct AgentUpdateContext {
     pub downloader: Arc<dyn ArtifactDownloader>,
     /// Platform-specific installer.
     pub installer: Arc<dyn AgentUpdateInstaller>,
+    /// Sigstore cosign verifier.
+    pub signature_verifier: Arc<dyn AgentUpdateSignatureVerifier>,
     /// Directory the artifact is staged into. Caller creates it.
     pub stage_dir: PathBuf,
 }
 
-/// Handle `InstallAgentUpdate(downloadUrl, version, sha256)`.
+/// Handle `InstallAgentUpdate(downloadUrl, version, sha256,
+/// signatureUrl, signedBy)`.
 ///
 /// On success the completion payload is `null`. On failure it is the
 /// stringified [`AgentUpdateError`] returned via the hub-completion
@@ -263,7 +368,7 @@ pub async fn handle_install_agent_update(
     inv: &HubInvocation,
     ctx: &AgentUpdateContext,
 ) -> Result<serde_json::Value, String> {
-    let (download_url, version, expected_sha) = match parse_args(inv) {
+    let (download_url, version, expected_sha, signature_url, signed_by) = match parse_args(inv) {
         Ok(t) => t,
         Err(e) => return Err(e.to_string()),
     };
@@ -316,7 +421,34 @@ pub async fn handle_install_agent_update(
         return Err(AgentUpdateError::Sha256Mismatch.to_string());
     }
 
-    // Phase 3 — install.
+    // Phase 3 — verify the Sigstore cosign bundle.
+    let sig_request = DownloadRequest {
+        url: signature_url,
+        auth_header: None,
+        max_bytes: MAX_AGENT_UPDATE_SIGNATURE_BYTES,
+        timeout: AGENT_UPDATE_SIGNATURE_VERIFY_TIMEOUT,
+        destination_dir: ctx.stage_dir.clone(),
+        file_name: format!("cmremote-agent-{version}.cosign.bundle"),
+    };
+    let bundle = match ctx.downloader.download(sig_request).await {
+        Ok(a) => a,
+        Err(e) => {
+            let _ = std::fs::remove_file(&downloaded.path);
+            return Err(translate_signature_download_error(&e).to_string());
+        }
+    };
+    if let Err(e) = ctx
+        .signature_verifier
+        .verify(&downloaded.path, &bundle.path, &signed_by)
+        .await
+    {
+        let _ = std::fs::remove_file(&downloaded.path);
+        let _ = std::fs::remove_file(&bundle.path);
+        return Err(e.to_string());
+    }
+    let _ = std::fs::remove_file(&bundle.path);
+
+    // Phase 4 — install.
     info!(
         version = %version,
         path = %downloaded.path.display(),
@@ -337,10 +469,12 @@ pub async fn handle_install_agent_update(
     Ok(serde_json::Value::Null)
 }
 
-fn parse_args(inv: &HubInvocation) -> Result<(String, String, String), AgentUpdateError> {
-    if inv.arguments.len() < 3 {
+fn parse_args(
+    inv: &HubInvocation,
+) -> Result<(String, String, String, String, String), AgentUpdateError> {
+    if inv.arguments.len() < 5 {
         return Err(AgentUpdateError::InvalidArguments(format!(
-            "expected 3 arguments, got {}",
+            "expected 5 arguments, got {}",
             inv.arguments.len()
         )));
     }
@@ -353,9 +487,18 @@ fn parse_args(inv: &HubInvocation) -> Result<(String, String, String), AgentUpda
     let sha = inv.arguments[2]
         .as_str()
         .ok_or_else(|| AgentUpdateError::InvalidArguments("sha256 must be a string".into()))?;
+    let signature_url = inv.arguments[3].as_str().ok_or_else(|| {
+        AgentUpdateError::InvalidArguments("signatureUrl must be a string".into())
+    })?;
+    let signed_by = inv.arguments[4]
+        .as_str()
+        .ok_or_else(|| AgentUpdateError::InvalidArguments("signedBy must be a string".into()))?;
 
     if url.len() < 8 || !url.as_bytes()[..8].eq_ignore_ascii_case(b"https://") {
         return Err(AgentUpdateError::InsecureUrl);
+    }
+    if signature_url.len() < 8 || !signature_url.as_bytes()[..8].eq_ignore_ascii_case(b"https://") {
+        return Err(AgentUpdateError::InsecureSignatureUrl);
     }
     if !is_safe_version(version) {
         return Err(AgentUpdateError::BadVersion);
@@ -363,7 +506,16 @@ fn parse_args(inv: &HubInvocation) -> Result<(String, String, String), AgentUpda
     if !is_lower_hex_sha256(sha) {
         return Err(AgentUpdateError::BadSha256);
     }
-    Ok((url.to_string(), version.to_string(), sha.to_string()))
+    if !is_safe_signed_by(signed_by) {
+        return Err(AgentUpdateError::BadSignatureMetadata);
+    }
+    Ok((
+        url.to_string(),
+        version.to_string(),
+        sha.to_string(),
+        signature_url.to_string(),
+        signed_by.to_string(),
+    ))
 }
 
 fn is_lower_hex_sha256(s: &str) -> bool {
@@ -383,6 +535,15 @@ fn is_safe_version(v: &str) -> bool {
     }
     v.bytes()
         .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-' || b == b'+')
+}
+
+fn is_safe_signed_by(v: &str) -> bool {
+    if v.is_empty() || v.len() > 512 {
+        return false;
+    }
+    v.bytes().all(|b| b.is_ascii_graphic())
+        && v.starts_with("https://github.com/")
+        && v.contains("/.github/workflows/")
 }
 
 fn artifact_extension_from_url(url: &str) -> Option<&'static str> {
@@ -420,6 +581,15 @@ fn translate_download_error(e: &DownloadError) -> AgentUpdateError {
     }
 }
 
+fn translate_signature_download_error(e: &DownloadError) -> AgentUpdateError {
+    match e {
+        DownloadError::InsecureUrl(_) => AgentUpdateError::InsecureSignatureUrl,
+        other => {
+            AgentUpdateError::SignatureVerification(translate_download_error(other).to_string())
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -438,6 +608,17 @@ mod tests {
             target: "InstallAgentUpdate".into(),
             arguments: args,
         }
+    }
+
+    fn valid_args(url: &str, version: &str, sha: &str) -> Vec<serde_json::Value> {
+        vec![
+            url.into(),
+            version.into(),
+            sha.into(),
+            "https://example.com/cmremote-agent.cosign.bundle".into(),
+            "https://github.com/CrashMediaIT/CMRemote/.github/workflows/release.yml@refs/tags/v2.0.0"
+                .into(),
+        ]
     }
 
     /// Downloader that writes a fixed body to the requested path.
@@ -536,6 +717,42 @@ mod tests {
         }
     }
 
+    #[derive(Default)]
+    struct OkSignatureVerifier {
+        last: Mutex<Option<(PathBuf, PathBuf, String)>>,
+    }
+
+    #[async_trait]
+    impl AgentUpdateSignatureVerifier for OkSignatureVerifier {
+        async fn verify(
+            &self,
+            artifact_path: &Path,
+            bundle_path: &Path,
+            signed_by: &str,
+        ) -> Result<(), AgentUpdateError> {
+            *self.last.lock().unwrap() = Some((
+                artifact_path.to_path_buf(),
+                bundle_path.to_path_buf(),
+                signed_by.to_string(),
+            ));
+            Ok(())
+        }
+    }
+
+    struct FailingSignatureVerifier;
+
+    #[async_trait]
+    impl AgentUpdateSignatureVerifier for FailingSignatureVerifier {
+        async fn verify(
+            &self,
+            _artifact_path: &Path,
+            _bundle_path: &Path,
+            _signed_by: &str,
+        ) -> Result<(), AgentUpdateError> {
+            Err(AgentUpdateError::SignatureVerification("bad bundle".into()))
+        }
+    }
+
     fn ctx(
         stage: &TempDir,
         dl: Arc<dyn ArtifactDownloader>,
@@ -544,6 +761,7 @@ mod tests {
         AgentUpdateContext {
             downloader: dl,
             installer,
+            signature_verifier: Arc::new(OkSignatureVerifier::default()),
             stage_dir: stage.path().to_path_buf(),
         }
     }
@@ -571,11 +789,11 @@ mod tests {
             Arc::new(StubAgentUpdateInstaller),
         );
         let err = handle_install_agent_update(
-            &inv(vec![
-                "http://example.com/agent.msi".into(),
-                "1.2.3".into(),
-                "a".repeat(64).into(),
-            ]),
+            &inv(valid_args(
+                "http://example.com/agent.msi",
+                "1.2.3",
+                &"a".repeat(64),
+            )),
             &c,
         )
         .await
@@ -592,11 +810,11 @@ mod tests {
             Arc::new(StubAgentUpdateInstaller),
         );
         let err = handle_install_agent_update(
-            &inv(vec![
-                "https://example.com/cmremote-agent.msi".into(),
-                "1.2.3".into(),
-                "not-a-real-sha".into(),
-            ]),
+            &inv(valid_args(
+                "https://example.com/cmremote-agent.msi",
+                "1.2.3",
+                "not-a-real-sha",
+            )),
             &c,
         )
         .await
@@ -613,11 +831,11 @@ mod tests {
             Arc::new(StubAgentUpdateInstaller),
         );
         let err = handle_install_agent_update(
-            &inv(vec![
-                "https://example.com/cmremote-agent.msi".into(),
-                "1.2.3; rm -rf /".into(),
-                "a".repeat(64).into(),
-            ]),
+            &inv(valid_args(
+                "https://example.com/cmremote-agent.msi",
+                "1.2.3; rm -rf /",
+                &"a".repeat(64),
+            )),
             &c,
         )
         .await
@@ -631,11 +849,11 @@ mod tests {
         let dl = FakeDl::fail(DownloadError::NotConfigured);
         let c = ctx(&tmp, dl, Arc::new(StubAgentUpdateInstaller));
         let err = handle_install_agent_update(
-            &inv(vec![
-                "https://example.com/x".into(),
-                "1.2.3".into(),
-                "a".repeat(64).into(),
-            ]),
+            &inv(valid_args(
+                "https://example.com/x",
+                "1.2.3",
+                &"a".repeat(64),
+            )),
             &c,
         )
         .await
@@ -650,11 +868,11 @@ mod tests {
         let installer = OkInstaller::new();
         let c = ctx(&tmp, dl, installer.clone());
         let err = handle_install_agent_update(
-            &inv(vec![
-                "https://example.com/x".into(),
-                "1.2.3".into(),
-                "0".repeat(64).into(),
-            ]),
+            &inv(valid_args(
+                "https://example.com/x",
+                "1.2.3",
+                &"0".repeat(64),
+            )),
             &c,
         )
         .await
@@ -671,13 +889,19 @@ mod tests {
         let sha = compute_sha256_hex(&bytes);
         let dl = FakeDl::ok(bytes.clone());
         let installer = OkInstaller::new();
-        let c = ctx(&tmp, dl, installer.clone());
+        let verifier = Arc::new(OkSignatureVerifier::default());
+        let c = AgentUpdateContext {
+            downloader: dl,
+            installer: installer.clone(),
+            signature_verifier: verifier.clone(),
+            stage_dir: tmp.path().to_path_buf(),
+        };
         let result = handle_install_agent_update(
-            &inv(vec![
-                "https://example.com/cmremote-agent.msi".into(),
-                "1.2.3".into(),
-                sha.into(),
-            ]),
+            &inv(valid_args(
+                "https://example.com/cmremote-agent.msi",
+                "1.2.3",
+                &sha,
+            )),
             &c,
         )
         .await
@@ -688,6 +912,47 @@ mod tests {
         // The staged file's contents should match what we delivered.
         assert_eq!(fs::read(&last.0).unwrap(), bytes);
         assert_eq!(last.0.extension().and_then(|e| e.to_str()), Some("msi"));
+        let (_, bundle_path, signed_by) = verifier.last.lock().unwrap().clone().unwrap();
+        assert_eq!(
+            bundle_path.file_name().and_then(|n| n.to_str()),
+            Some("cmremote-agent-1.2.3.cosign.bundle")
+        );
+        assert!(signed_by.contains("/.github/workflows/release.yml@refs/tags/v2.0.0"));
+        assert!(
+            !bundle_path.exists(),
+            "cosign bundle should be removed after verification"
+        );
+    }
+
+    #[tokio::test]
+    async fn signature_verification_failure_refuses_install_and_cleans_up() {
+        let tmp = TempDir::new().unwrap();
+        let bytes = b"agent update payload".to_vec();
+        let sha = compute_sha256_hex(&bytes);
+        let dl = FakeDl::ok(bytes);
+        let installer = OkInstaller::new();
+        let c = AgentUpdateContext {
+            downloader: dl,
+            installer: installer.clone(),
+            signature_verifier: Arc::new(FailingSignatureVerifier),
+            stage_dir: tmp.path().to_path_buf(),
+        };
+
+        let err = handle_install_agent_update(
+            &inv(valid_args(
+                "https://example.com/cmremote-agent.msi",
+                "1.2.3",
+                &sha,
+            )),
+            &c,
+        )
+        .await
+        .unwrap_err();
+
+        assert!(err.contains("cosign verification failed"));
+        assert!(installer.last.lock().unwrap().is_none());
+        let entries: Vec<_> = fs::read_dir(tmp.path()).unwrap().collect();
+        assert!(entries.is_empty(), "leftover files: {entries:?}");
     }
 
     #[tokio::test]
@@ -698,11 +963,7 @@ mod tests {
         let dl = FakeDl::ok(bytes);
         let c = ctx(&tmp, dl, Arc::new(StubAgentUpdateInstaller));
         let err = handle_install_agent_update(
-            &inv(vec![
-                "https://example.com/x".into(),
-                "1.2.3".into(),
-                sha.into(),
-            ]),
+            &inv(valid_args("https://example.com/x", "1.2.3", &sha)),
             &c,
         )
         .await
@@ -737,6 +998,41 @@ mod tests {
             !artifact.exists(),
             "installer owns and removes staged artifact"
         );
+    }
+
+    #[tokio::test]
+    async fn cosign_verifier_invokes_verify_blob_with_bundle_and_identity() {
+        let tmp = TempDir::new().unwrap();
+        let artifact = tmp.path().join("cmremote-agent.deb");
+        let bundle = tmp.path().join("cmremote-agent.deb.cosign.bundle");
+        fs::write(&artifact, b"deb").unwrap();
+        fs::write(&bundle, b"bundle").unwrap();
+        let runner = FakeRunner::with_exit(0);
+        let verifier = CosignBundleVerifier::new(PathBuf::from("/usr/bin/cosign"), runner.clone());
+        let signed_by =
+            "https://github.com/CrashMediaIT/CMRemote/.github/workflows/release.yml@refs/tags/v2.0.0";
+
+        verifier
+            .verify(&artifact, &bundle, signed_by)
+            .await
+            .unwrap();
+
+        let cmd = runner.last.lock().unwrap().clone().unwrap();
+        assert_eq!(cmd.program, PathBuf::from("/usr/bin/cosign"));
+        assert_eq!(
+            cmd.args,
+            vec![
+                "verify-blob".to_string(),
+                "--bundle".to_string(),
+                bundle.display().to_string(),
+                "--certificate-identity".to_string(),
+                signed_by.to_string(),
+                "--certificate-oidc-issuer".to_string(),
+                GITHUB_ACTIONS_OIDC_ISSUER.to_string(),
+                artifact.display().to_string(),
+            ]
+        );
+        assert_eq!(cmd.timeout, AGENT_UPDATE_SIGNATURE_VERIFY_TIMEOUT);
     }
 
     #[tokio::test]
@@ -869,6 +1165,21 @@ mod tests {
         assert!(!is_safe_version(""));
         assert!(!is_safe_version("1.2.3 ; rm"));
         assert!(!is_safe_version("1.2.3$(whoami)"));
+    }
+
+    #[test]
+    fn signed_by_validator_accepts_release_workflow_identity_only() {
+        assert!(is_safe_signed_by(
+            "https://github.com/CrashMediaIT/CMRemote/.github/workflows/release.yml@refs/tags/v2.0.0"
+        ));
+        assert!(!is_safe_signed_by(""));
+        assert!(!is_safe_signed_by("https://example.com/release.yml"));
+        assert!(!is_safe_signed_by(
+            "https://github.com/CrashMediaIT/CMRemote/actions/runs/1"
+        ));
+        assert!(!is_safe_signed_by(
+            "https://github.com/CrashMediaIT/CMRemote/.github/workflows/release.yml\nmalicious"
+        ));
     }
 
     #[test]

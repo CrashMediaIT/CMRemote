@@ -1,316 +1,89 @@
-# Remotely
+# CMRemote
 
-A remote control and remote scripting solution, built with .NET, Blazor, and SignalR Core.
+CMRemote is a clean-room continuation of Remotely focused on self-hosted endpoint management, unattended remote control, scripting, package installs, migration tooling, and a new Rust endpoint agent.
 
-[![Build Status](https://dev.azure.com/immybot/Remotely/_apis/build/status%2Fimmense.Remotely?branchName=master)](https://dev.azure.com/immybot/Remotely/_build/latest?definitionId=2&branchName=master)
-[![Tests](https://github.com/immense/Remotely/actions/workflows/run_tests.yml/badge.svg?branch=master)](https://github.com/immense/Remotely/actions/workflows/run_tests.yml)
+This repository is mid-rewrite and **not production-deployable yet**. Use the roadmap and docs below as the source of truth for deployability status.
 
-## Project Links
+## Current status
 
-Subreddit: https://www.reddit.com/r/remotely_app/  
-Docker: https://hub.docker.com/r/immybot/remotely  
-Tutorial: https://www.youtube.com/watch?v=t-TFvr7sZ6M (Thanks, @bmcgonag!)
+- Rust agent Track R is implemented behind the `agent-rs/` workspace, including WebSocket/SignalR transport, device heartbeat, command execution, package-manager dispatch, WebRTC desktop transport, installer wrappers, and self-update handoff.
+- Migration M5 tests/docs are shipped for legacy-to-v2 conversion.
+- Release-side S5 integrity is wired: tagged releases generate SBOMs, cosign bundles, and provenance attestations.
+- Remaining deployability work is tracked in `ROADMAP.md`.
 
-![image](.github/media/ask-remote.png)
+## Start here
 
-## Quickstart
+| Need | File |
+|---|---|
+| Roadmap and remaining deployability work | [`ROADMAP.md`](ROADMAP.md) |
+| Rust agent architecture and local commands | [`agent-rs/README.md`](agent-rs/README.md) |
+| Agent packaging and release artifacts | [`agent-rs/packaging/README.md`](agent-rs/packaging/README.md) |
+| Publisher manifest contract | [`docs/publisher-manifest.md`](docs/publisher-manifest.md) |
+| Wire protocol and frozen vectors | [`docs/wire-protocol.md`](docs/wire-protocol.md) |
+| Setup wizard operator guide | [`docs/Setup-Wizard.md`](docs/Setup-Wizard.md) |
+| Legacy migration guide | [`docs/Migration.md`](docs/Migration.md) |
+| Threat model | [`docs/threat-model.md`](docs/threat-model.md) |
 
+## Repository layout
+
+- `Server/` — ASP.NET Core/Blazor server and SignalR hubs.
+- `Shared/` — shared .NET DTOs, entities, and interfaces.
+- `Agent/` — legacy .NET agent kept for compatibility during the cut-over.
+- `agent-rs/` — clean-room Rust agent workspace.
+- `Desktop.*` — legacy desktop client/native projects.
+- `Migration.Legacy/` and `Migration.Cli/` — legacy database migration tooling.
+- `Tests/` — .NET unit/integration tests.
+- `docs/` — protocol, migration, setup, release, and security documentation.
+
+## Common validation commands
+
+Run commands from the repository root unless noted.
+
+```bash
+# .NET server tests
+dotnet test Tests/Server.Tests/Server.Tests.csproj --no-restore
+
+# Shared DTO tests
+dotnet test Tests/Shared.Tests/Shared.Tests.csproj --no-restore
+
+# Legacy migration converter/importer tests
+dotnet test Tests/Migration.Legacy.Tests/Migration.Legacy.Tests.csproj --no-restore
+
+# Rust agent tests
+cd agent-rs
+cargo test --workspace --all-targets
+
+# Rust WebRTC desktop contract tests
+cargo test -p cmremote-platform --features webrtc-driver desktop::webrtc::tests
 ```
-mkdir -p /var/www/remotely
-wget -q https://raw.githubusercontent.com/immense/Remotely/master/docker-compose/docker-compose.yml
-docker-compose up -d
-```
 
-## Important: HTTPS and Reverse Proxies
+## Desktop remote-control contract
 
-The only supported reverse proxy is Caddy, and only when it is directly facing the internet. The default configuration for Caddy provides everything that ASP.NET Core and SignalR need to function correctly.
+The Rust agent's remote-control path is designed for unattended access:
 
-If you are having networking issues with any other setup, such as with an additional firewall or with Nginx, please seek out community support in the Discussions tab, on Reddit, or another social site. The Remotely maintainers simply can't provide guidance and support for all the possible environment setups.
+- A valid operator session must not block on host-local approval prompts.
+- The agent emits host-local connected and disconnected notifications for the controlled machine.
+- Notification text is sanitised and must not include access keys, TURN credentials, clipboard contents, or typed text.
+- WebRTC signalling payload size caps are mirrored in Rust and .NET.
 
-With that said, ASP.NET Core requires the following headers to be set when behind a reverse proxy: `X-Forwarded-Proto`, `X-Forwarded-Host`, and `X-Forwarded-For`. These correlate to the scheme (http/https), the URL of the original request, and the client's IP address, respectively. The resulting scheme and host are injected into the installers and desktop clients, so they know where to send requests. The client IP address is used in the device info.
+The `Desktop E2E lab` GitHub Actions workflow validates the browser/viewer DTO → .NET hub → Rust WebRTC transport contract, no-prompt notification lifecycle, and a hosted Linux Xvfb media path that captures the desktop with `xwd` and encodes H.264 with `ffmpeg`.
 
-The Remotely code does not parse or handle these values. It is done internally by ASP.NET Core's built-in middleware. If the values are not appearing as expected, it is because the headers were missing, didn't contain the correct values, were not in the correct format, or didn't come through a chain of known proxies (see below).
+## Release integrity
 
-To avoid injection attacks, ASP.NET Core defaults to only accepting forwarded headers from loopback addresses. Remotely will also add the Docker gateway IP (172.28.0.1) defined in the docker-compose file. If you are using a non-default configuration, you must add all firewall and reverse proxy addresses to the `KnownProxies` array in the Server Config.
+Tagged release builds produce:
 
-If you are unable to get your reverse proxies configured correctly, you can at least force the use of HTTPS scheme by setting `Force Client HTTPS` in the Server Config page.
+- Native Rust agent packages: `.deb`, `.rpm`, `.msi`, and `.pkg`.
+- `publisher-manifest.json` with SHA-256, cosign bundle, and certificate identity metadata.
+- CycloneDX SBOMs for the Rust agent workspace and .NET server.
+- Sigstore cosign bundles for artifacts and release metadata.
+- SLSA provenance attestations through GitHub artifact attestations.
 
-Microsoft's full documentation on the topic can be found here: https://learn.microsoft.com/en-us/aspnet/core/host-and-deploy/proxy-load-balancer
+The Rust agent self-update path downloads the package, re-checks SHA-256, verifies the cosign bundle against the publisher identity, and only then invokes the native package installer.
 
-## After Installation
+## Deployment note
 
-- Data for Remotely will be saved in the container under `/app/AppData`, which will be mounted to `/var/www/remotely/` on your Docker host.
-- This folder will contain Remotely.db and logs generated by the server.
-  - These files will persist through teardown and setup of new Remotely containers.
-  - If upgrading from a non-Docker version of Remotely, overwrite the DB file from your previous installation.
-- Use Caddy as a reverse proxy if you want to expose the site to the internet.
-- If this is the first run, create your account by clicking the `Register` button on the main page.
-  - This account will be both the server admin and organization admin.
-  - An organization is automatically created for the account.
-    - Organizations are used to group together users, devices, and other data items into a single pool.
-    - By default, only one organization can exist on a server.
-    - The `Register` button will disappear.
-    - People will no longer be able to create accounts on their own.
-    - To allow self-registration, increase the `MaxOrganizationCount` or set it to -1 (see Configuration section).
+Do not treat legacy Remotely quickstart snippets as authoritative for CMRemote. The deployment path is being rebuilt around the Rust agent, publisher manifests, setup wizard, and migration tooling. Check `ROADMAP.md` before attempting an installation or handing work to another agent.
 
-## HTTP Logging
+## License
 
-You can enable HTTP logging to see all requests and responses in the server logs, including headers. This can be helpful for debugging reverse proxy, API, or SignalR issues. The option can be enabled on the Server Config page.
-
-After changing the above, you must restart the container for the changes to take effect.
-
-## Rust Agent Remote Control
-
-CMRemote's Rust agent desktop transport is designed for unattended access. A
-valid remote-control session does not require a person at the controlled device
-to approve a prompt. Instead, the agent emits a host-local connected notification
-when a session starts and a disconnected notification when it ends.
-
-Current notification backends are:
-
-- Windows: `msg.exe`
-- Linux: `notify-send` when available, otherwise structured logs
-- macOS: `osascript display notification` when available, otherwise structured logs
-
-All notification text is sanitised before display and never includes access
-keys, TURN credentials, clipboard contents, or typed text.
-
-## Build and Debug Instructions (Windows 11)
-
-The following steps will configure your Windows 11 machine for building the Remotely server and clients.
-
-- Install Visual Studio 2022.
-  - Link: https://visualstudio.microsoft.com/downloads/
-  - You should have the following Workloads selected:
-    - ASP.NET and web development
-    - .NET desktop development
-    - .NET Core cross-platform development
-  - You should have the following Individual Components selected:
-    - .NET SDK (latest version).
-    - MSBuild (which auto-selects Roslyn compilers).
-    - NuGet targets and build tasks.
-    - .NET Framework 4.8 SDK.
-      - For debugging and development, you'll need all relevant workloads.
-- Install Git for Windows.
-  - Link: https://git-scm.com/downloads
-- Install the latest LTS Node:
-  - Link: https://nodejs.org/
-- Clone the git repository: `git clone https://github.com/immense/Remotely --recurse`
-- When debugging, the agent will use a pre-defined device ID and connect to https://localhost:5001.
-- In development environment, the server will assign all connecting agents to the first organization.
-- The above two allow you to debug the agent and server together, and see your device in the list.
-
-## Admin Accounts
-
-The first account created will be an admin for both the server and the organization that's created for the account.
-
-An organization admin has access to the Organization page and server log entries specific to his/her organization. A server admin has access to the Server Config page and can see server log entries that don't belong to an organization.
-
-## Branding
-
-Within the Account section, there is a tab for branding, which will apply to the quick support clients and Windows installer.
-
-However, the clients will need to have been built from source with the server URL hard-coded in the apps for them to be able to retrieve the branding info.
-
-## Configuration
-
-The database provider, connection strings, and ASP.NET Core port are configurable via environment variables in `docker-compose.yml`.
-
-All other configuration is done in the Server Config page once you're logged in.
-
-- AllowApiLogin: Whether to allow logging in via the API controller. API access tokens are recommended over this approach.
-- BannedDevices: An array of device IDs, names, or IP addresses to ban. When they try to connect, an uninstall command will immediately be sent back.
-- DataRetentionInDays: How long logs and other data will be kept on the server. Set to -1 to retain indefinitely (not recommended).
-- DBProvider: Determines which of the three connection strings (at the top) will be used. The appropriate DB provider for the database type is automatically loaded in code.
-- EnableWindowsEventLog: Whether to also add server log entries to the Windows Event Log.
-- EnforceAttendedAccess: Legacy attended-access setting. The Rust agent's R7
-  desktop transport is unattended by design and uses connection notifications
-  instead of local approval prompts.
-- EnableRemoteControlRecording: Whether to save recordings of remote control sessions on the server.
-  - They will be saved in `/app/AppData/recordings`.
-  - Their retention is governed by `DataRetentionInDays`.
-- ForceClientHTTPS: Force installers and desktop clients to use HTTPS scheme, even if forwarded headers is misconfigured.
-- KnownProxies: If your reverse proxy is on a different machine and is forwarding requests to the Remotely server, you will need to add the IP of the reverse proxy server to this array.
-- MaxOrganizationCount: By default, one organization can exist on the server, which is created automatically when the first account is registered. Afterward, self-registration will be disabled.
-  - Set this to -1 or increase it to a specific number to allow multi-tenancy.
-- RedirectToHttps: Whether ASP.NET Core will redirect all traffic from HTTP to HTTPS. This is independent of Caddy, Nginx, and IIS configurations that do the same.
-- RemoteControlNotifyUsers: Whether legacy clients show a notification to the
-  end user when an unattended remote control session starts. The Rust agent
-  always emits connected/disconnected notifications when its desktop transport
-  accepts a session.
-- RemoteControlRequiresAuthentication: Whether the remote control page requires authentication to establish a connection.
-- Require2FA: Require users to set up 2FA before they can use the main app.
-- Smpt-: SMTP settings for auto-generated system emails (such as registration and password reset).
-- Theme: The color theme to use for the site. Values are "Light" or "Dark". This can also be configured per-user in Account - Options.
-- TrustedCorsOrigins: For cross-origin API requests via JavaScript. The websites listed in this array with be allowed to make requests to the API. This does not grant authentication, which is still required on most endpoints.
-- UseHsts: Whether ASP.NET Core will use HTTP Strict Transport Security.
-- UseHttpLogging: Enables logging for all HTTP requests. Also enables additional log entries in `ClientDownloadsController` regarding the effective scheme, host, and remote IP address as a result of processing forwarded headers.
-  - You must explicitly set a log level for `Microsoft.AspNetCore.HttpLogging.HttpLoggingMiddleware` for this to work. See the [appsettings.json](https://github.com/immense/Remotely/blob/master/Server/appsettings.json) for an example.
-
-## Changing the Database
-
-By default, Remotely uses a SQLite database. When first run, it creates a file as specified for the SQLite connection string in appsettings.json.
-
-You can change database by changing `DBProvider` in `ApplicationOptions` to `SQLServer` or `PostgreSQL`.
-
-## Logging
-
-- On clients, logs are kept in `%ProgramData%\Remotely\Logs`
-- Within the server container, logs will be written to `/app/AppData/logs`, which (by default) will be mounted to `/var/www/remotely/Logs` on the host.
-- Built-in ASP.NET Core logs are written to the console (stdout). You can redirect this to a file if desired.
-  - In IIS, this can be done in the web.config file by setting stdoutLogEnabled to true.
-- On Windows Servers, the above logs can also be written to the Windows Event Log.
-  - This is enabled in Server Config by setting EnableWindowsEventLog to true.
-- You can configure logging levels and other settings in appsetttings.json.
-  - More information: https://docs.microsoft.com/en-us/aspnet/core/fundamentals/logging/
-
-## Remote Control Client Requirements
-
-- Windows: Only the latest version of Windows 11 is tested. Windows 7 and 8.1 should work, though performance will be reduced on Windows 7.
-  - Windows 2019/2022 should work as well, but isn't tested regularly.
-- Linux: Only the latest LTS version of Ubuntu is tested.
-- For the Ubuntu's "quick support" client, you must first install the following dependencies:
-  - libx11-dev
-  - libxrandr-dev
-    - libc6-dev
-    - libxtst-dev
-    - xclip
-
-## Remote Control on Mobile
-
-Ideally, you'd be doing remote control from an actual computer or laptop. However, I've tried to make the remote control at least somewhat usable from a mobile device. Here are the controls:
-
-- Left-click: Single tap
-- Right-click: Long-press, then release
-- Click-and-drag: Long-press, then drag
-
-## End User Support Page
-
-There's a page at `/get-support` where end users can request support. When the form is submitted, an alert appears on the main page, above the grid.
-
-A shortcut to this page is placed in the `\Program Files\Remotely\` folder. You can copy it anywhere you like. You can also have it copied to the desktop automatically by using the `-supportshortcut` switch on the installer.
-
-## .NET Deployments
-
-- .NET has two methods of deployment: framework-dependent and self-contained.
-  - Framework-dependent deployments require the .NET runtime to be installed on the target computers. It must be the same version that was used to build the app.
-  - Self-contained deployments include a copy of the runtime, so you don't need to install it on the target computers. As a result, the total file size is much larger.
-- .NET uses runtime identifiers that are targeted when building.
-  - Link: https://docs.microsoft.com/en-us/dotnet/core/rid-catalog
-
-## Shortcut Keys
-
-There are a few shortcut keys available when using the console.
-
-- / : Slash will allow you to switch between shells. The names are configurable in the Options page.
-- Up/Down: Use arrow up/down to cycle through input history.
-- Ctrl + Q: Clear the output window.
-
-## Port Configuration
-
-The host port (left side) can be configured in `docker-compose.yml`.  The container port (right side) should not be changed. See the [compose docs](https://docs.docker.com/compose/compose-file/05-services/#ports) for details.
-
-## API and Integrations
-
-Remotely has a basic API, which can be browsed at `https://{your_server_url}/swagger`. Most endpoints require authentication via an API access token, which can be created by going to Account - API Access.
-
-When accessing the API from the browser on another website, you'll need to set up CORS in appsettings by adding the website origin URL to the TrustedCorsOrigins array. If you're not familiar with how CORS works, I recommend reading up on it before proceeding. For example, if I wanted to create a login form on https://exmaple.com that logged into the Remotely API, I'd need to add "https://example.com" to the TrustedCorsOrigins.
-
-Each request to the API must have a header named "X-Api-Key". The value should be the API key's ID and secret, separated by a colon (i.e. [ApiKey]:[ApiSecret]).
-
-Below is an example API request:
-
-    POST https://localhost:5001/API/Scripting/ExecuteCommand/PSCore/f2b0a595-5ea8-471b-975f-12e70e0f3497 HTTP/1.1
-    Content-Type: application/json
-    X-Api-Key: 31fb288d-af97-4ce1-ae7b-ceebb98281ac:HLkrKaZGExYvozSPvcACZw9awKkhHnNK
-    User-Agent: PostmanRuntime/7.22.0
-    Accept: */*
-    Cache-Control: no-cache
-    Host: localhost:5001
-    Accept-Encoding: gzip, deflate, br
-    Content-Length: 12
-    Connection: close
-
-    Get-Location
-
-Below are examples of using the cookie-based login API (JavaScript):
-
-    // Log in with one request, then launch remote control with another.
-    fetch("https://localhost:5001/api/Login/", {
-    	method: "post",
-    	credentials: "include",
-    	mode: "cors",
-    	body: '{"email":"email@example.com", "password":"P@ssword1"}',
-    	headers: {
-    		"Content-Type": "application/json",
-    	}
-    }).then(response=>{
-    	if (response.ok) {
-    		fetch("https://localhost:44351/api/RemoteControl/Viewer/b68c24b0-2c67-4524-ad28-dadea7a576a4", {
-    			method: "get",
-    			credentials: "include",
-    			mode: "cors"
-    		}).then(response=>{
-    			if (response.ok) {
-    				response.text().then(url=>{
-    					window.open(url);
-    				})
-    			}
-    		})
-    	}
-    })
-
-    // Log in and launch remote control in the same request.
-    fetch("https://localhost:5001/api/RemoteControl/Viewer/", {
-    	method: "post",
-    	credentials: "include",
-    	mode: "cors",
-    	body: '{"email":"email@example.com", "password":"P@ssword1", "deviceID":"b68c24b0-2c67-4524-ad28-dadea7a576a4"}',
-    	headers: {
-    		"Content-Type": "application/json",
-    	}
-    }).then(response=>{
-    	if (response.ok) {
-    		response.text().then(url=>{
-    			window.open(url);
-    		})
-    	}
-    })
-
-## Alerts
-
-The Alerts API gives you the ability to add monitoring and alerting functionality to your device endpoints. This feature is intended to add basic RMM-type functionality without diverging too far from Remotely's primary purpose.
-
-Alerts can be set up to show a notification on the Remotely website, send an email, and/or perform a separate API request.
-
-To use Alerts, you'd first need to make an API token (or multiple tokens) for your devices to use. Then create a scheduled task or some other recurring script to do the work. Below is an example of how to use PowerShell to create a Scheduled Job that checks the disk space on a daily schedule.
-
-```
-$Trigger = New-JobTrigger -Daily -At "5 AM"
-$Option = New-ScheduledJobOption -RequireNetwork
-
-Register-ScheduledJob -ScriptBlock {
-    $OsDrive = Get-PSDrive -Name C
-    $FreeSpace = $OsDrive.Free / ($OsDrive.Used + $OsDrive.Free)
-    if ($FreeSpace -lt .1) {
-        Invoke-WebRequest -Uri "https://localhost:5001/api/Alerts/Create/" -Method Post -Headers @{
-            X-Api-Key="3e9d8273-1dc1-4303-bd50-7a133e36b9b7:S+82XKZdvg278pSFHWtUklqHENuO5IhH"
-        } -Body @"
-            {
-                "AlertDeviceID": "f2b0a595-5ea8-471b-975f-12e70e0f3497",
-                "AlertMessage": "Low hard drive space. Free Space: $([Math]::Round($FreeSpace * 100))%",
-                "ApiRequestBody": null,
-                "ApiRequestHeaders": null,
-                "ApiRequestMethod": null,
-                "ApiRequestUrl": null,
-                "EmailBody": "Low hard drive space for device Maker.",
-                "EmailSubject": "Hard Drive Space Alert",
-                "EmailTo": "translucency_software@outlook.com",
-                "ShouldAlert": true,
-                "ShouldEmail": true,
-                "ShouldSendApiRequest": false
-            }
-"@ -ContentType "application/json"
-    }
-} -Name "Check OS Drive Space" -Trigger $Trigger -ScheduledJobOption $Option
-```
+See [`LICENSE`](LICENSE).

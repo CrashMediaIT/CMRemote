@@ -57,9 +57,11 @@ CMREMOTE_BIN_ARM64=target/aarch64-apple-darwin/release/cmremote-agent \
 ## Continuous integration
 
 `.github/workflows/release.yml` runs all four targets on every `v*` tag,
-emits the publisher manifest with the resulting SHA-256s, and uploads
-the manifest + artifacts as release assets. Sigstore cosign keyless
-signs every artifact (Track S / S5).
+emits the publisher manifest with the resulting SHA-256s, generates
+CycloneDX SBOMs for the Rust agent workspace and .NET server, signs
+artifacts and metadata with Sigstore cosign keyless, publishes SLSA
+provenance attestations, and uploads the manifest, SBOMs, signatures,
+and artifacts as release assets (Track S / S5).
 
 ## Why systemd hardening?
 

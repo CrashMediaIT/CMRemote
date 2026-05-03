@@ -1,0 +1,42 @@
+{
+  "legacy": {
+    "id": "user-golden-001",
+    "userName": "alice@example.com",
+    "normalizedUserName": "ALICE@EXAMPLE.COM",
+    "email": "alice@example.com",
+    "normalizedEmail": "ALICE@EXAMPLE.COM",
+    "emailConfirmed": true,
+    "passwordHash": "AQAAAAIAAYagAAAAEGoldenPasswordHash",
+    "securityStamp": "SECURITY-STAMP-GOLDEN",
+    "concurrencyStamp": "CONCURRENCY-STAMP-GOLDEN",
+    "phoneNumber": "+1-555-0101",
+    "phoneNumberConfirmed": true,
+    "twoFactorEnabled": true,
+    "lockoutEnd": "2030-01-01T00:00:00+00:00",
+    "lockoutEnabled": true,
+    "accessFailedCount": 2,
+    "organizationID": "org-golden-001",
+    "isAdministrator": true,
+    "isServerAdmin": false
+  },
+  "expected": {
+    "id": "user-golden-001",
+    "userName": "alice@example.com",
+    "normalizedUserName": "ALICE@EXAMPLE.COM",
+    "email": "alice@example.com",
+    "normalizedEmail": "ALICE@EXAMPLE.COM",
+    "emailConfirmed": true,
+    "passwordHash": "AQAAAAIAAYagAAAAEGoldenPasswordHash",
+    "securityStamp": "SECURITY-STAMP-GOLDEN",
+    "concurrencyStamp": "CONCURRENCY-STAMP-GOLDEN",
+    "phoneNumber": "+1-555-0101",
+    "phoneNumberConfirmed": true,
+    "twoFactorEnabled": true,
+    "lockoutEnd": "2030-01-01T00:00:00+00:00",
+    "lockoutEnabled": true,
+    "accessFailedCount": 2,
+    "organizationID": "org-golden-001",
+    "isAdministrator": true,
+    "isServerAdmin": false
+  }
+}

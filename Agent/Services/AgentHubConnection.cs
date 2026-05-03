@@ -540,7 +540,12 @@ public class AgentHubConnection : IAgentHubConnection, IDisposable
     /// every dispatch attempt; the actual install happens through the
     /// updater's normal poll loop.
     /// </summary>
-    public Task InstallAgentUpdate(string downloadUrl, string version, string sha256)
+    public Task InstallAgentUpdate(
+        string downloadUrl,
+        string version,
+        string sha256,
+        string signatureUrl,
+        string signedBy)
     {
         _logger.LogInformation(
             "Server requested agent upgrade to version {version} via manifest URL {downloadUrl}; " +
@@ -918,7 +923,7 @@ public class AgentHubConnection : IAgentHubConnection, IDisposable
 
         _hubConnection.On(nameof(UninstallAgent), UninstallAgent);
 
-        _hubConnection.On<string, string, string>(nameof(InstallAgentUpdate), InstallAgentUpdate);
+        _hubConnection.On<string, string, string, string, string>(nameof(InstallAgentUpdate), InstallAgentUpdate);
 
         _hubConnection.On<Guid, string, string, string, string, string>(nameof(RemoteControl), RemoteControl);
 

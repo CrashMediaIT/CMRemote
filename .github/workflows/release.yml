@@ -5,9 +5,11 @@
 # Triggered by a `v*` tag (e.g. v0.1.0). Builds the agent for every
 # supported target, packages each one (.deb / .rpm / .msi / .pkg),
 # computes the SHA-256 of every artifact, signs each artifact with
-# Sigstore cosign (keyless OIDC, Track S / S5), emits the publisher
-# manifest documented in docs/publisher-manifest.md, and uploads the
-# manifest + signatures + artifacts as GitHub release assets.
+# Sigstore cosign (keyless OIDC, Track S / S5), emits CycloneDX SBOMs
+# for the Rust agent and .NET server, publishes SLSA provenance
+# attestations, emits the publisher manifest documented in
+# docs/publisher-manifest.md, and uploads the manifest + signatures +
+# artifacts as GitHub release assets.
 #
 # Note: macOS and Windows build jobs require their respective runners
 # to be available in the GitHub Actions concurrency budget. The Linux
@@ -165,6 +167,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install .NET SDK
+        uses: actions/setup-dotnet@v3.0.3
+        with:
+          dotnet-version: "8.0.x"
+
       - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
@@ -172,6 +182,43 @@ jobs:
 
       - name: Install cosign
         uses: sigstore/cosign-installer@v3
+
+      - name: Generate CycloneDX SBOMs
+        env:
+          GH_REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          version="${GH_REF_NAME#v}"
+          if [ -z "$version" ]; then
+            version="0.0.0"
+          fi
+
+          cargo install cargo-cyclonedx --locked --version 0.5.9
+          dotnet tool install --tool-path ./.tools CycloneDX --version 6.2.0
+
+          cargo cyclonedx \
+            --manifest-path agent-rs/Cargo.toml \
+            --format json \
+            --all \
+            --target all \
+            --override-filename cmremote-agent-sbom.cdx
+
+          find agent-rs/crates -name 'cmremote-agent-sbom.cdx.json' -print0 |
+            while IFS= read -r -d '' sbom; do
+              crate="$(basename "$(dirname "$sbom")")"
+              cp "$sbom" "out/cmremote-agent-${crate}.cdx.json"
+            done
+          find agent-rs/crates -name 'cmremote-agent-sbom.cdx.json' -delete
+
+          ./.tools/dotnet-CycloneDX Server/Server.csproj \
+            --recursive \
+            --exclude-test-projects \
+            --output out \
+            --filename cmremote-server.cdx.json \
+            --output-format Json \
+            --set-name CMRemote.Server \
+            --set-version "$version"
 
       - name: Sign every artifact + emit manifest
         id: manifest
@@ -242,6 +289,20 @@ jobs:
           jsonschema.validate(manifest, schema)
           print("Manifest valid.")
           PY
+
+      - name: Sign release metadata
+        run: |
+          set -euo pipefail
+          for f in out/*.cdx.json out/publisher-manifest.json; do
+            [ -f "$f" ] || continue
+            cosign sign-blob --yes --bundle "${f}.cosign.bundle" "$f"
+          done
+
+      - name: Generate SLSA provenance attestations
+        uses: actions/attest-build-provenance@v4.1.0
+        with:
+          subject-path: out/*
+          show-summary: true
 
       - name: Upload to GitHub release
         if: startsWith(github.ref, 'refs/tags/')

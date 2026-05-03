@@ -96,7 +96,7 @@ public class ManifestBackedAgentUpgradeDispatcherTests
         string target, string format,
         string version = "2.0.0",
         string file = "cmremote-agent.bin",
-        string? signature = null) =>
+        string? signature = "cmremote-agent.bin.cosign.bundle") =>
         new()
         {
             AgentVersion = version,
@@ -106,7 +106,7 @@ public class ManifestBackedAgentUpgradeDispatcherTests
             Size = 1234,
             Sha256 = new string('a', 64),
             Signature = signature,
-            SignedBy = signature is null ? null : "ca@crashmedia.ca",
+            SignedBy = signature is null ? null : "https://github.com/CrashMediaIT/CMRemote/.github/workflows/release.yml@refs/tags/v2.0.0",
         };
 
     private static PublisherManifest Manifest(string channel = "stable", params PublisherManifestBuild[] builds) =>
@@ -119,6 +119,10 @@ public class ManifestBackedAgentUpgradeDispatcherTests
             Version = builds.FirstOrDefault()?.AgentVersion ?? "2.0.0",
             Builds = builds,
         };
+
+    private static AgentUpgradeTarget SignedTarget(string uri) =>
+        new("2.0.0", new string('a', 64), new Uri(uri), new Uri(uri + ".cosign.bundle"),
+            "https://github.com/CrashMediaIT/CMRemote/.github/workflows/release.yml@refs/tags/v2.0.0");
 
     // ---- AgentTargetRouting (pure) ----
 
@@ -299,6 +303,10 @@ public class ManifestBackedAgentUpgradeDispatcherTests
         var target = await NewDispatcher(requireSignature: true).ResolveTargetAsync(
             StatusFor(_testData.Org1Device1.ID), CancellationToken.None);
         Assert.IsNotNull(target);
+        Assert.AreEqual(
+            "https://cdn.example.com/cmremote/stable/MEUCIQDxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxQIgxxxxxxx",
+            target!.SignatureUri!.ToString());
+        Assert.IsFalse(string.IsNullOrWhiteSpace(target.SignedBy));
     }
 
     [TestMethod]
@@ -343,8 +351,7 @@ public class ManifestBackedAgentUpgradeDispatcherTests
         var sessionCache = new AgentHubSessionCache();
         var agentHub = new FakeAgentHub();
         var dispatcher = NewDispatcher(sessionCache: sessionCache, agentHub: agentHub);
-        var target = new AgentUpgradeTarget("2.0.0", new string('a', 64),
-            new Uri("https://cdn.example.com/cmremote/stable/cmremote-agent.deb"));
+        var target = SignedTarget("https://cdn.example.com/cmremote/stable/cmremote-agent.deb");
 
         var result = await dispatcher.DispatchAsync(
             StatusFor(_testData.Org1Device1.ID), target, CancellationToken.None);
@@ -369,8 +376,7 @@ public class ManifestBackedAgentUpgradeDispatcherTests
         sessionCache.AddOrUpdateByConnectionId("conn-1", device);
         var agentHub = new FakeAgentHub();
         var dispatcher = NewDispatcher(sessionCache: sessionCache, agentHub: agentHub);
-        var target = new AgentUpgradeTarget("2.0.0", new string('a', 64),
-            new Uri("https://cdn.example.com/cmremote/stable/cmremote-agent.deb"));
+        var target = SignedTarget("https://cdn.example.com/cmremote/stable/cmremote-agent.deb");
 
         // Simulate the agent restarting + heartbeating with the new
         // version after a tick or two.
@@ -391,11 +397,13 @@ public class ManifestBackedAgentUpgradeDispatcherTests
 
         Assert.IsTrue(result.Succeeded, $"Expected success but got: {result.Error}");
         Assert.AreEqual(1, agentHub.InstallAgentUpdateCalls.Count);
-        var (connId, url, ver, sha) = agentHub.InstallAgentUpdateCalls[0];
+        var (connId, url, ver, sha, signatureUrl, signedBy) = agentHub.InstallAgentUpdateCalls[0];
         Assert.AreEqual("conn-1", connId);
         Assert.AreEqual(target.DownloadUri.ToString(), url);
         Assert.AreEqual(target.Version, ver);
         Assert.AreEqual(target.Sha256, sha);
+        Assert.AreEqual(target.SignatureUri!.ToString(), signatureUrl);
+        Assert.AreEqual(target.SignedBy, signedBy);
     }
 
     [TestMethod]
@@ -414,8 +422,7 @@ public class ManifestBackedAgentUpgradeDispatcherTests
         var dispatcher = NewDispatcher(
             sessionCache: sessionCache, agentHub: agentHub,
             versionWatchInterval: TimeSpan.FromMilliseconds(10));
-        var target = new AgentUpgradeTarget("2.0.0", new string('a', 64),
-            new Uri("https://cdn.example.com/cmremote/stable/cmremote-agent.deb"));
+        var target = SignedTarget("https://cdn.example.com/cmremote/stable/cmremote-agent.deb");
 
         using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(150));
         // The orchestrator translates the OperationCanceledException
@@ -444,8 +451,12 @@ public class ManifestBackedAgentUpgradeDispatcherTests
         var agentHub = new FakeAgentHub();
         var dispatcher = NewDispatcher(sessionCache: sessionCache, agentHub: agentHub);
         // http (not https) — must be refused before any hub call fires.
-        var target = new AgentUpgradeTarget("2.0.0", new string('a', 64),
-            new Uri("http://cdn.example.com/cmremote/stable/cmremote-agent.deb"));
+        var target = new AgentUpgradeTarget(
+            "2.0.0",
+            new string('a', 64),
+            new Uri("http://cdn.example.com/cmremote/stable/cmremote-agent.deb"),
+            new Uri("https://cdn.example.com/cmremote/stable/cmremote-agent.deb.cosign.bundle"),
+            "https://github.com/CrashMediaIT/CMRemote/.github/workflows/release.yml@refs/tags/v2.0.0");
 
         var result = await dispatcher.DispatchAsync(
             StatusFor(_testData.Org1Device1.ID), target, CancellationToken.None);
@@ -472,8 +483,7 @@ public class ManifestBackedAgentUpgradeDispatcherTests
             ThrowOnInstallAgentUpdate = new InvalidOperationException("transport closed"),
         };
         var dispatcher = NewDispatcher(sessionCache: sessionCache, agentHub: agentHub);
-        var target = new AgentUpgradeTarget("2.0.0", new string('a', 64),
-            new Uri("https://cdn.example.com/cmremote/stable/cmremote-agent.deb"));
+        var target = SignedTarget("https://cdn.example.com/cmremote/stable/cmremote-agent.deb");
 
         var result = await dispatcher.DispatchAsync(
             StatusFor(_testData.Org1Device1.ID), target, CancellationToken.None);
@@ -510,7 +520,7 @@ public class ManifestBackedAgentUpgradeDispatcherTests
     /// </summary>
     internal sealed class FakeAgentHub
     {
-        public List<(string ConnectionId, string DownloadUrl, string Version, string Sha256)> InstallAgentUpdateCalls { get; } = new();
+        public List<(string ConnectionId, string DownloadUrl, string Version, string Sha256, string SignatureUrl, string SignedBy)> InstallAgentUpdateCalls { get; } = new();
         public Exception? ThrowOnInstallAgentUpdate { get; set; }
 
         public IHubContext<AgentHub, IAgentHubClient> HubContext { get; }
@@ -525,10 +535,11 @@ public class ManifestBackedAgentUpgradeDispatcherTests
                     var client = new Mock<IAgentHubClient>(MockBehavior.Loose);
                     client
                         .Setup(c => c.InstallAgentUpdate(
-                            It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()))
-                        .Returns<string, string, string>((url, ver, sha) =>
+                            It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(),
+                            It.IsAny<string>(), It.IsAny<string>()))
+                        .Returns<string, string, string, string, string>((url, ver, sha, sig, signedBy) =>
                         {
-                            InstallAgentUpdateCalls.Add((connId, url, ver, sha));
+                            InstallAgentUpdateCalls.Add((connId, url, ver, sha, sig, signedBy));
                             if (ThrowOnInstallAgentUpdate is not null)
                             {
                                 throw ThrowOnInstallAgentUpdate;
