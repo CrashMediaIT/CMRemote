@@ -111,8 +111,8 @@ public class DeviceQueryService : IDeviceQueryService
                 device.ID == deviceId &&
                 (
                     remotelyUser.IsAdministrator ||
-                    device.DeviceGroup!.Users.Any(user => user.Id == remotelyUser.Id
-                )));
+                    device.DeviceGroup!.Users.Any(user => user.Id == remotelyUser.Id)
+                ));
     }
 
     public bool DoesUserHaveAccessToDevice(string deviceId, string remotelyUserId)
@@ -141,8 +141,8 @@ public class DeviceQueryService : IDeviceQueryService
                 deviceIds.Contains(device.ID) &&
                 (
                     remotelyUser.IsAdministrator ||
-                    device.DeviceGroup!.Users.Any(user => user.Id == remotelyUser.Id
-                )))
+                    device.DeviceGroup!.Users.Any(user => user.Id == remotelyUser.Id)
+                ))
             .Select(x => x.ID)
             .ToArray();
     }
