@@ -105,6 +105,7 @@ public class CircuitConnection : CircuitHandler, ICircuitConnection
     private readonly IDataService _dataService;
     private readonly IOrganizationService _organizationService;
     private readonly IDeviceQueryService _deviceQueryService;
+    private readonly IDeviceCommandService _deviceCommandService;
     private readonly IInstalledApplicationsService _installedApplicationsService;
     private readonly IPackageService _packageService;
     private readonly IPackageInstallJobService _packageInstallJobService;
@@ -127,6 +128,7 @@ public class CircuitConnection : CircuitHandler, ICircuitConnection
         IDataService dataService,
         IOrganizationService organizationService,
         IDeviceQueryService deviceQueryService,
+        IDeviceCommandService deviceCommandService,
         ISelectedCardsStore cardStore,
         IHubContext<AgentHub, IAgentHubClient> agentHubContext,
         ICircuitManager circuitManager,
@@ -146,6 +148,7 @@ public class CircuitConnection : CircuitHandler, ICircuitConnection
         _dataService = dataService;
         _organizationService = organizationService;
         _deviceQueryService = deviceQueryService;
+        _deviceCommandService = deviceCommandService;
         _agentHubContext = agentHubContext;
         _cardStore = cardStore;
         _authService = authService;
@@ -498,7 +501,7 @@ public class CircuitConnection : CircuitHandler, ICircuitConnection
                 return;
             }
 
-            await _dataService.UpdateTags(deviceID, tags);
+            await _deviceCommandService.UpdateTags(deviceID, tags);
 
             var successMessage = new DisplayNotificationMessage(
                 "Device updated successfully.",

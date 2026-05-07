@@ -238,6 +238,7 @@ services.AddTransient<IDataService, DataService>();
 services.AddTransient<IUserDirectoryService, UserDirectoryService>();
 services.AddTransient<IOrganizationService, OrganizationService>();
 services.AddTransient<IDeviceQueryService, DeviceQueryService>();
+services.AddTransient<IDeviceCommandService, DeviceCommandService>();
 services.AddScoped<ApiAuthorizationFilter>();
 services.AddScoped<LocalOnlyFilter>();
 services.AddScoped<ExpiringTokenFilter>();
@@ -410,8 +411,9 @@ app.MapAdditionalIdentityEndpoints();
 using (var scope = app.Services.CreateScope())
 {
     var dataService = scope.ServiceProvider.GetRequiredService<IDataService>();
+    var deviceCommandService = scope.ServiceProvider.GetRequiredService<IDeviceCommandService>();
 
-    await dataService.SetAllDevicesNotOnline();
+    await deviceCommandService.SetAllDevicesNotOnline();
     await dataService.CleanupOldRecords();
 
     // First-boot setup wizard (ROADMAP.md "M1 — First-boot setup wizard"):

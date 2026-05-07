@@ -39,6 +39,9 @@ public partial class DeviceDetails : AuthComponentBase
     [Inject]
     private IDeviceQueryService DeviceQueryService { get; set; } = null!;
 
+    [Inject]
+    private IDeviceCommandService DeviceCommandService { get; set; } = null!;
+
 
     [Inject]
     private IJsInterop JsInterop { get; set; } = null!;
@@ -193,7 +196,7 @@ public partial class DeviceDetails : AuthComponentBase
             return Task.CompletedTask;
         }
 
-        DataService.UpdateDevice(
+        DeviceCommandService.UpdateDevice(
             _device.ID,
             _device.Tags,
             _device.Alias,

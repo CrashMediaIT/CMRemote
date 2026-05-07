@@ -47,6 +47,7 @@ public class IoCActivator
         _builder.Services.AddTransient<IUserDirectoryService, UserDirectoryService>();
         _builder.Services.AddTransient<IOrganizationService, OrganizationService>();
         _builder.Services.AddTransient<IDeviceQueryService, DeviceQueryService>();
+        _builder.Services.AddTransient<IDeviceCommandService, DeviceCommandService>();
         _builder.Services.AddTransient<IEmailSenderEx, EmailSenderEx>();
 
         _webApp = _builder.Build();

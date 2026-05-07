@@ -33,9 +33,9 @@ when the new services land, each new service is:
 |---|---|---|---|
 | **M3-S0** | this file | — (scaffold + fixture only) | 0 |
 | **M3-S1** | `user-directory.md` | `IUserDirectoryService` | ~12 (Create/Delete/Get user, options, admin flags, display name) |
-| **M3-S2** | `organizations.md` | `IOrganizationService` | ~9 (org lookup, name, default, package-manager toggle) |
-| **M3-S3** | `device-query.md` | `IDeviceQueryService` *(read-side)* | ~9 (`GetDevice` ×2, `GetAllDevices`, permission filters, `GetDeviceGroup`) |
-| **M3-S4** | `device-command.md` | `IDeviceCommandService` *(write-side)* | ~6 (`AddOrUpdateDevice`, `CreateDevice`, `UpdateDevice`, `UpdateTags`, `DeviceDisconnected`, `SetAllDevicesNotOnline`) |
+| **M3-S2** | `organizations.md` ✅ | `IOrganizationService` ✅ | ~9 (org lookup, name, default, package-manager toggle) |
+| **M3-S3** | `device-query.md` ✅ | `IDeviceQueryService` *(read-side)* ✅ | ~9 (`GetDevice` ×2, `GetAllDevices`, permission filters, `GetDeviceGroup`) |
+| **M3-S4** | `device-command.md` ✅ | `IDeviceCommandService` *(write-side)* ✅ | ~6 (`AddOrUpdateDevice`, `CreateDevice`, `UpdateDevice`, `UpdateTags`, `DeviceDisconnected`, `SetAllDevicesNotOnline`) |
 | **M3-S5** | `device-groups.md` | `IDeviceGroupService` | ~5 (group CRUD + user/device membership) |
 | **M3-S6** | `scripts.md` | `IScriptCatalogService`, `IScriptResultService` | ~12 (saved scripts, results, runs, schedules) |
 | **M3-S7** | `alerts.md` | `IAlertService` | 5 (Add/Delete/Get alerts) |

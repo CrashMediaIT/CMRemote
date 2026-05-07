@@ -49,6 +49,7 @@ public class AgentHubTests
         var hub = new AgentHub(
             _dataService,
             IoCActivator.ServiceProvider.GetRequiredService<IDeviceQueryService>(),
+            IoCActivator.ServiceProvider.GetRequiredService<IDeviceCommandService>(),
             serviceSessionCache.Object,
             viewerHub.Object,
             circuitManager.Object,
@@ -97,6 +98,7 @@ public class AgentHubTests
         var hub = new AgentHub(
             _dataService,
             IoCActivator.ServiceProvider.GetRequiredService<IDeviceQueryService>(),
+            IoCActivator.ServiceProvider.GetRequiredService<IDeviceCommandService>(),
             serviceSessionCache.Object,
             viewerHub.Object,
             circuitManager.Object,
@@ -432,6 +434,7 @@ public class AgentHubTests
         var hub = new AgentHub(
             dataService.Object,
             IoCActivator.ServiceProvider.GetRequiredService<IDeviceQueryService>(),
+            IoCActivator.ServiceProvider.GetRequiredService<IDeviceCommandService>(),
             serviceSessionCache.Object,
             viewerHub.Object,
             circuitManager.Object,

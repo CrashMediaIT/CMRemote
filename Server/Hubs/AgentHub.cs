@@ -19,6 +19,7 @@ public class AgentHub : Hub<IAgentHubClient>
 {
     private readonly IDataService _dataService;
     private readonly IDeviceQueryService _deviceQueryService;
+    private readonly IDeviceCommandService _deviceCommandService;
     private readonly IInstalledApplicationsService _installedApplicationsService;
     private readonly IPackageInstallJobService _packageInstallJobService;
     private readonly ICircuitManager _circuitManager;
@@ -34,6 +35,7 @@ public class AgentHub : Hub<IAgentHubClient>
     public AgentHub(
         IDataService dataService,
         IDeviceQueryService deviceQueryService,
+        IDeviceCommandService deviceCommandService,
         IAgentHubSessionCache serviceSessionCache,
         IHubContext<ViewerHub> viewerHubContext,
         ICircuitManager circuitManager,
@@ -48,6 +50,7 @@ public class AgentHub : Hub<IAgentHubClient>
     {
         _dataService = dataService;
         _deviceQueryService = deviceQueryService;
+        _deviceCommandService = deviceCommandService;
         _serviceSessionCache = serviceSessionCache;
         _viewerHubContext = viewerHubContext;
         _circuitManager = circuitManager;
@@ -191,7 +194,7 @@ public class AgentHub : Hub<IAgentHubClient>
                 return false;
             }
 
-            var result = await _dataService.AddOrUpdateDevice(device);
+            var result = await _deviceCommandService.AddOrUpdateDevice(device);
             if (!result.IsSuccess)
             {
                 // Organization wasn't found.
@@ -270,7 +273,7 @@ public class AgentHub : Hub<IAgentHubClient>
         }
 
 
-        var result = await _dataService.AddOrUpdateDevice(device);
+        var result = await _deviceCommandService.AddOrUpdateDevice(device);
 
         if (!result.IsSuccess)
         {
@@ -334,7 +337,7 @@ public class AgentHub : Hub<IAgentHubClient>
         {
             if (Device != null)
             {
-                _dataService.DeviceDisconnected(Device.ID);
+                _deviceCommandService.DeviceDisconnected(Device.ID);
 
                 Device.IsOnline = false;
 

@@ -2,6 +2,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using Remotely.Server.Data;
 using Remotely.Server.Services;
+using Remotely.Server.Services.Devices;
 using Remotely.Shared.Dtos;
 using Remotely.Shared.Entities;
 using Remotely.Shared.Models;
@@ -97,6 +98,7 @@ public class TestData
         using var scope = IoCActivator.ServiceProvider.CreateScope();
         using var userManager = scope.ServiceProvider.GetRequiredService<UserManager<RemotelyUser>>();
         var dataService = IoCActivator.ServiceProvider.GetRequiredService<IDataService>();
+        var deviceCommandService = IoCActivator.ServiceProvider.GetRequiredService<IDeviceCommandService>();
         var userDirectoryService = IoCActivator.ServiceProvider.GetRequiredService<IUserDirectoryService>();
         var emailSender = IoCActivator.ServiceProvider.GetRequiredService<IEmailSenderEx>();
 
@@ -124,8 +126,8 @@ public class TestData
             DeviceName = "Org1Device2Name",
             OrganizationID = Org1Id
         };
-        Org1Device1 = (await dataService.AddOrUpdateDevice(device1)).Value!;
-        Org1Device2 = (await dataService.AddOrUpdateDevice(device2)).Value!;
+        Org1Device1 = (await deviceCommandService.AddOrUpdateDevice(device1)).Value!;
+        Org1Device2 = (await deviceCommandService.AddOrUpdateDevice(device2)).Value!;
 
         await dataService.AddDeviceGroup(Org1Admin1.OrganizationID, Org1Group1);
         await dataService.AddDeviceGroup(Org1Admin1.OrganizationID, Org1Group2);
@@ -158,8 +160,8 @@ public class TestData
             DeviceName = "Org2Device2Name",
             OrganizationID = Org2Id
         };
-        Org2Device1 = (await dataService.AddOrUpdateDevice(device3)).Value!;
-        Org2Device2 = (await dataService.AddOrUpdateDevice(device4)).Value!;
+        Org2Device1 = (await deviceCommandService.AddOrUpdateDevice(device3)).Value!;
+        Org2Device2 = (await deviceCommandService.AddOrUpdateDevice(device4)).Value!;
 
         await dataService.AddDeviceGroup(Org2Admin1.OrganizationID, Org2Group1);
         await dataService.AddDeviceGroup(Org2Admin1.OrganizationID, Org2Group2);

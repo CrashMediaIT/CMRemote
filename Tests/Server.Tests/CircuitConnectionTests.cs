@@ -23,6 +23,7 @@ public class CircuitConnectionTests
 #nullable disable
     private TestData _testData;
     private IDataService _dataService;
+    private IDeviceCommandService _deviceCommandService;
     private Mock<IAuthService> _authService;
     private Mock<ISelectedCardsStore> _clientAppState;
     private HubContextFixture<AgentHub, IAgentHubClient> _agentHubContextFixture;
@@ -43,6 +44,7 @@ public class CircuitConnectionTests
         await _testData.Init();
 
         _dataService = IoCActivator.ServiceProvider.GetRequiredService<IDataService>();
+        _deviceCommandService = IoCActivator.ServiceProvider.GetRequiredService<IDeviceCommandService>();
         _authService = new Mock<IAuthService>();
         _clientAppState = new Mock<ISelectedCardsStore>();
         _agentHubContextFixture = new HubContextFixture<AgentHub, IAgentHubClient>();
@@ -59,6 +61,7 @@ public class CircuitConnectionTests
             _dataService,
             IoCActivator.ServiceProvider.GetRequiredService<IOrganizationService>(),
             IoCActivator.ServiceProvider.GetRequiredService<IDeviceQueryService>(),
+            IoCActivator.ServiceProvider.GetRequiredService<IDeviceCommandService>(),
             _clientAppState.Object,
             _agentHubContextFixture.HubContextMock.Object,
             _circuitManager.Object,
@@ -93,11 +96,11 @@ public class CircuitConnectionTests
         _testData.Org2Device1.PublicIP = "142.251.33.110";
 
 
-        var updateResult = await _dataService.AddOrUpdateDevice(_testData.Org1Device1.ToDto());
+        var updateResult = await _deviceCommandService.AddOrUpdateDevice(_testData.Org1Device1.ToDto());
         Assert.IsTrue(updateResult.IsSuccess);
-        updateResult = await _dataService.AddOrUpdateDevice(_testData.Org1Device2.ToDto());
+        updateResult = await _deviceCommandService.AddOrUpdateDevice(_testData.Org1Device2.ToDto());
         Assert.IsTrue(updateResult.IsSuccess);
-        updateResult = await _dataService.AddOrUpdateDevice(_testData.Org2Device1.ToDto());
+        updateResult = await _deviceCommandService.AddOrUpdateDevice(_testData.Org2Device1.ToDto());
         Assert.IsTrue(updateResult.IsSuccess);
 
         var addGroupResult = await _dataService.AddDeviceToGroup(_testData.Org1Device1.ID, _testData.Org1Group1.ID);
@@ -139,11 +142,11 @@ public class CircuitConnectionTests
             $"{_testData.Org1User1.UserName}",
             out _);
 
-        var updateResult = await _dataService.AddOrUpdateDevice(_testData.Org1Device1.ToDto());
+        var updateResult = await _deviceCommandService.AddOrUpdateDevice(_testData.Org1Device1.ToDto());
         Assert.IsTrue(updateResult.IsSuccess);
-        updateResult = await _dataService.AddOrUpdateDevice(_testData.Org1Device2.ToDto());
+        updateResult = await _deviceCommandService.AddOrUpdateDevice(_testData.Org1Device2.ToDto());
         Assert.IsTrue(updateResult.IsSuccess);
-        updateResult = await _dataService.AddOrUpdateDevice(_testData.Org2Device1.ToDto());
+        updateResult = await _deviceCommandService.AddOrUpdateDevice(_testData.Org2Device1.ToDto());
         Assert.IsTrue(updateResult.IsSuccess);
 
         _agentSessionCache
@@ -201,7 +204,7 @@ public class CircuitConnectionTests
             $"{_testData.Org1User1.UserName}",
             out _);
 
-        var updateResult = await _dataService.AddOrUpdateDevice(_testData.Org1Device1.ToDto());
+        var updateResult = await _deviceCommandService.AddOrUpdateDevice(_testData.Org1Device1.ToDto());
         Assert.IsTrue(updateResult.IsSuccess);
 
         // Offline device.
@@ -276,11 +279,11 @@ public class CircuitConnectionTests
             $"{_testData.Org1User1.UserName}",
             out _);
 
-        var updateResult = await _dataService.AddOrUpdateDevice(_testData.Org1Device1.ToDto());
+        var updateResult = await _deviceCommandService.AddOrUpdateDevice(_testData.Org1Device1.ToDto());
         Assert.IsTrue(updateResult.IsSuccess);
-        updateResult = await _dataService.AddOrUpdateDevice(_testData.Org1Device2.ToDto());
+        updateResult = await _deviceCommandService.AddOrUpdateDevice(_testData.Org1Device2.ToDto());
         Assert.IsTrue(updateResult.IsSuccess);
-        updateResult = await _dataService.AddOrUpdateDevice(_testData.Org2Device1.ToDto());
+        updateResult = await _deviceCommandService.AddOrUpdateDevice(_testData.Org2Device1.ToDto());
         Assert.IsTrue(updateResult.IsSuccess);
 
 
@@ -344,11 +347,11 @@ public class CircuitConnectionTests
             $"{_testData.Org1User1.UserName}",
             out _);
 
-        var updateResult = await _dataService.AddOrUpdateDevice(_testData.Org1Device1.ToDto());
+        var updateResult = await _deviceCommandService.AddOrUpdateDevice(_testData.Org1Device1.ToDto());
         Assert.IsTrue(updateResult.IsSuccess);
-        updateResult = await _dataService.AddOrUpdateDevice(_testData.Org1Device2.ToDto());
+        updateResult = await _deviceCommandService.AddOrUpdateDevice(_testData.Org1Device2.ToDto());
         Assert.IsTrue(updateResult.IsSuccess);
-        updateResult = await _dataService.AddOrUpdateDevice(_testData.Org2Device1.ToDto());
+        updateResult = await _deviceCommandService.AddOrUpdateDevice(_testData.Org2Device1.ToDto());
         Assert.IsTrue(updateResult.IsSuccess);
 
         _agentSessionCache
@@ -411,11 +414,11 @@ public class CircuitConnectionTests
             $"{_testData.Org1User1.UserName}",
             out _);
 
-        var updateResult = await _dataService.AddOrUpdateDevice(_testData.Org1Device1.ToDto());
+        var updateResult = await _deviceCommandService.AddOrUpdateDevice(_testData.Org1Device1.ToDto());
         Assert.IsTrue(updateResult.IsSuccess);
-        updateResult = await _dataService.AddOrUpdateDevice(_testData.Org1Device2.ToDto());
+        updateResult = await _deviceCommandService.AddOrUpdateDevice(_testData.Org1Device2.ToDto());
         Assert.IsTrue(updateResult.IsSuccess);
-        updateResult = await _dataService.AddOrUpdateDevice(_testData.Org2Device1.ToDto());
+        updateResult = await _deviceCommandService.AddOrUpdateDevice(_testData.Org2Device1.ToDto());
         Assert.IsTrue(updateResult.IsSuccess);
 
         // Offline device.

@@ -18,17 +18,20 @@ public class DevicesController : ControllerBase
     private readonly IDataService _dataService;
     private readonly IUserDirectoryService _userDirectoryService;
     private readonly IDeviceQueryService _deviceQueryService;
+    private readonly IDeviceCommandService _deviceCommandService;
     private readonly ILogger<DevicesController> _logger;
 
     public DevicesController(
         IDataService dataService,
         IUserDirectoryService userDirectoryService,
         IDeviceQueryService deviceQueryService,
+        IDeviceCommandService deviceCommandService,
         ILogger<DevicesController> logger)
     {
         _dataService = dataService;
         _userDirectoryService = userDirectoryService;
         _deviceQueryService = deviceQueryService;
+        _deviceCommandService = deviceCommandService;
         _logger = logger;
     }
 
@@ -119,7 +122,7 @@ public class DevicesController : ControllerBase
 
         }
 
-        var deviceResult = await _dataService.UpdateDevice(deviceOptions, orgId);
+        var deviceResult = await _deviceCommandService.UpdateDevice(deviceOptions, orgId);
         _logger.LogResult(deviceResult);
 
         if (!deviceResult.IsSuccess)
@@ -132,7 +135,7 @@ public class DevicesController : ControllerBase
     [HttpPost]
     public async Task<IActionResult> Create([FromBody] DeviceSetupOptions deviceOptions)
     {
-        var result = await _dataService.CreateDevice(deviceOptions);
+        var result = await _deviceCommandService.CreateDevice(deviceOptions);
         _logger.LogResult(result);
 
         if (!result.IsSuccess)

@@ -51,6 +51,9 @@ public partial class DeviceCard : AuthComponentBase
     public required IDeviceQueryService DeviceQueryService { get; init; }
 
     [Inject]
+    public required IDeviceCommandService DeviceCommandService { get; init; }
+
+    [Inject]
     public required IOrganizationService OrganizationService { get; init; }
 
     [Inject]
@@ -222,7 +225,7 @@ public partial class DeviceCard : AuthComponentBase
             return;
         }
        
-        await DataService.UpdateDevice(Device.ID,
+        await DeviceCommandService.UpdateDevice(Device.ID,
               Device.Tags,
               Device.Alias,
               Device.DeviceGroupID,

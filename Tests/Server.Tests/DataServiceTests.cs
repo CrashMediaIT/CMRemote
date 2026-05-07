@@ -23,6 +23,7 @@ public class DataServiceTests
     private IUserDirectoryService _userDirectoryService = null!;
     private IOrganizationService _organizationService = null!;
     private IDeviceQueryService _deviceQueryService = null!;
+    private IDeviceCommandService _deviceCommandService = null!;
     private TestData _testData = null!;
 
     [TestMethod]
@@ -50,7 +51,7 @@ public class DataServiceTests
             Is64Bit = Environment.Is64BitOperatingSystem
         };
 
-        var result = await _dataService.AddOrUpdateDevice(newDevice);
+        var result = await _deviceCommandService.AddOrUpdateDevice(newDevice);
         Assert.IsTrue(result.IsSuccess);
 
         storedDevice = (await _deviceQueryService.GetDevice(_newDeviceID)).Value;
@@ -71,11 +72,11 @@ public class DataServiceTests
         };
 
         // First call should create and return device.
-        var savedDevice = (await _dataService.CreateDevice(deviceOptions)).Value!;
+        var savedDevice = (await _deviceCommandService.CreateDevice(deviceOptions)).Value!;
         Assert.IsInstanceOfType(savedDevice, typeof(Device));
 
         // Second call with same DeviceUuid should fail.
-        var secondSave = await _dataService.CreateDevice(deviceOptions);
+        var secondSave = await _deviceCommandService.CreateDevice(deviceOptions);
         Assert.IsFalse(secondSave.IsSuccess);
     }
 
@@ -99,7 +100,7 @@ public class DataServiceTests
         var groupID = _testData.Org1Group1.ID;
         _dataService.AddUserToDeviceGroup(_testData.Org1Id, groupID, _testData.Org1User1.UserName!, out _);
         _testData.Org1Device1.DeviceGroupID = groupID;
-        _dataService.UpdateDevice(_testData.Org1Device1.ID, "", "", groupID, "");
+        _deviceCommandService.UpdateDevice(_testData.Org1Device1.ID, "", "", groupID, "");
 
         Assert.AreEqual(2, _deviceQueryService.GetDevicesForUser(_testData.Org1Admin1.UserName!).Length);
         Assert.AreEqual(2, _deviceQueryService.GetDevicesForUser(_testData.Org1Admin2.UserName!).Length);
@@ -203,6 +204,7 @@ public class DataServiceTests
         _userDirectoryService = IoCActivator.ServiceProvider.GetRequiredService<IUserDirectoryService>();
         _organizationService = IoCActivator.ServiceProvider.GetRequiredService<IOrganizationService>();
         _deviceQueryService = IoCActivator.ServiceProvider.GetRequiredService<IDeviceQueryService>();
+        _deviceCommandService = IoCActivator.ServiceProvider.GetRequiredService<IDeviceCommandService>();
     }
 
     [TestMethod]
