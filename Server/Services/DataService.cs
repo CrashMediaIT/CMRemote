@@ -1863,7 +1863,6 @@ public class DataService : IDataService
         using var dbContext = _appDbFactory.GetContext();
 
         var user = await dbContext.Users
-            .AsNoTracking()
             .FirstOrDefaultAsync(x => x.UserName == email);
 
         if (user?.TempPassword != password)
@@ -1871,6 +1870,8 @@ public class DataService : IDataService
             return false;
         }
 
+        user.TempPassword = string.Empty;
+        await dbContext.SaveChangesAsync();
         return true;
     }
 

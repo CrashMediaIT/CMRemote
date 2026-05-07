@@ -1,8 +1,7 @@
-using Remotely.Server.Services.UserDirectory;
-﻿#nullable enable
+#nullable enable
 
+using Remotely.Server.Services.UserDirectory;
 using Microsoft.AspNetCore.Authorization;
-using Remotely.Server.Services;
 
 namespace Remotely.Server.Auth;
 
