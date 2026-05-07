@@ -3,11 +3,12 @@ using Remotely.Server.Models;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using Remotely.Server.Services;
+using Remotely.Server.Services.UserDirectory;
 
 namespace Remotely.Server.Pages;
 
 [ServiceFilter(typeof(ViewerAuthorizationFilter))]
-public class ViewerModel(IDataService _dataService) : PageModel
+public class ViewerModel(IUserDirectoryService _userDirectoryService) : PageModel
 {
     public string FaviconUrl { get; } = "favicon.ico";
     public string LogoUrl { get; set; } = string.Empty;
@@ -43,7 +44,7 @@ public class ViewerModel(IDataService _dataService) : PageModel
         return Task.FromResult(ViewerPageTheme.Dark);
         //if (User.Identity.IsAuthenticated)
         //{
-        //    var user = _dataService.GetUserByNameWithOrg(User.Identity.Name);
+        //    var user = _userDirectoryService.GetUserByNameWithOrg(User.Identity.Name);
 
         //    var userTheme = user.UserOptions.Theme switch
         //    {
@@ -70,7 +71,7 @@ public class ViewerModel(IDataService _dataService) : PageModel
             return string.Empty;
         }
 
-        var userResult = await _dataService.GetUserByName(User.Identity.Name);
+        var userResult = await _userDirectoryService.GetUserByName(User.Identity.Name);
 
         if (!userResult.IsSuccess)
         {

@@ -1,4 +1,4 @@
-﻿using Remotely.Shared.Models;
+using Remotely.Shared.Models;
 using Microsoft.AspNetCore.Components.Forms;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
@@ -40,15 +40,11 @@ public interface IDataService
 
     bool AddUserToDeviceGroup(string orgId, string groupId, string userName, out string resultMessage);
 
-    Task ChangeUserIsAdmin(string organizationId, string targetUserId, bool isAdmin);
-
     Task CleanupOldRecords();
 
     Task<Result<ApiToken>> CreateApiToken(string userName, string tokenName, string secretHash);
 
     Task<Result<Device>> CreateDevice(DeviceSetupOptions options);
-
-    Task<Result> CreateUser(string userEmail, bool isAdmin, string organizationId);
 
     Task DeleteAlert(Alert alert);
 
@@ -64,11 +60,7 @@ public interface IDataService
 
     Task DeleteScriptSchedule(int scriptScheduleId);
 
-    Task<Result> DeleteUser(string orgId, string targetUserId);
-
     void DeviceDisconnected(string deviceId);
-
-    bool DoesUserExist(string userName);
 
     bool DoesUserHaveAccessToDevice(string deviceId, RemotelyUser remotelyUser);
 
@@ -95,10 +87,6 @@ public interface IDataService
     ScriptResult[] GetAllScriptResults(string orgId, string deviceId);
 
     ScriptResult[] GetAllScriptResultsForUser(string orgId, string userName);
-
-    RemotelyUser[] GetAllUsersForServer();
-
-    Task<RemotelyUser[]> GetAllUsersInOrganization(string orgId);
 
     Task<Result<ApiToken>> GetApiKey(string keyId);
 
@@ -166,14 +154,6 @@ public interface IDataService
 
     int GetTotalDevices();
 
-    Task<Result<RemotelyUser>> GetUserById(string userId);
-
-    Task<Result<RemotelyUser>> GetUserByName(
-        string userName, 
-        Action<IQueryable<RemotelyUser>>? queryBuilder = null);
-
-    Task<Result<RemotelyUserOptions>> GetUserOptions(string userName);
-
     Task<Result> JoinViaInvitation(string userName, string inviteId);
 
     void RemoveDevices(string[] deviceIds);
@@ -188,8 +168,6 @@ public interface IDataService
 
     Task SetAllDevicesNotOnline();
 
-    Task SetDisplayName(RemotelyUser user, string displayName);
-
     Task SetIsDefaultOrganization(string orgId, bool isDefault);
 
     /// <summary>
@@ -198,8 +176,6 @@ public interface IDataService
     /// lists aren't visible after the feature is turned off.
     /// </summary>
     Task SetOrganizationPackageManagerEnabled(string orgId, bool isEnabled);
-
-    Task SetIsServerAdmin(string targetUserId, bool isServerAdmin, string callerUserId);
 
     void SetServerVerificationToken(string deviceId, string verificationToken);
 
@@ -218,7 +194,6 @@ public interface IDataService
 
     Task UpdateTags(string deviceID, string tags);
 
-    Task<Result> UpdateUserOptions(string userName, RemotelyUserOptions options);
     Task<bool> ValidateApiKey(string keyId, string apiSecret, string requestPath, string remoteIP);
 }
 
@@ -628,21 +603,6 @@ public class DataService : IDataService
         return true;
     }
 
-    public async Task ChangeUserIsAdmin(string organizationId, string targetUserId, bool isAdmin)
-    {
-        using var dbContext = _appDbFactory.GetContext();
-
-        var targetUser = await dbContext.Users.FirstOrDefaultAsync(x =>
-                            x.OrganizationID == organizationId &&
-                            x.Id == targetUserId);
-
-        if (targetUser != null)
-        {
-            targetUser.IsAdministrator = isAdmin;
-            dbContext.SaveChanges();
-        }
-    }
-
     public async Task CleanupOldRecords()
     {
         var settings = await GetSettings();
@@ -750,42 +710,6 @@ public class DataService : IDataService
         }
     }
 
-    public async Task<Result> CreateUser(string userEmail, bool isAdmin, string organizationId)
-    {
-        using var dbContext = _appDbFactory.GetContext();
-
-        try
-        {
-            var user = new RemotelyUser()
-            {
-                UserName = userEmail.Trim().ToLower(),
-                Email = userEmail.Trim().ToLower(),
-                IsAdministrator = isAdmin,
-                OrganizationID = organizationId,
-                UserOptions = new RemotelyUserOptions(),
-                LockoutEnabled = true
-            };
-            var org = dbContext.Organizations
-                .Include(x => x.RemotelyUsers)
-                .FirstOrDefault(x => x.ID == organizationId);
-
-            if (org is null)
-            {
-                return Result.Fail("Organization not found.");
-            }
-
-            dbContext.Users.Add(user);
-            org.RemotelyUsers.Add(user);
-            await dbContext.SaveChangesAsync();
-            return Result.Ok();
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Error while creating user for organization {id}.", organizationId);
-            return Result.Fail("An error occurred while creating user.");
-        }
-    }
-
     public async Task DeleteAlert(Alert alert)
     {
         using var dbContext = _appDbFactory.GetContext();
@@ -802,12 +726,13 @@ public class DataService : IDataService
 
         if (!string.IsNullOrWhiteSpace(userName))
         {
-            var userResult = await GetUserByName(userName);
+            var user = await dbContext.Users
+                .AsNoTracking()
+                .FirstOrDefaultAsync(x => x.UserName == userName);
 
-            if (userResult.IsSuccess)
+            if (user is not null)
             {
-                var userId = userResult.Value.Id;
-                alerts = alerts.Where(x => x.UserID == userId);
+                alerts = alerts.Where(x => x.UserID == user.Id);
             }
         }
 
@@ -951,50 +876,6 @@ public class DataService : IDataService
         }
     }
 
-    public async Task<Result> DeleteUser(string orgId, string targetUserId)
-    {
-        using var dbContext = _appDbFactory.GetContext();
-
-        var org = dbContext
-            .Organizations
-            .Include(x => x.RemotelyUsers)
-            .FirstOrDefault(x => x.ID == orgId);
-
-        if (org is null)
-        {
-            return Result.Fail("Organization not found.");
-        }
-
-        // All the joins are necessary for client-side cascade delete.
-        // This method will be called rarely, so I'm not concerned
-        // about the performance.
-        var target = dbContext.Users
-            .Include(x => x.DeviceGroups)
-            .ThenInclude(x => x.Devices)
-            .Include(x => x.Organization)
-            .Include(x => x.Alerts)
-            .Include(x => x.SavedScripts)
-            .ThenInclude(x => x.ScriptRuns)
-            .Include(x => x.SavedScripts)
-            .ThenInclude(x => x.ScriptResults)
-            .Include(x => x.ScriptSchedules)
-            .ThenInclude(x => x.ScriptRuns)
-            .ThenInclude(x => x.Results)
-            .FirstOrDefault(x =>
-                x.Id == targetUserId &&
-                x.OrganizationID == orgId);
-
-        if (target is null)
-        {
-            return Result.Fail("User not found.");
-        }
-
-        dbContext.Users.Remove(target);
-
-        await dbContext.SaveChangesAsync();
-        return Result.Ok();
-    }
-
     public void DeviceDisconnected(string deviceId)
     {
         using var dbContext = _appDbFactory.GetContext();
@@ -1006,20 +887,6 @@ public class DataService : IDataService
             device.IsOnline = false;
             dbContext.SaveChanges();
         }
-    }
-
-    public bool DoesUserExist(string userName)
-    {
-        using var dbContext = _appDbFactory.GetContext();
-
-        if (string.IsNullOrWhiteSpace(userName))
-        {
-            return false;
-        }
-
-        return dbContext.Users
-            .Where(x => x.UserName != null)
-            .Any(x => x.UserName!.Trim().ToLower() == userName.Trim().ToLower());
     }
 
     public bool DoesUserHaveAccessToDevice(string deviceId, RemotelyUser remotelyUser)
@@ -1195,37 +1062,6 @@ public class DataService : IDataService
             .Where(x => x.OrganizationID == orgId && x.SenderUserName == userName)
             .OrderByDescending(x => x.TimeStamp)
             .ToArray();
-    }
-
-    public RemotelyUser[] GetAllUsersForServer()
-    {
-        using var dbContext = _appDbFactory.GetContext();
-
-        return dbContext.Users
-            .AsNoTracking()
-            .ToArray();
-    }
-
-    public async Task<RemotelyUser[]> GetAllUsersInOrganization(string orgId)
-    {
-        if (string.IsNullOrWhiteSpace(orgId))
-        {
-            return Array.Empty<RemotelyUser>();
-        }
-
-        using var dbContext = _appDbFactory.GetContext();
-
-        var organization = await dbContext.Organizations
-            .AsNoTracking()
-            .Include(x => x.RemotelyUsers)
-            .FirstOrDefaultAsync(x => x.ID == orgId);
-
-        if (organization is null)
-        {
-            return Array.Empty<RemotelyUser>();
-        }
-
-        return organization.RemotelyUsers.ToArray();
     }
 
     public async Task<Result<ApiToken>> GetApiKey(string keyId)
@@ -1777,64 +1613,6 @@ public class DataService : IDataService
         return dbContext.Devices.Count();
     }
 
-    public async Task<Result<RemotelyUser>> GetUserById(string userId)
-    {
-        if (string.IsNullOrWhiteSpace(userId))
-        {
-            return Result.Fail<RemotelyUser>("User ID cannot be empty.");
-        }
-        using var dbContext = _appDbFactory.GetContext();
-
-        var user = await dbContext.Users
-            .AsNoTracking()
-            .FirstOrDefaultAsync(x => x.Id == userId);
-
-        if (user is null)
-        {
-            return Result.Fail<RemotelyUser>("User not found.");
-        }
-        return Result.Ok(user);
-    }
-
-    public async Task<Result<RemotelyUser>> GetUserByName(
-        string userName,
-        Action<IQueryable<RemotelyUser>>? queryBuilder = null)
-    {
-        if (string.IsNullOrWhiteSpace(userName))
-        {
-            return Result.Fail<RemotelyUser>("Username cannot be empty.");
-        }
-
-        using var dbContext = _appDbFactory.GetContext();
-
-        var user = await dbContext.Users
-            .AsNoTracking()
-            .Apply(queryBuilder)
-            .FirstOrDefaultAsync(x =>
-                x.UserName!.ToLower().Trim() == userName.ToLower().Trim());
-
-        if (user is null)
-        {
-            return Result.Fail<RemotelyUser>("User not found.");
-        }
-        return Result.Ok(user);
-    }
-
-    public async Task<Result<RemotelyUserOptions>> GetUserOptions(string userName)
-    {
-        using var dbContext = _appDbFactory.GetContext();
-
-        var user = await dbContext.Users
-            .AsNoTracking()
-            .FirstOrDefaultAsync(x => x.UserName == userName);
-
-        if (user is null)
-        {
-            return Result.Fail<RemotelyUserOptions>("User not found.");
-        }
-        return Result.Ok(user.UserOptions ?? new());
-    }
-
     public async Task<Result> JoinViaInvitation(string userName, string inviteId)
     {
         if (string.IsNullOrWhiteSpace(userName))
@@ -2016,16 +1794,6 @@ public class DataService : IDataService
         await dbContext.SaveChangesAsync();
     }
 
-    public async Task SetDisplayName(RemotelyUser user, string displayName)
-    {
-        using var dbContext = _appDbFactory.GetContext();
-
-        dbContext.Attach(user);
-        user.UserOptions ??= new();
-        user.UserOptions.DisplayName = displayName;
-        await dbContext.SaveChangesAsync();
-    }
-
     public async Task SetIsDefaultOrganization(string orgID, bool isDefault)
     {
         using var dbContext = _appDbFactory.GetContext();
@@ -2073,33 +1841,6 @@ public class DataService : IDataService
         await dbContext.SaveChangesAsync();
     }
 
-    public async Task SetIsServerAdmin(string targetUserId, bool isServerAdmin, string callerUserId)
-    {
-        using var dbContext = _appDbFactory.GetContext();
-
-        var caller = await dbContext.Users.FindAsync(callerUserId);
-        if (caller?.IsServerAdmin != true)
-        {
-            return;
-        }
-
-        var targetUser = await dbContext.Users.FindAsync(targetUserId);
-
-        if (targetUser is null)
-        {
-            return;
-        }
-
-        if (caller.Id == targetUser.Id)
-        {
-            // A server admin can't change themselves.
-            return;
-        }
-
-        targetUser.IsServerAdmin = isServerAdmin;
-        await dbContext.SaveChangesAsync();
-    }
-
     public void SetServerVerificationToken(string deviceID, string verificationToken)
     {
         using var dbContext = _appDbFactory.GetContext();
@@ -2119,24 +1860,17 @@ public class DataService : IDataService
             return false;
         }
 
-        var userResult = await GetUserByName(email);
-
-        if (!userResult.IsSuccess)
-        {
-            return false;
-        }
-
-        var user = userResult.Value;
-
         using var dbContext = _appDbFactory.GetContext();
 
-        if (user.TempPassword != password)
+        var user = await dbContext.Users
+            .AsNoTracking()
+            .FirstOrDefaultAsync(x => x.UserName == email);
+
+        if (user?.TempPassword != password)
         {
             return false;
         }
 
-        user.TempPassword = string.Empty;
-        await dbContext.SaveChangesAsync();
         return true;
     }
 
@@ -2246,21 +1980,6 @@ public class DataService : IDataService
 
         device.Tags = tags;
         await dbContext.SaveChangesAsync();
-    }
-
-    public async Task<Result> UpdateUserOptions(string userName, RemotelyUserOptions options)
-    {
-        using var dbContext = _appDbFactory.GetContext();
-
-        var user = await dbContext.Users.FirstOrDefaultAsync(x => x.UserName == userName);
-
-        if (user is null)
-        {
-            return Result.Fail("User not found.");
-        }
-        user.UserOptions = options;
-        await dbContext.SaveChangesAsync();
-        return Result.Ok();
     }
 
     public async Task<bool> ValidateApiKey(string keyId, string apiSecret, string requestPath, string remoteIP)

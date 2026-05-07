@@ -1,6 +1,5 @@
 ﻿@inject AuthenticationStateProvider AuthProvider
-@inject IDataService DataService
-@inject IDataService DataService
+@inject IUserDirectoryService UserDirectoryService
 @inject IThemeProvider ThemeProvider
 
 <!DOCTYPE html>
@@ -48,7 +47,7 @@
         var state = await AuthProvider.GetAuthenticationStateAsync();
         if (state.User.Identity is { IsAuthenticated: true } identity)
         {
-            var userResult = await DataService.GetUserByName($"{identity.Name}");
+            var userResult = await UserDirectoryService.GetUserByName($"{identity.Name}");
             if (userResult.IsSuccess)
             {
                 _user = userResult.Value;

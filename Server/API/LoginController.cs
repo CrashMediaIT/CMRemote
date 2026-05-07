@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.SignalR;
 using Remotely.Server.Models;
 using Remotely.Shared.Entities;
+using Remotely.Server.Services.UserDirectory;
 
 namespace Remotely.Server.API;
 
@@ -14,6 +15,7 @@ namespace Remotely.Server.API;
 public class LoginController : ControllerBase
 {
     private readonly IDataService _dataService;
+    private readonly IUserDirectoryService _userDirectoryService;
     private readonly IHubContext<DesktopHub> _desktopHub;
     private readonly IRemoteControlSessionCache _remoteControlSessionCache;
     private readonly SignInManager<RemotelyUser> _signInManager;
@@ -23,6 +25,7 @@ public class LoginController : ControllerBase
     public LoginController(
         SignInManager<RemotelyUser> signInManager,
         IDataService dataService,
+        IUserDirectoryService userDirectoryService,
         IHubContext<DesktopHub> casterHubContext,
         IRemoteControlSessionCache remoteControlSessionCache,
         IHubContext<ViewerHub> viewerHubContext,
@@ -30,6 +33,7 @@ public class LoginController : ControllerBase
     {
         _signInManager = signInManager;
         _dataService = dataService;
+        _userDirectoryService = userDirectoryService;
         _desktopHub = casterHubContext;
         _remoteControlSessionCache = remoteControlSessionCache;
         _viewerHub = viewerHubContext;
@@ -41,7 +45,7 @@ public class LoginController : ControllerBase
     {
         if (HttpContext?.User?.Identity?.IsAuthenticated == true)
         {
-            var userResult = await _dataService.GetUserByName($"{HttpContext.User.Identity.Name}");
+            var userResult = await _userDirectoryService.GetUserByName($"{HttpContext.User.Identity.Name}");
 
             if (!userResult.IsSuccess)
             {

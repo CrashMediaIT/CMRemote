@@ -6,6 +6,7 @@ using Remotely.Server.Extensions;
 using Remotely.Server.Services;
 using Remotely.Shared.Entities;
 using Remotely.Shared.Models;
+using Remotely.Server.Services.UserDirectory;
 
 namespace Remotely.Server.API;
 
@@ -14,13 +15,16 @@ namespace Remotely.Server.API;
 public class DevicesController : ControllerBase
 {
     private readonly IDataService _dataService;
+    private readonly IUserDirectoryService _userDirectoryService;
     private readonly ILogger<DevicesController> _logger;
 
     public DevicesController(
         IDataService dataService,
+        IUserDirectoryService userDirectoryService,
         ILogger<DevicesController> logger)
     {
         _dataService = dataService;
+        _userDirectoryService = userDirectoryService;
         _logger = logger;
     }
 
@@ -54,7 +58,7 @@ public class DevicesController : ControllerBase
 
         if (User.Identity?.IsAuthenticated == true)
         {
-            var userResult = await _dataService.GetUserByName($"{User.Identity.Name}");
+            var userResult = await _userDirectoryService.GetUserByName($"{User.Identity.Name}");
             _logger.LogResult(userResult);
 
             if (!userResult.IsSuccess)
@@ -96,7 +100,7 @@ public class DevicesController : ControllerBase
 
         if (User.Identity?.IsAuthenticated == true)
         {
-            var userResult = await _dataService.GetUserByName($"{User.Identity.Name}");
+            var userResult = await _userDirectoryService.GetUserByName($"{User.Identity.Name}");
             _logger.LogResult(userResult);
 
             if (!userResult.IsSuccess)

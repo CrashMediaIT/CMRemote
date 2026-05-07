@@ -2,6 +2,7 @@
 @using System.ComponentModel.DataAnnotations
 
 @inject IDataService DataService
+@inject IUserDirectoryService UserDirectoryService
 @inject IEmailSenderEx EmailSender
 
 
@@ -103,7 +104,7 @@ else
         var alertMessage = string.Join("  ", alertParts);
         await DataService.AddAlert(DeviceId, orgId, alertMessage);
 
-        var orgUsers = await DataService.GetAllUsersInOrganization(orgId);
+        var orgUsers = await UserDirectoryService.GetAllUsersInOrganization(orgId);
         var emailMessage = string.Join("<br />", alertParts);
         foreach (var user in orgUsers)
         {

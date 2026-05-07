@@ -9,6 +9,7 @@ using Remotely.Shared.Entities;
 using Remotely.Shared.ViewModels;
 using System.Text;
 using System.Text.Encodings.Web;
+using Remotely.Server.Services.UserDirectory;
 
 // For more information on enabling Web API for empty projects, visit https://go.microsoft.com/fwlink/?LinkID=397860
 
@@ -19,6 +20,7 @@ namespace Remotely.Server.API;
 public class OrganizationManagementController : ControllerBase
 {
     private readonly IDataService _dataService;
+    private readonly IUserDirectoryService _userDirectoryService;
     private readonly IEmailSenderEx _emailSender;
     private readonly ILogger<OrganizationManagementController> _logger;
     private readonly UserManager<RemotelyUser> _userManager;
@@ -26,10 +28,12 @@ public class OrganizationManagementController : ControllerBase
     public OrganizationManagementController(
         UserManager<RemotelyUser> userManager,
         IDataService dataService,
+        IUserDirectoryService userDirectoryService,
         IEmailSenderEx emailSender,
         ILogger<OrganizationManagementController> logger)
     {
         _dataService = dataService;
+        _userDirectoryService = userDirectoryService;
         _userManager = userManager;
         _emailSender = emailSender;
         _logger = logger;
@@ -46,14 +50,14 @@ public class OrganizationManagementController : ControllerBase
 
         if (User.Identity?.IsAuthenticated == true)
         {
-            var userResult = await _dataService.GetUserByName($"{User.Identity.Name}");
+            var userResult = await _userDirectoryService.GetUserByName($"{User.Identity.Name}");
             if (userResult.IsSuccess && userResult.Value.Id == userId)
             {
                 return BadRequest("You can't remove administrator rights from yourself.");
             }
         }
 
-        await _dataService.ChangeUserIsAdmin(orgId, userId, isAdmin);
+        await _userDirectoryService.ChangeUserIsAdmin(orgId, userId, isAdmin);
         return NoContent();
     }
 
@@ -88,7 +92,7 @@ public class OrganizationManagementController : ControllerBase
 
         if (User.Identity?.IsAuthenticated == true)
         {
-            var userResult = await _dataService.GetUserByName($"{User.Identity.Name}");
+            var userResult = await _userDirectoryService.GetUserByName($"{User.Identity.Name}");
             if (userResult.IsSuccess && userResult.Value.Id == userId)
             {
                 return BadRequest("You can't delete yourself here.  You must go to the Personal Data page to delete your own account.");
@@ -96,7 +100,7 @@ public class OrganizationManagementController : ControllerBase
         }
 
 
-        var result = await _dataService.DeleteUser(orgId, userId);
+        var result = await _userDirectoryService.DeleteUser(orgId, userId);
         _logger.LogResult(result);
         if (!result.IsSuccess)
         {
@@ -286,9 +290,9 @@ public class OrganizationManagementController : ControllerBase
         }
 
 
-        if (!_dataService.DoesUserExist(invite.InvitedUser))
+        if (!_userDirectoryService.DoesUserExist(invite.InvitedUser))
         {
-            var result = await _dataService.CreateUser(invite.InvitedUser, invite.IsAdmin, orgId);
+            var result = await _userDirectoryService.CreateUser(invite.InvitedUser, invite.IsAdmin, orgId);
             if (!result.IsSuccess)
             {
                 return BadRequest("There was an issue creating the new account.");

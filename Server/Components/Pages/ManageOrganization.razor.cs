@@ -9,6 +9,7 @@ using Remotely.Shared.Entities;
 using Remotely.Shared.ViewModels;
 using System.Text;
 using System.Text.Encodings.Web;
+using Remotely.Server.Services.UserDirectory;
 
 namespace Remotely.Server.Components.Pages;
 
@@ -29,6 +30,9 @@ public partial class ManageOrganization : AuthComponentBase
 
     [Inject]
     private IEmailSenderEx EmailSender { get; set; } = null!;
+
+    [Inject]
+    private IUserDirectoryService UserDirectoryService { get; set; } = null!;
 
     [Inject]
     private IJsInterop JsInterop { get; set; } = null!;
@@ -202,7 +206,7 @@ public partial class ManageOrganization : AuthComponentBase
             return;
         }
 
-        await DataService.DeleteUser(User.OrganizationID, user.Id);
+        await UserDirectoryService.DeleteUser(User.OrganizationID, user.Id);
         _orgUsers.RemoveAll(x => x.Id == user.Id);
         ToastService.ShowToast("User deleted.");
     }
@@ -290,7 +294,7 @@ public partial class ManageOrganization : AuthComponentBase
 
         _invites.AddRange(DataService.GetAllInviteLinks(User.OrganizationID).OrderBy(x => x.InvitedUser));
         _deviceGroups.AddRange(DataService.GetDeviceGroups(UserName).OrderBy(x => x.Name));
-        var orgUsers = await DataService.GetAllUsersInOrganization(User.OrganizationID);
+        var orgUsers = await UserDirectoryService.GetAllUsersInOrganization(User.OrganizationID);
         _orgUsers.AddRange(orgUsers.OrderBy(x => x.UserName));
     }
     private async Task ResetPassword(RemotelyUser user)
@@ -323,12 +327,12 @@ public partial class ManageOrganization : AuthComponentBase
             return;
         }
 
-        if (!DataService.DoesUserExist(_inviteEmail))
+        if (!UserDirectoryService.DoesUserExist(_inviteEmail))
         {
-            var result = await DataService.CreateUser(_inviteEmail, _inviteAsAdmin, User.OrganizationID);
+            var result = await UserDirectoryService.CreateUser(_inviteEmail, _inviteAsAdmin, User.OrganizationID);
             if (result.IsSuccess)
             {
-                var userResult = await DataService.GetUserByName(_inviteEmail);
+                var userResult = await UserDirectoryService.GetUserByName(_inviteEmail);
                 if (!userResult.IsSuccess)
                 {
                     ToastService.ShowToast2(userResult.Reason, Enums.ToastType.Warning);
@@ -407,7 +411,7 @@ public partial class ManageOrganization : AuthComponentBase
             return;
         }
 
-        await DataService.ChangeUserIsAdmin(User.OrganizationID, orgUser.Id, isAdmin);
+        await UserDirectoryService.ChangeUserIsAdmin(User.OrganizationID, orgUser.Id, isAdmin);
         ToastService.ShowToast("Administrator value set.");
     }
 

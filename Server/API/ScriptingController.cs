@@ -11,6 +11,7 @@ using Remotely.Shared;
 using Remotely.Server.Extensions;
 using Remotely.Shared.Entities;
 using Remotely.Shared.Interfaces;
+using Remotely.Server.Services.UserDirectory;
 
 namespace Remotely.Server.API;
 
@@ -21,6 +22,7 @@ public class ScriptingController : ControllerBase
     private readonly IHubContext<AgentHub, IAgentHubClient> _agentHubContext;
 
     private readonly IDataService _dataService;
+    private readonly IUserDirectoryService _userDirectoryService;
     private readonly IAgentHubSessionCache _serviceSessionCache;
     private readonly IExpiringTokenService _expiringTokenService;
 
@@ -28,11 +30,13 @@ public class ScriptingController : ControllerBase
 
     public ScriptingController(UserManager<RemotelyUser> userManager,
         IDataService dataService,
+        IUserDirectoryService userDirectoryService,
         IAgentHubSessionCache serviceSessionCache,
         IExpiringTokenService expiringTokenService,
         IHubContext<AgentHub, IAgentHubClient> agentHub)
     {
         _dataService = dataService;
+        _userDirectoryService = userDirectoryService;
         _serviceSessionCache = serviceSessionCache;
         _expiringTokenService = expiringTokenService;
         _userManager = userManager;
@@ -62,7 +66,7 @@ public class ScriptingController : ControllerBase
         if (Request.HttpContext.User.Identity?.IsAuthenticated == true)
         {
             var username = Request.HttpContext.User.Identity.Name;
-            var userResult = await _dataService.GetUserByName($"{username}");
+            var userResult = await _userDirectoryService.GetUserByName($"{username}");
 
             if (!userResult.IsSuccess)
             {
