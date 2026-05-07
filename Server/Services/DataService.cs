@@ -62,14 +62,6 @@ public interface IDataService
 
     void DeviceDisconnected(string deviceId);
 
-    bool DoesUserHaveAccessToDevice(string deviceId, RemotelyUser remotelyUser);
-
-    bool DoesUserHaveAccessToDevice(string deviceId, string remotelyUserId);
-
-    string[] FilterDeviceIdsByUserPermission(string[] deviceIds, RemotelyUser remotelyUser);
-
-    string[] FilterUsersByDevicePermission(IEnumerable<string> userIds, string deviceId);
-
     Task<Result<Alert>> GetAlert(string alertId);
 
     Alert[] GetAlerts(string userId);
@@ -79,8 +71,6 @@ public interface IDataService
     ScriptResult[] GetAllCommandResults(string orgId);
 
     ScriptResult[] GetAllCommandResultsForUser(string orgId, string userName, string deviceId);
-
-    Device[] GetAllDevices(string orgId);
 
     InviteLink[] GetAllInviteLinks(string organizationId);
 
@@ -92,28 +82,15 @@ public interface IDataService
 
     Task<Result<BrandingInfo>> GetBrandingInfo(string organizationId);
 
-    Task<Result<Device>> GetDevice(
-          string deviceId,
-          Action<IQueryable<Device>>? queryBuilder = null);
-
-    Task<Result<Device>> GetDevice(string orgId, string deviceId);
-
     int GetDeviceCount();
 
     int GetDeviceCount(RemotelyUser user);
-
-    Task<Result<DeviceGroup>> GetDeviceGroup(
-        string deviceGroupId,
-        bool includeDevices = false,
-        bool includeUsers = false);
 
     DeviceGroup[] GetDeviceGroups(string username);
 
     DeviceGroup[] GetDeviceGroupsForOrganization(string organizationId);
 
     List<Device> GetDevices(IEnumerable<string> deviceIds);
-
-    Device[] GetDevicesForUser(string userName);
 
     Task<IEnumerable<ScriptRun>> GetPendingScriptRuns(string deviceId);
 
@@ -865,66 +842,6 @@ public class DataService : IDataService
         }
     }
 
-    public bool DoesUserHaveAccessToDevice(string deviceId, RemotelyUser remotelyUser)
-    {
-        if (remotelyUser is null)
-        {
-            return false;
-        }
-
-        using var dbContext = _appDbFactory.GetContext();
-
-        return dbContext.Devices
-            .Include(x => x.DeviceGroup)
-            .ThenInclude(x => x!.Users)
-            .Any(device => 
-                device.OrganizationID == remotelyUser.OrganizationID &&
-                device.ID == deviceId &&
-                (
-                    remotelyUser.IsAdministrator ||
-                    device.DeviceGroup!.Users.Any(user => user.Id == remotelyUser.Id
-                )));
-    }
-
-    public bool DoesUserHaveAccessToDevice(string deviceId, string remotelyUserId)
-    {
-        using var dbContext = _appDbFactory.GetContext();
-
-        var remotelyUser = dbContext.Users.Find(remotelyUserId);
-
-        if (remotelyUser is null)
-        {
-            return false;
-        }
-
-        return DoesUserHaveAccessToDevice(deviceId, remotelyUser);
-    }
-
-    public string[] FilterDeviceIdsByUserPermission(string[] deviceIds, RemotelyUser remotelyUser)
-    {
-        using var dbContext = _appDbFactory.GetContext();
-
-        return dbContext.Devices
-            .Include(x => x.DeviceGroup)
-            .ThenInclude(x => x!.Users)
-            .Where(device =>
-                device.OrganizationID == remotelyUser.OrganizationID &&
-                deviceIds.Contains(device.ID) &&
-                (
-                    remotelyUser.IsAdministrator ||
-                    device.DeviceGroup!.Users.Any(user => user.Id == remotelyUser.Id
-                )))
-            .Select(x => x.ID)
-            .ToArray();
-    }
-
-    public string[] FilterUsersByDevicePermission(IEnumerable<string> userIds, string deviceId)
-    {
-        using var dbContext = _appDbFactory.GetContext();
-
-        return FilterUsersByDevicePermissionInternal(dbContext, userIds, deviceId);
-    }
-
     public async Task<Result<Alert>> GetAlert(string alertId)
     {
         using var dbContext = _appDbFactory.GetContext();
@@ -995,16 +912,6 @@ public class DataService : IDataService
                 x.SenderUserName == userName &&
                 x.DeviceID == deviceId)
             .OrderByDescending(x => x.TimeStamp)
-            .ToArray();
-    }
-
-    public Device[] GetAllDevices(string orgId)
-    {
-        using var dbContext = _appDbFactory.GetContext();
-
-        return dbContext.Devices
-            .AsNoTracking()
-            .Where(x => x.OrganizationID == orgId)
             .ToArray();
     }
 
@@ -1095,41 +1002,6 @@ public class DataService : IDataService
         return Result.Ok(organization.BrandingInfo);
     }
 
-    public async Task<Result<Device>> GetDevice(string orgId, string deviceId)
-    {
-        using var dbContext = _appDbFactory.GetContext();
-
-        var device = await dbContext.Devices
-            .AsNoTracking()
-            .FirstOrDefaultAsync(x =>
-                x.OrganizationID == orgId &&
-                x.ID == deviceId);
-
-        if (device is null)
-        {
-            return Result.Fail<Device>("Device not found.");
-        }
-        return Result.Ok(device);
-    }
-
-    public async Task<Result<Device>> GetDevice(
-        string deviceId,
-        Action<IQueryable<Device>>? queryBuilder = null)
-    {
-        using var dbContext = _appDbFactory.GetContext();
-
-        var device = await dbContext.Devices
-            .AsNoTracking()
-            .Apply(queryBuilder)
-            .FirstOrDefaultAsync(x => x.ID == deviceId);
-
-        if (device is null)
-        {
-            return Result.Fail<Device>("Device not found.");
-        }
-        return Result.Ok(device);
-    }
-
     public int GetDeviceCount()
     {
         using var dbContext = _appDbFactory.GetContext();
@@ -1154,35 +1026,6 @@ public class DataService : IDataService
             .SelectMany(x => x.DeviceGroups)
             .SelectMany(x => x.Devices)
             .Count();
-    }
-
-    public async Task<Result<DeviceGroup>> GetDeviceGroup(
-        string deviceGroupId,
-        bool includeDevices = false,
-        bool includeUsers = false)
-    {
-        using var dbContext = _appDbFactory.GetContext();
-
-        var query = dbContext.DeviceGroups
-            .AsNoTracking()
-            .AsQueryable();
-
-        if (includeDevices)
-        {
-            query = query.Include(x => x.Devices);
-        }
-        if (includeUsers)
-        {
-            query = query.Include(x => x.Users);
-        }
-
-        var group = await query.FirstOrDefaultAsync(x => x.ID == deviceGroupId);
-
-        if (group is null)
-        {
-            return Result.Fail<DeviceGroup>("Device group not found.");
-        }
-        return Result.Ok(group);
     }
 
     public DeviceGroup[] GetDeviceGroups(string username)
@@ -1246,43 +1089,6 @@ public class DataService : IDataService
             .Where(x => deviceIds.Contains(x.ID))
             .ToList();
     }
-
-    public Device[] GetDevicesForUser(string userName)
-    {
-        using var dbContext = _appDbFactory.GetContext();
-
-        if (string.IsNullOrWhiteSpace(userName))
-        {
-            return Array.Empty<Device>();
-        }
-
-        var user = dbContext.Users
-            .AsNoTracking()
-            .FirstOrDefault(x => x.UserName == userName);
-
-        if (user is null)
-        {
-            return Array.Empty<Device>();
-        }
-
-        if (user.IsAdministrator)
-        {
-            return dbContext.Devices
-                .AsNoTracking()
-                .Where(x => x.OrganizationID == user.OrganizationID)
-                .ToArray();
-        }
-
-        return dbContext.Users
-            .AsNoTracking()
-            .Include(x => x.DeviceGroups)
-            .ThenInclude(x => x.Devices)
-            .Where(x => x.UserName == userName)
-            .SelectMany(x => x.DeviceGroups)
-            .SelectMany(x => x.Devices)
-            .ToArray();
-    }
-
 
     public async Task<IEnumerable<ScriptRun>> GetPendingScriptRuns(string deviceId)
     {

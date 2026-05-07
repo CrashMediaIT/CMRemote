@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Components;
 using Remotely.Server.Hubs;
 using Remotely.Server.Models.Messages;
 using Remotely.Server.Services;
+using Remotely.Server.Services.Devices;
 using Remotely.Shared.Entities;
 using Remotely.Shared.Enums;
 using Remotely.Shared.Models;
@@ -44,6 +45,9 @@ public partial class DeviceInstalledApps : AuthComponentBase
     private IDataService DataService { get; set; } = null!;
 
     [Inject]
+    private IDeviceQueryService DeviceQueryService { get; set; } = null!;
+
+    [Inject]
     private IInstalledApplicationsService InstalledApps { get; set; } = null!;
 
     [Inject]
@@ -65,8 +69,8 @@ public partial class DeviceInstalledApps : AuthComponentBase
             return;
         }
 
-        var deviceResult = await DataService.GetDevice(DeviceId);
-        if (deviceResult.IsSuccess && DataService.DoesUserHaveAccessToDevice(deviceResult.Value.ID, User))
+        var deviceResult = await DeviceQueryService.GetDevice(DeviceId);
+        if (deviceResult.IsSuccess && DeviceQueryService.DoesUserHaveAccessToDevice(deviceResult.Value.ID, User))
         {
             _device = deviceResult.Value;
             _isWindows = _device.Platform == "Windows";

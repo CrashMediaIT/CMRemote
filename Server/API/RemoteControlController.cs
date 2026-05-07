@@ -11,6 +11,7 @@ using Remotely.Shared.Entities;
 using Remotely.Shared.Interfaces;
 using Remotely.Server.Services.UserDirectory;
 using Remotely.Server.Services.Organizations;
+using Remotely.Server.Services.Devices;
 
 // For more information on enabling Web API for empty projects, visit https://go.microsoft.com/fwlink/?LinkID=397860
 
@@ -26,6 +27,7 @@ public class RemoteControlController : ControllerBase
     private readonly IDataService _dataService;
     private readonly IUserDirectoryService _userDirectoryService;
     private readonly IOrganizationService _organizationService;
+    private readonly IDeviceQueryService _deviceQueryService;
     private readonly IOtpProvider _otpProvider;
     private readonly SignInManager<RemotelyUser> _signInManager;
     private readonly ILogger<RemoteControlController> _logger;
@@ -35,6 +37,7 @@ public class RemoteControlController : ControllerBase
         IDataService dataService,
         IUserDirectoryService userDirectoryService,
         IOrganizationService organizationService,
+        IDeviceQueryService deviceQueryService,
         IRemoteControlSessionCache remoteControlSessionCache,
         IHubContext<AgentHub, IAgentHubClient> agentHub,
         IAgentHubSessionCache serviceSessionCache,
@@ -44,6 +47,7 @@ public class RemoteControlController : ControllerBase
         _dataService = dataService;
         _userDirectoryService = userDirectoryService;
         _organizationService = organizationService;
+        _deviceQueryService = deviceQueryService;
         _agentHub = agentHub;
         _remoteControlSessionCache = remoteControlSessionCache;
         _serviceSessionCache = serviceSessionCache;
@@ -91,7 +95,7 @@ public class RemoteControlController : ControllerBase
 
         var result = await _signInManager.PasswordSignInAsync(rcRequest.Email, rcRequest.Password, false, true);
         if (result.Succeeded &&
-            _dataService.DoesUserHaveAccessToDevice(rcRequest.DeviceID, userResult.Value))
+            _deviceQueryService.DoesUserHaveAccessToDevice(rcRequest.DeviceID, userResult.Value))
         {
             _logger.LogInformation("API login successful for {rcRequestEmail}.", rcRequest.Email);
             return await InitiateRemoteControl(rcRequest.DeviceID, orgId);
@@ -132,7 +136,7 @@ public class RemoteControlController : ControllerBase
                 return Unauthorized();
             }
 
-            if (!_dataService.DoesUserHaveAccessToDevice(targetDevice.ID, userResult.Value))
+            if (!_deviceQueryService.DoesUserHaveAccessToDevice(targetDevice.ID, userResult.Value))
             {
                 return Unauthorized();
             }

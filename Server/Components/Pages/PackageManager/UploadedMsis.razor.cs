@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Components.Forms;
 using Remotely.Server.Hubs;
 using Remotely.Server.PackageManager;
 using Remotely.Server.Services;
+using Remotely.Server.Services.Devices;
 using Remotely.Shared.Entities;
 using Remotely.Shared.Enums;
 using Remotely.Shared.PackageManager;
@@ -36,6 +37,9 @@ public partial class UploadedMsis : AuthComponentBase
     public required IDataService DataService { get; init; }
 
     [Microsoft.AspNetCore.Components.Inject]
+    public required IDeviceQueryService DeviceQueryService { get; init; }
+
+    [Microsoft.AspNetCore.Components.Inject]
     public required ICircuitConnection CircuitConnection { get; init; }
 
     [Microsoft.AspNetCore.Components.Inject]
@@ -56,7 +60,7 @@ public partial class UploadedMsis : AuthComponentBase
         }
         _msis = await MsiService.GetForOrgAsync(User.OrganizationID);
         _devices = PackageManagerDeviceFilter
-            .SupportedDevices(DataService.GetDevicesForUser(UserName))
+            .SupportedDevices(DeviceQueryService.GetDevicesForUser(UserName))
             .OrderBy(d => d.DeviceName)
             .ToArray();
     }

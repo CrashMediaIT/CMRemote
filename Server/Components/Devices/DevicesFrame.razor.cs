@@ -5,6 +5,7 @@ using Remotely.Server.Enums;
 using Remotely.Server.Hubs;
 using Remotely.Server.Models.Messages;
 using Remotely.Server.Services;
+using Remotely.Server.Services.Devices;
 using Remotely.Server.Services.Stores;
 using Remotely.Shared.Attributes;
 using Remotely.Shared.Entities;
@@ -58,6 +59,9 @@ public partial class DevicesFrame : AuthComponentBase
     }
     [Inject]
     private IDataService DataService { get; init; } = null!;
+
+    [Inject]
+    private IDeviceQueryService DeviceQueryService { get; init; } = null!;
 
     private Device[] DisplayedDevices => GetDisplayedDevices();
 
@@ -114,7 +118,7 @@ public partial class DevicesFrame : AuthComponentBase
 
     private async Task AddScriptResult(ScriptResult result)
     {
-        var deviceResult = await DataService.GetDevice(result.DeviceID);
+        var deviceResult = await DeviceQueryService.GetDevice(result.DeviceID);
         if (!deviceResult.IsSuccess)
         {
             return;
@@ -303,7 +307,7 @@ public partial class DevicesFrame : AuthComponentBase
         {
             _allDevices.Clear();
 
-            var devices = DataService.GetDevicesForUser(UserName)
+            var devices = DeviceQueryService.GetDevicesForUser(UserName)
                 .OrderByDescending(x => x.IsOnline)
                 .ToList();
 
@@ -363,7 +367,7 @@ public partial class DevicesFrame : AuthComponentBase
     {
         EnsureUserSet();
 
-        var offlineDevices = DataService
+        var offlineDevices = DeviceQueryService
            .GetDevicesForUser(UserName)
            .Where(x => !x.IsOnline);
 

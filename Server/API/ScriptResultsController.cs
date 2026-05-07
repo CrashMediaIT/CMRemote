@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using Remotely.Server.Auth;
 using Remotely.Server.Extensions;
 using Remotely.Server.Services;
+using Remotely.Server.Services.Devices;
 using Remotely.Shared.Dtos;
 using System.Text;
 
@@ -14,15 +15,18 @@ namespace Remotely.Server.API;
 public class ScriptResultsController : ControllerBase
 {
     private readonly IDataService _dataService;
+    private readonly IDeviceQueryService _deviceQueryService;
     private readonly IEmailSenderEx _emailSender;
     private readonly ILogger<ScriptResultsController> _logger;
 
     public ScriptResultsController(
-        IDataService dataService, 
+        IDataService dataService,
+        IDeviceQueryService deviceQueryService,
         IEmailSenderEx emailSenderEx,
         ILogger<ScriptResultsController> logger)
     {
         _dataService = dataService;
+        _deviceQueryService = deviceQueryService;
         _emailSender = emailSenderEx;
         _logger = logger;
     }
@@ -89,7 +93,7 @@ public class ScriptResultsController : ControllerBase
 
             if (savedScript.SendEmailOnError)
             {
-                var deviceResult = await _dataService.GetDevice(
+                var deviceResult = await _deviceQueryService.GetDevice(
                     result.DeviceID, 
                     query => query.Include(x => x.DeviceGroup));
 

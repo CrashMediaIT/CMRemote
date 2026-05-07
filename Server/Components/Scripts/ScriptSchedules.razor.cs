@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Components.Forms;
 using Remotely.Server.Components.Pages;
 using Remotely.Server.Enums;
 using Remotely.Server.Services;
+using Remotely.Server.Services.Devices;
 using Remotely.Shared.Entities;
 using Remotely.Shared.Utilities;
 
@@ -37,6 +38,9 @@ public partial class ScriptSchedules : AuthComponentBase
 
     [Inject]
     private IDataService DataService { get; set; } = null!;
+
+    [Inject]
+    private IDeviceQueryService DeviceQueryService { get; set; } = null!;
 
     [Inject]
 
@@ -77,7 +81,7 @@ public partial class ScriptSchedules : AuthComponentBase
         EnsureUserSet();
 
         _deviceGroups = DataService.GetDeviceGroups(UserName);
-        _devices = DataService
+        _devices = DeviceQueryService
             .GetDevicesForUser(UserName)
             .OrderBy(x => x.DeviceName)
             .ToArray();

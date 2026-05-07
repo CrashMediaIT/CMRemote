@@ -1,5 +1,6 @@
 using Remotely.Server.Services;
 using Remotely.Server.Services.Organizations;
+using Remotely.Server.Services.Devices;
 using Remotely.Shared.Helpers;
 using Bitbound.SimpleMessenger;
 using Microsoft.AspNetCore.Components.Server.Circuits;
@@ -103,6 +104,7 @@ public class CircuitConnection : CircuitHandler, ICircuitConnection
     private readonly IHubContext<AgentHub, IAgentHubClient> _agentHubContext;
     private readonly IDataService _dataService;
     private readonly IOrganizationService _organizationService;
+    private readonly IDeviceQueryService _deviceQueryService;
     private readonly IInstalledApplicationsService _installedApplicationsService;
     private readonly IPackageService _packageService;
     private readonly IPackageInstallJobService _packageInstallJobService;
@@ -124,6 +126,7 @@ public class CircuitConnection : CircuitHandler, ICircuitConnection
         IAuthService authService,
         IDataService dataService,
         IOrganizationService organizationService,
+        IDeviceQueryService deviceQueryService,
         ISelectedCardsStore cardStore,
         IHubContext<AgentHub, IAgentHubClient> agentHubContext,
         ICircuitManager circuitManager,
@@ -142,6 +145,7 @@ public class CircuitConnection : CircuitHandler, ICircuitConnection
     {
         _dataService = dataService;
         _organizationService = organizationService;
+        _deviceQueryService = deviceQueryService;
         _agentHubContext = agentHubContext;
         _cardStore = cardStore;
         _authService = authService;
@@ -188,7 +192,7 @@ public class CircuitConnection : CircuitHandler, ICircuitConnection
 
     public async Task ExecuteCommandOnAgent(ScriptingShell shell, string command, string[] deviceIDs)
     {
-        deviceIDs = _dataService.FilterDeviceIdsByUserPermission(deviceIDs, User);
+        deviceIDs = _deviceQueryService.FilterDeviceIdsByUserPermission(deviceIDs, User);
         var connections = GetActiveConnectionsForUserOrg(deviceIDs);
 
         _logger.LogInformation("Command executed by {username}.  Shell: {shell}.  Command: {command}.  Devices: {deviceIds}",
@@ -268,7 +272,7 @@ public class CircuitConnection : CircuitHandler, ICircuitConnection
 
     public async Task ReinstallAgents(string[] deviceIDs)
     {
-        deviceIDs = _dataService.FilterDeviceIdsByUserPermission(deviceIDs, User);
+        deviceIDs = _deviceQueryService.FilterDeviceIdsByUserPermission(deviceIDs, User);
         var connections = GetActiveConnectionsForUserOrg(deviceIDs);
         await _agentHubContext.Clients.Clients(connections).ReinstallAgent();
         _dataService.RemoveDevices(deviceIDs);
@@ -291,9 +295,9 @@ public class CircuitConnection : CircuitHandler, ICircuitConnection
         }
 
 
-        if (!_dataService.DoesUserHaveAccessToDevice(deviceId, User))
+        if (!_deviceQueryService.DoesUserHaveAccessToDevice(deviceId, User))
         {
-            var device = _dataService.GetDevice(targetDevice.ID);
+            var device = _deviceQueryService.GetDevice(targetDevice.ID);
             _logger.LogWarning(
                 "Remote control attempted by unauthorized user.  Device ID: {deviceId}.  User Name: {userName}.",
                 deviceId,
@@ -353,7 +357,7 @@ public class CircuitConnection : CircuitHandler, ICircuitConnection
     {
         if (User is not null)
         {
-            var filterDevices = _dataService.FilterDeviceIdsByUserPermission(deviceIDs, User);
+            var filterDevices = _deviceQueryService.FilterDeviceIdsByUserPermission(deviceIDs, User);
             _dataService.RemoveDevices(filterDevices);
         }
 
@@ -375,7 +379,7 @@ public class CircuitConnection : CircuitHandler, ICircuitConnection
         else if (User is not null)
         {
             username = User.UserName;
-            deviceIds = _dataService.FilterDeviceIdsByUserPermission(deviceIds.ToArray(), User);
+            deviceIds = _deviceQueryService.FilterDeviceIdsByUserPermission(deviceIds.ToArray(), User);
         }
 
         var authToken = _expiringTokenService.GetToken(Time.Now.AddMinutes(AppConstants.ScriptRunExpirationMinutes));
@@ -396,7 +400,7 @@ public class CircuitConnection : CircuitHandler, ICircuitConnection
 
     public async Task SendChat(string message, string deviceId, bool isDisconnecting = false)
     {
-        if (!_dataService.DoesUserHaveAccessToDevice(deviceId, User))
+        if (!_deviceQueryService.DoesUserHaveAccessToDevice(deviceId, User))
         {
             return;
         }
@@ -437,7 +441,7 @@ public class CircuitConnection : CircuitHandler, ICircuitConnection
             return false;
         }
 
-        if (!_dataService.DoesUserHaveAccessToDevice(deviceId, User))
+        if (!_deviceQueryService.DoesUserHaveAccessToDevice(deviceId, User))
         {
             _logger.LogWarning("User {username} does not have access to device ID {deviceId} and attempted file upload.",
                 User.UserName,
@@ -473,7 +477,7 @@ public class CircuitConnection : CircuitHandler, ICircuitConnection
 
     public async Task UninstallAgents(string[] deviceIDs)
     {
-        deviceIDs = _dataService.FilterDeviceIdsByUserPermission(deviceIDs, User);
+        deviceIDs = _deviceQueryService.FilterDeviceIdsByUserPermission(deviceIDs, User);
         var connections = GetActiveConnectionsForUserOrg(deviceIDs);
         await _agentHubContext.Clients.Clients(connections).UninstallAgent();
         _dataService.RemoveDevices(deviceIDs);
@@ -481,7 +485,7 @@ public class CircuitConnection : CircuitHandler, ICircuitConnection
 
     public async Task UpdateTags(string deviceID, string tags)
     {
-        if (_dataService.DoesUserHaveAccessToDevice(deviceID, User))
+        if (_deviceQueryService.DoesUserHaveAccessToDevice(deviceID, User))
         {
             if (tags.Length > 200)
             {
@@ -509,7 +513,7 @@ public class CircuitConnection : CircuitHandler, ICircuitConnection
     {
         try
         {
-            if (!_dataService.DoesUserHaveAccessToDevice(device.ID, User.Id))
+            if (!_deviceQueryService.DoesUserHaveAccessToDevice(device.ID, User.Id))
             {
                 return Result.Fail("Unauthorized.");
             }
@@ -537,7 +541,7 @@ public class CircuitConnection : CircuitHandler, ICircuitConnection
         try
         {
             var deviceIds = devices.Select(x => x.ID).ToArray();
-            var filteredIds = _dataService.FilterDeviceIdsByUserPermission(deviceIds, User);
+            var filteredIds = _deviceQueryService.FilterDeviceIdsByUserPermission(deviceIds, User);
             var filteredDevices = devices.Where(x => filteredIds.Contains(x.ID)).ToArray();
 
             var availableDevices = _agentSessionCache
@@ -870,7 +874,7 @@ public class CircuitConnection : CircuitHandler, ICircuitConnection
         }
 
         if (!_agentSessionCache.TryGetByDeviceId(deviceId, out var device) ||
-            !_dataService.DoesUserHaveAccessToDevice(device.ID, User) ||
+            !_deviceQueryService.DoesUserHaveAccessToDevice(device.ID, User) ||
             !_agentSessionCache.TryGetConnectionId(device.ID, out var connectionId))
         {
             return (false, string.Empty);

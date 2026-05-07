@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Components;
 using Remotely.Server.Components.Pages;
 using Remotely.Server.Hubs;
 using Remotely.Server.Services;
+using Remotely.Server.Services.Devices;
 using Remotely.Shared.Entities;
 using Remotely.Shared.Enums;
 using Remotely.Shared.Utilities;
@@ -26,6 +27,9 @@ public partial class RunScript : AuthComponentBase
 
     [Inject]
     private IDataService DataService { get; init; } = null!;
+
+    [Inject]
+    private IDeviceQueryService DeviceQueryService { get; init; } = null!;
 
     [Inject]
     private IJsInterop JsInterop { get; init; } = null!;
@@ -56,7 +60,7 @@ public partial class RunScript : AuthComponentBase
         await base.OnInitializedAsync();
         EnsureUserSet();
         _deviceGroups = DataService.GetDeviceGroups(UserName);
-        _devices = DataService
+        _devices = DeviceQueryService
             .GetDevicesForUser(UserName)
             .OrderBy(x => x.DeviceName)
             .ToArray();
@@ -122,7 +126,7 @@ public partial class RunScript : AuthComponentBase
             .Distinct()
             .ToArray();
 
-        var filteredDevices = DataService.FilterDeviceIdsByUserPermission(deviceIds.ToArray(), User);
+        var filteredDevices = DeviceQueryService.FilterDeviceIdsByUserPermission(deviceIds.ToArray(), User);
 
         var onlineDevices = ServiceSessionCache.FilterDevicesByOnlineStatus(filteredDevices, true);
 

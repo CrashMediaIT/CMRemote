@@ -11,6 +11,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using Remotely.Server.Services.UserDirectory;
 using Remotely.Server.Services.Organizations;
+using Remotely.Server.Services.Devices;
 
 namespace Remotely.Server.Tests;
 
@@ -21,6 +22,7 @@ public class DataServiceTests
     private IDataService _dataService = null!;
     private IUserDirectoryService _userDirectoryService = null!;
     private IOrganizationService _organizationService = null!;
+    private IDeviceQueryService _deviceQueryService = null!;
     private TestData _testData = null!;
 
     [TestMethod]
@@ -36,7 +38,7 @@ public class DataServiceTests
     [TestMethod]
     public async Task AddOrUpdateDevice()
     {
-        var storedDevice = (await _dataService.GetDevice(_newDeviceID)).Value;
+        var storedDevice = (await _deviceQueryService.GetDevice(_newDeviceID)).Value;
 
         Assert.IsNull(storedDevice);
 
@@ -51,7 +53,7 @@ public class DataServiceTests
         var result = await _dataService.AddOrUpdateDevice(newDevice);
         Assert.IsTrue(result.IsSuccess);
 
-        storedDevice = (await _dataService.GetDevice(_newDeviceID)).Value;
+        storedDevice = (await _deviceQueryService.GetDevice(_newDeviceID)).Value;
 
         Assert.AreEqual(_newDeviceID, storedDevice!.ID);
         Assert.AreEqual(Environment.MachineName, storedDevice.DeviceName);
@@ -80,46 +82,46 @@ public class DataServiceTests
     [TestMethod]
     public void DeviceGroupPermissions()
     {
-        Assert.AreEqual(2, _dataService.GetDevicesForUser(_testData.Org1Admin1.UserName!).Length);
-        Assert.AreEqual(2, _dataService.GetDevicesForUser(_testData.Org1Admin2.UserName!).Length);
-        Assert.AreEqual(0, _dataService.GetDevicesForUser(_testData.Org1User1.UserName!).Length);
-        Assert.AreEqual(0, _dataService.GetDevicesForUser(_testData.Org1User2.UserName!).Length);
-        Assert.AreEqual(0, _dataService.GetDevicesForUser(_testData.Org2User1.UserName!).Length);
-        Assert.AreEqual(0, _dataService.GetDevicesForUser(_testData.Org2User2.UserName!).Length);
+        Assert.AreEqual(2, _deviceQueryService.GetDevicesForUser(_testData.Org1Admin1.UserName!).Length);
+        Assert.AreEqual(2, _deviceQueryService.GetDevicesForUser(_testData.Org1Admin2.UserName!).Length);
+        Assert.AreEqual(0, _deviceQueryService.GetDevicesForUser(_testData.Org1User1.UserName!).Length);
+        Assert.AreEqual(0, _deviceQueryService.GetDevicesForUser(_testData.Org1User2.UserName!).Length);
+        Assert.AreEqual(0, _deviceQueryService.GetDevicesForUser(_testData.Org2User1.UserName!).Length);
+        Assert.AreEqual(0, _deviceQueryService.GetDevicesForUser(_testData.Org2User2.UserName!).Length);
 
-        Assert.IsTrue(_dataService.DoesUserHaveAccessToDevice(_testData.Org1Device1.ID, _testData.Org1Admin1));
-        Assert.IsTrue(_dataService.DoesUserHaveAccessToDevice(_testData.Org1Device1.ID, _testData.Org1Admin2));
-        Assert.IsFalse(_dataService.DoesUserHaveAccessToDevice(_testData.Org1Device1.ID, _testData.Org1User1));
-        Assert.IsFalse(_dataService.DoesUserHaveAccessToDevice(_testData.Org1Device1.ID, _testData.Org1User2));
-        Assert.IsFalse(_dataService.DoesUserHaveAccessToDevice(_testData.Org1Device1.ID, _testData.Org2User1));
-        Assert.IsFalse(_dataService.DoesUserHaveAccessToDevice(_testData.Org1Device1.ID, _testData.Org2User2));
+        Assert.IsTrue(_deviceQueryService.DoesUserHaveAccessToDevice(_testData.Org1Device1.ID, _testData.Org1Admin1));
+        Assert.IsTrue(_deviceQueryService.DoesUserHaveAccessToDevice(_testData.Org1Device1.ID, _testData.Org1Admin2));
+        Assert.IsFalse(_deviceQueryService.DoesUserHaveAccessToDevice(_testData.Org1Device1.ID, _testData.Org1User1));
+        Assert.IsFalse(_deviceQueryService.DoesUserHaveAccessToDevice(_testData.Org1Device1.ID, _testData.Org1User2));
+        Assert.IsFalse(_deviceQueryService.DoesUserHaveAccessToDevice(_testData.Org1Device1.ID, _testData.Org2User1));
+        Assert.IsFalse(_deviceQueryService.DoesUserHaveAccessToDevice(_testData.Org1Device1.ID, _testData.Org2User2));
 
         var groupID = _testData.Org1Group1.ID;
         _dataService.AddUserToDeviceGroup(_testData.Org1Id, groupID, _testData.Org1User1.UserName!, out _);
         _testData.Org1Device1.DeviceGroupID = groupID;
         _dataService.UpdateDevice(_testData.Org1Device1.ID, "", "", groupID, "");
 
-        Assert.AreEqual(2, _dataService.GetDevicesForUser(_testData.Org1Admin1.UserName!).Length);
-        Assert.AreEqual(2, _dataService.GetDevicesForUser(_testData.Org1Admin2.UserName!).Length);
-        Assert.AreEqual(1, _dataService.GetDevicesForUser(_testData.Org1User1.UserName!).Length);
-        Assert.AreEqual(0, _dataService.GetDevicesForUser(_testData.Org1User2.UserName!).Length);
-        Assert.AreEqual(0, _dataService.GetDevicesForUser(_testData.Org2User1.UserName!).Length);
-        Assert.AreEqual(0, _dataService.GetDevicesForUser(_testData.Org2User2.UserName!).Length);
+        Assert.AreEqual(2, _deviceQueryService.GetDevicesForUser(_testData.Org1Admin1.UserName!).Length);
+        Assert.AreEqual(2, _deviceQueryService.GetDevicesForUser(_testData.Org1Admin2.UserName!).Length);
+        Assert.AreEqual(1, _deviceQueryService.GetDevicesForUser(_testData.Org1User1.UserName!).Length);
+        Assert.AreEqual(0, _deviceQueryService.GetDevicesForUser(_testData.Org1User2.UserName!).Length);
+        Assert.AreEqual(0, _deviceQueryService.GetDevicesForUser(_testData.Org2User1.UserName!).Length);
+        Assert.AreEqual(0, _deviceQueryService.GetDevicesForUser(_testData.Org2User2.UserName!).Length);
 
-        Assert.IsTrue(_dataService.DoesUserHaveAccessToDevice(_testData.Org1Device1.ID, _testData.Org1Admin1));
-        Assert.IsTrue(_dataService.DoesUserHaveAccessToDevice(_testData.Org1Device1.ID, _testData.Org1Admin2));
-        Assert.IsTrue(_dataService.DoesUserHaveAccessToDevice(_testData.Org1Device1.ID, _testData.Org1User1));
-        Assert.IsFalse(_dataService.DoesUserHaveAccessToDevice(_testData.Org1Device1.ID, _testData.Org1User2));
-        Assert.IsFalse(_dataService.DoesUserHaveAccessToDevice(_testData.Org1Device1.ID, _testData.Org2User1));
-        Assert.IsFalse(_dataService.DoesUserHaveAccessToDevice(_testData.Org1Device1.ID, _testData.Org2User2));
+        Assert.IsTrue(_deviceQueryService.DoesUserHaveAccessToDevice(_testData.Org1Device1.ID, _testData.Org1Admin1));
+        Assert.IsTrue(_deviceQueryService.DoesUserHaveAccessToDevice(_testData.Org1Device1.ID, _testData.Org1Admin2));
+        Assert.IsTrue(_deviceQueryService.DoesUserHaveAccessToDevice(_testData.Org1Device1.ID, _testData.Org1User1));
+        Assert.IsFalse(_deviceQueryService.DoesUserHaveAccessToDevice(_testData.Org1Device1.ID, _testData.Org1User2));
+        Assert.IsFalse(_deviceQueryService.DoesUserHaveAccessToDevice(_testData.Org1Device1.ID, _testData.Org2User1));
+        Assert.IsFalse(_deviceQueryService.DoesUserHaveAccessToDevice(_testData.Org1Device1.ID, _testData.Org2User2));
 
-        var allDevices = _dataService.GetAllDevices(_testData.Org1Id).Select(x => x.ID).ToArray();
-        Assert.AreEqual(2, _dataService.FilterDeviceIdsByUserPermission(allDevices, _testData.Org1Admin1).Length);
-        Assert.AreEqual(2, _dataService.FilterDeviceIdsByUserPermission(allDevices, _testData.Org1Admin2).Length);
-        Assert.AreEqual(1, _dataService.FilterDeviceIdsByUserPermission(allDevices, _testData.Org1User1).Length);
-        Assert.AreEqual(0, _dataService.FilterDeviceIdsByUserPermission(allDevices, _testData.Org1User2).Length);
-        Assert.AreEqual(0, _dataService.FilterDeviceIdsByUserPermission(allDevices, _testData.Org2User1).Length);
-        Assert.AreEqual(0, _dataService.FilterDeviceIdsByUserPermission(allDevices, _testData.Org2User2).Length);
+        var allDevices = _deviceQueryService.GetAllDevices(_testData.Org1Id).Select(x => x.ID).ToArray();
+        Assert.AreEqual(2, _deviceQueryService.FilterDeviceIdsByUserPermission(allDevices, _testData.Org1Admin1).Length);
+        Assert.AreEqual(2, _deviceQueryService.FilterDeviceIdsByUserPermission(allDevices, _testData.Org1Admin2).Length);
+        Assert.AreEqual(1, _deviceQueryService.FilterDeviceIdsByUserPermission(allDevices, _testData.Org1User1).Length);
+        Assert.AreEqual(0, _deviceQueryService.FilterDeviceIdsByUserPermission(allDevices, _testData.Org1User2).Length);
+        Assert.AreEqual(0, _deviceQueryService.FilterDeviceIdsByUserPermission(allDevices, _testData.Org2User1).Length);
+        Assert.AreEqual(0, _deviceQueryService.FilterDeviceIdsByUserPermission(allDevices, _testData.Org2User2).Length);
     }
 
     [TestMethod]
@@ -200,6 +202,7 @@ public class DataServiceTests
         _dataService = IoCActivator.ServiceProvider.GetRequiredService<IDataService>();
         _userDirectoryService = IoCActivator.ServiceProvider.GetRequiredService<IUserDirectoryService>();
         _organizationService = IoCActivator.ServiceProvider.GetRequiredService<IOrganizationService>();
+        _deviceQueryService = IoCActivator.ServiceProvider.GetRequiredService<IDeviceQueryService>();
     }
 
     [TestMethod]
@@ -250,12 +253,12 @@ public class DataServiceTests
         Assert.IsNotNull((await _userDirectoryService.GetUserByName(_testData.Org1User2.UserName!)).Value);
         Assert.AreEqual(2, _organizationService.GetOrganizationCount());
 
-        var devices1 = _dataService.GetAllDevices(_testData.Org1Id);
+        var devices1 = _deviceQueryService.GetAllDevices(_testData.Org1Id);
         Assert.AreEqual(2, devices1.Length);
         Assert.IsTrue(devices1.Any(x => x.ID == "Org1Device1"));
         Assert.IsTrue(devices1.Any(x => x.ID == "Org1Device2"));
 
-        var devices2 = _dataService.GetAllDevices(_testData.Org2Id);
+        var devices2 = _deviceQueryService.GetAllDevices(_testData.Org2Id);
         Assert.AreEqual(2, devices2.Length);
         Assert.IsTrue(devices2.Any(x => x.ID == "Org2Device1"));
         Assert.IsTrue(devices2.Any(x => x.ID == "Org2Device2"));

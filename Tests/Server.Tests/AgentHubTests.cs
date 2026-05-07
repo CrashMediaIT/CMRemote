@@ -2,6 +2,7 @@
 using Remotely.Server.Models;
 using Remotely.Server.Services;
 using Remotely.Server.Services.AgentUpgrade;
+using Remotely.Server.Services.Devices;
 using Bitbound.SimpleMessenger;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.DependencyInjection;
@@ -47,6 +48,7 @@ public class AgentHubTests
 
         var hub = new AgentHub(
             _dataService,
+            IoCActivator.ServiceProvider.GetRequiredService<IDeviceQueryService>(),
             serviceSessionCache.Object,
             viewerHub.Object,
             circuitManager.Object,
@@ -94,6 +96,7 @@ public class AgentHubTests
 
         var hub = new AgentHub(
             _dataService,
+            IoCActivator.ServiceProvider.GetRequiredService<IDeviceQueryService>(),
             serviceSessionCache.Object,
             viewerHub.Object,
             circuitManager.Object,
@@ -428,6 +431,7 @@ public class AgentHubTests
 
         var hub = new AgentHub(
             dataService.Object,
+            IoCActivator.ServiceProvider.GetRequiredService<IDeviceQueryService>(),
             serviceSessionCache.Object,
             viewerHub.Object,
             circuitManager.Object,

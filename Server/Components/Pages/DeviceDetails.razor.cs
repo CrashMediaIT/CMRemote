@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Components.Web;
 using Remotely.Server.Hubs;
 using Remotely.Server.Models.Messages;
 using Remotely.Server.Services;
+using Remotely.Server.Services.Devices;
 using Remotely.Shared.Entities;
 using Remotely.Shared.Utilities;
 using System.Collections.Concurrent;
@@ -35,6 +36,9 @@ public partial class DeviceDetails : AuthComponentBase
     [Inject]
     private IDataService DataService { get; set; } = null!;
 
+    [Inject]
+    private IDeviceQueryService DeviceQueryService { get; set; } = null!;
+
 
     [Inject]
     private IJsInterop JsInterop { get; set; } = null!;
@@ -57,11 +61,11 @@ public partial class DeviceDetails : AuthComponentBase
 
         if (!string.IsNullOrWhiteSpace(DeviceId))
         {
-            var deviceResult = await DataService.GetDevice(DeviceId);
+            var deviceResult = await DeviceQueryService.GetDevice(DeviceId);
             if (deviceResult.IsSuccess)
             {
                 _device = deviceResult.Value;
-                _userHasAccess = DataService.DoesUserHaveAccessToDevice(_device.ID, User);
+                _userHasAccess = DeviceQueryService.DoesUserHaveAccessToDevice(_device.ID, User);
             }
             else
             {

@@ -5,6 +5,7 @@ using Remotely.Server.Components.ModalContents;
 using Remotely.Server.Hubs;
 using Remotely.Server.Models.Messages;
 using Remotely.Server.Services;
+using Remotely.Server.Services.Devices;
 using Remotely.Server.Services.Stores;
 using Remotely.Shared.Entities;
 using Remotely.Shared.Enums;
@@ -33,6 +34,9 @@ public partial class Terminal : AuthComponentBase, IDisposable
 
     [Inject]
     private IDataService DataService { get; init; } = null!;
+
+    [Inject]
+    private IDeviceQueryService DeviceQueryService { get; init; } = null!;
 
     private string InputText
     {
@@ -135,7 +139,7 @@ public partial class Terminal : AuthComponentBase, IDisposable
             return;
         }
 
-        var deviceResult = await DataService.GetDevice(deviceId);
+        var deviceResult = await DeviceQueryService.GetDevice(deviceId);
 
         if (!deviceResult.IsSuccess)
         {

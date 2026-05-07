@@ -1,4 +1,5 @@
-﻿using Remotely.Server.Services;
+using Remotely.Server.Services;
+using Remotely.Server.Services.Devices;
 using Bitbound.SimpleMessenger;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Caching.Memory;
@@ -17,6 +18,7 @@ namespace Remotely.Server.Hubs;
 public class AgentHub : Hub<IAgentHubClient>
 {
     private readonly IDataService _dataService;
+    private readonly IDeviceQueryService _deviceQueryService;
     private readonly IInstalledApplicationsService _installedApplicationsService;
     private readonly IPackageInstallJobService _packageInstallJobService;
     private readonly ICircuitManager _circuitManager;
@@ -31,6 +33,7 @@ public class AgentHub : Hub<IAgentHubClient>
 
     public AgentHub(
         IDataService dataService,
+        IDeviceQueryService deviceQueryService,
         IAgentHubSessionCache serviceSessionCache,
         IHubContext<ViewerHub> viewerHubContext,
         ICircuitManager circuitManager,
@@ -44,6 +47,7 @@ public class AgentHub : Hub<IAgentHubClient>
         ILogger<AgentHub> logger)
     {
         _dataService = dataService;
+        _deviceQueryService = deviceQueryService;
         _serviceSessionCache = serviceSessionCache;
         _viewerHubContext = viewerHubContext;
         _circuitManager = circuitManager;
@@ -223,7 +227,7 @@ public class AgentHub : Hub<IAgentHubClient>
 
             var userIDs = _circuitManager.Connections.Select(x => x.User.Id);
 
-            var filteredUserIDs = _dataService.FilterUsersByDevicePermission(userIDs, Device.ID);
+            var filteredUserIDs = _deviceQueryService.FilterUsersByDevicePermission(userIDs, Device.ID);
 
             var connections = _circuitManager.Connections
                 .Where(x => x.User.OrganizationID == Device.OrganizationID &&
@@ -279,7 +283,7 @@ public class AgentHub : Hub<IAgentHubClient>
 
         var userIDs = _circuitManager.Connections.Select(x => x.User.Id);
 
-        var filteredUserIDs = _dataService.FilterUsersByDevicePermission(userIDs, Device.ID);
+        var filteredUserIDs = _deviceQueryService.FilterUsersByDevicePermission(userIDs, Device.ID);
 
         var connections = _circuitManager.Connections
             .Where(x => x.User.OrganizationID == Device.OrganizationID &&
@@ -336,7 +340,7 @@ public class AgentHub : Hub<IAgentHubClient>
 
                 var userIDs = _circuitManager.Connections.Select(x => x.User.Id);
 
-                var filteredUserIDs = _dataService.FilterUsersByDevicePermission(userIDs, Device.ID);
+                var filteredUserIDs = _deviceQueryService.FilterUsersByDevicePermission(userIDs, Device.ID);
 
                 var connections = _circuitManager.Connections
                     .Where(x => x.User.OrganizationID == Device.OrganizationID &&

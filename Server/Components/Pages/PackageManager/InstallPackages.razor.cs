@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Components;
 using Remotely.Server.Hubs;
 using Remotely.Server.PackageManager;
 using Remotely.Server.Services;
+using Remotely.Server.Services.Devices;
 using Remotely.Shared.Entities;
 using Remotely.Shared.Enums;
 
@@ -25,6 +26,9 @@ public partial class InstallPackages : AuthComponentBase
 
     [Inject]
     public required IDataService DataService { get; init; }
+
+    [Inject]
+    public required IDeviceQueryService DeviceQueryService { get; init; }
 
     [Inject]
     public required ICircuitConnection CircuitConnection { get; init; }
@@ -52,7 +56,7 @@ public partial class InstallPackages : AuthComponentBase
         // access — Phase 2 only ships a Chocolatey provider, so a
         // non-Windows target would be guaranteed to fail.
         _devices = PackageManagerDeviceFilter
-            .SupportedDevices(DataService.GetDevicesForUser(UserName))
+            .SupportedDevices(DeviceQueryService.GetDevicesForUser(UserName))
             .OrderBy(d => d.DeviceName)
             .ToArray();
     }

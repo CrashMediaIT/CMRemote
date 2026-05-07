@@ -2,6 +2,7 @@
 using Remotely.Server.Services;
 using Remotely.Server.Services.AuditLog;
 using Remotely.Server.Services.Organizations;
+using Remotely.Server.Services.Devices;
 using Bitbound.SimpleMessenger;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -57,6 +58,7 @@ public class CircuitConnectionTests
             _authService.Object,
             _dataService,
             IoCActivator.ServiceProvider.GetRequiredService<IOrganizationService>(),
+            IoCActivator.ServiceProvider.GetRequiredService<IDeviceQueryService>(),
             _clientAppState.Object,
             _agentHubContextFixture.HubContextMock.Object,
             _circuitManager.Object,

@@ -2,6 +2,7 @@
 @using System.ComponentModel.DataAnnotations
 
 @inject IDataService DataService
+@inject IDeviceQueryService DeviceQueryService
 @inject IUserDirectoryService UserDirectoryService
 @inject IEmailSenderEx EmailSender
 
@@ -82,7 +83,7 @@ else
             return;
         }
 
-        var deviceResult = await DataService.GetDevice(DeviceId);
+        var deviceResult = await DeviceQueryService.GetDevice(DeviceId);
         if (!deviceResult.IsSuccess)
         {
             _alertClass = "alert-danger";

@@ -5,6 +5,7 @@ using Remotely.Server.Enums;
 using Remotely.Server.Hubs;
 using Remotely.Server.Models.Messages;
 using Remotely.Server.Services;
+using Remotely.Server.Services.Devices;
 using Remotely.Server.Services.Organizations;
 using Remotely.Server.Services.Stores;
 using Remotely.Shared;
@@ -45,6 +46,9 @@ public partial class DeviceCard : AuthComponentBase
 
     [Inject]
     public required IDataService DataService { get; init; }
+
+    [Inject]
+    public required IDeviceQueryService DeviceQueryService { get; init; }
 
     [Inject]
     public required IOrganizationService OrganizationService { get; init; }
@@ -212,7 +216,7 @@ public partial class DeviceCard : AuthComponentBase
     private async Task HandleValidSubmit()
     {
         EnsureUserSet();
-        if (!DataService.DoesUserHaveAccessToDevice(Device.ID, User))
+        if (!DeviceQueryService.DoesUserHaveAccessToDevice(Device.ID, User))
         {
             ToastService.ShowToast("Unauthorized.", classString: "bg-warning");
             return;

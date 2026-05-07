@@ -7,6 +7,7 @@ using Remotely.Server.Services;
 using Remotely.Shared.Entities;
 using Remotely.Shared.Models;
 using Remotely.Server.Services.UserDirectory;
+using Remotely.Server.Services.Devices;
 
 namespace Remotely.Server.API;
 
@@ -16,15 +17,18 @@ public class DevicesController : ControllerBase
 {
     private readonly IDataService _dataService;
     private readonly IUserDirectoryService _userDirectoryService;
+    private readonly IDeviceQueryService _deviceQueryService;
     private readonly ILogger<DevicesController> _logger;
 
     public DevicesController(
         IDataService dataService,
         IUserDirectoryService userDirectoryService,
+        IDeviceQueryService deviceQueryService,
         ILogger<DevicesController> logger)
     {
         _dataService = dataService;
         _userDirectoryService = userDirectoryService;
+        _deviceQueryService = deviceQueryService;
         _logger = logger;
     }
 
@@ -40,11 +44,11 @@ public class DevicesController : ControllerBase
 
         if (User.Identity?.IsAuthenticated == true)
         {
-            return _dataService.GetDevicesForUser($"{User.Identity.Name}");
+            return _deviceQueryService.GetDevicesForUser($"{User.Identity.Name}");
         }
 
         // Authorized with API key.  Return all.
-        return _dataService.GetAllDevices(orgId);
+        return _deviceQueryService.GetAllDevices(orgId);
     }
 
     [ServiceFilter(typeof(ApiAuthorizationFilter))]
@@ -66,13 +70,13 @@ public class DevicesController : ControllerBase
                 return Unauthorized();
             }
 
-            if (!_dataService.DoesUserHaveAccessToDevice(id, userResult.Value))
+            if (!_deviceQueryService.DoesUserHaveAccessToDevice(id, userResult.Value))
             {
                 return Unauthorized();
             }
         }
 
-        var deviceResult = await _dataService.GetDevice(orgId, id);
+        var deviceResult = await _deviceQueryService.GetDevice(orgId, id);
         _logger.LogResult(deviceResult);
 
         if (!deviceResult.IsSuccess)
@@ -108,7 +112,7 @@ public class DevicesController : ControllerBase
                 return Unauthorized();
             }
 
-            if (!_dataService.DoesUserHaveAccessToDevice(deviceOptions.DeviceID, userResult.Value))
+            if (!_deviceQueryService.DoesUserHaveAccessToDevice(deviceOptions.DeviceID, userResult.Value))
             {
                 return Unauthorized();
             }

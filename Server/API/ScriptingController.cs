@@ -12,6 +12,7 @@ using Remotely.Server.Extensions;
 using Remotely.Shared.Entities;
 using Remotely.Shared.Interfaces;
 using Remotely.Server.Services.UserDirectory;
+using Remotely.Server.Services.Devices;
 
 namespace Remotely.Server.API;
 
@@ -23,6 +24,7 @@ public class ScriptingController : ControllerBase
 
     private readonly IDataService _dataService;
     private readonly IUserDirectoryService _userDirectoryService;
+    private readonly IDeviceQueryService _deviceQueryService;
     private readonly IAgentHubSessionCache _serviceSessionCache;
     private readonly IExpiringTokenService _expiringTokenService;
 
@@ -31,12 +33,14 @@ public class ScriptingController : ControllerBase
     public ScriptingController(UserManager<RemotelyUser> userManager,
         IDataService dataService,
         IUserDirectoryService userDirectoryService,
+        IDeviceQueryService deviceQueryService,
         IAgentHubSessionCache serviceSessionCache,
         IExpiringTokenService expiringTokenService,
         IHubContext<AgentHub, IAgentHubClient> agentHub)
     {
         _dataService = dataService;
         _userDirectoryService = userDirectoryService;
+        _deviceQueryService = deviceQueryService;
         _serviceSessionCache = serviceSessionCache;
         _expiringTokenService = expiringTokenService;
         _userManager = userManager;
@@ -73,7 +77,7 @@ public class ScriptingController : ControllerBase
                 return Unauthorized();
             }
 
-            if (!_dataService.DoesUserHaveAccessToDevice(deviceID, userResult.Value))
+            if (!_deviceQueryService.DoesUserHaveAccessToDevice(deviceID, userResult.Value))
             {
                 return Unauthorized();
             }
