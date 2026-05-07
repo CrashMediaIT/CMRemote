@@ -1,5 +1,6 @@
 ﻿using Microsoft.AspNetCore.Components.Authorization;
 using Remotely.Shared.Entities;
+using Remotely.Server.Services.UserDirectory;
 
 namespace Remotely.Server.Services;
 
@@ -12,14 +13,14 @@ public interface IAuthService
 public class AuthService : IAuthService
 {
     private readonly AuthenticationStateProvider _authProvider;
-    private readonly IDataService _dataService;
+    private readonly IUserDirectoryService _userDirectoryService;
 
     public AuthService(
         AuthenticationStateProvider authProvider,
-        IDataService dataService)
+        IUserDirectoryService userDirectoryService)
     {
         _authProvider = authProvider;
-        _dataService = dataService;
+        _userDirectoryService = userDirectoryService;
     }
 
     public async Task<bool> IsAuthenticated()
@@ -34,7 +35,7 @@ public class AuthService : IAuthService
 
         if (principal?.User?.Identity?.IsAuthenticated == true)
         {
-            return await _dataService.GetUserByName($"{principal.User.Identity.Name}");
+            return await _userDirectoryService.GetUserByName($"{principal.User.Identity.Name}");
         }
 
         return Result.Fail<RemotelyUser>("Not authenticated.");

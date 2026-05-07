@@ -8,6 +8,7 @@ using Remotely.Server.Services;
 using Remotely.Shared.Entities;
 using System;
 using System.Collections.Generic;
+using Remotely.Server.Services.UserDirectory;
 
 namespace Remotely.Server.Tests;
 
@@ -41,6 +42,7 @@ public class IoCActivator
 
         _builder.Services.AddTransient<IAppDbFactory, AppDbFactory>();
         _builder.Services.AddTransient<IDataService, DataService>();
+        _builder.Services.AddTransient<IUserDirectoryService, UserDirectoryService>();
         _builder.Services.AddTransient<IEmailSenderEx, EmailSenderEx>();
 
         _webApp = _builder.Build();

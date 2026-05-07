@@ -1,15 +1,16 @@
 ﻿using Microsoft.AspNetCore.Authorization;
 using Remotely.Server.Services;
+using Remotely.Server.Services.UserDirectory;
 
 namespace Remotely.Server.Auth;
 
 public class OrganizationAdminRequirementHandler : AuthorizationHandler<OrganizationAdminRequirement>
 {
-    private readonly IDataService _dataService;
+    private readonly IUserDirectoryService _userDirectoryService;
 
-    public OrganizationAdminRequirementHandler(IDataService dataService)
+    public OrganizationAdminRequirementHandler(IUserDirectoryService userDirectoryService)
     {
-        _dataService = dataService;
+        _userDirectoryService = userDirectoryService;
     }
 
     protected override async Task HandleRequirementAsync(AuthorizationHandlerContext context, OrganizationAdminRequirement requirement)
@@ -21,7 +22,7 @@ public class OrganizationAdminRequirementHandler : AuthorizationHandler<Organiza
             return;
         }
 
-        var userResult = await _dataService.GetUserByName(context.User.Identity.Name);
+        var userResult = await _userDirectoryService.GetUserByName(context.User.Identity.Name);
 
         if (!userResult.IsSuccess ||
             !userResult.Value.IsAdministrator)

@@ -9,6 +9,7 @@ using Remotely.Shared.Helpers;
 using Remotely.Server.Extensions;
 using Remotely.Shared.Entities;
 using Remotely.Shared.Interfaces;
+using Remotely.Server.Services.UserDirectory;
 
 // For more information on enabling Web API for empty projects, visit https://go.microsoft.com/fwlink/?LinkID=397860
 
@@ -22,6 +23,7 @@ public class RemoteControlController : ControllerBase
     private readonly IRemoteControlSessionCache _remoteControlSessionCache;
     private readonly IAgentHubSessionCache _serviceSessionCache;
     private readonly IDataService _dataService;
+    private readonly IUserDirectoryService _userDirectoryService;
     private readonly IOtpProvider _otpProvider;
     private readonly SignInManager<RemotelyUser> _signInManager;
     private readonly ILogger<RemoteControlController> _logger;
@@ -29,6 +31,7 @@ public class RemoteControlController : ControllerBase
     public RemoteControlController(
         SignInManager<RemotelyUser> signInManager,
         IDataService dataService,
+        IUserDirectoryService userDirectoryService,
         IRemoteControlSessionCache remoteControlSessionCache,
         IHubContext<AgentHub, IAgentHubClient> agentHub,
         IAgentHubSessionCache serviceSessionCache,
@@ -36,6 +39,7 @@ public class RemoteControlController : ControllerBase
         ILogger<RemoteControlController> logger)
     {
         _dataService = dataService;
+        _userDirectoryService = userDirectoryService;
         _agentHub = agentHub;
         _remoteControlSessionCache = remoteControlSessionCache;
         _serviceSessionCache = serviceSessionCache;
@@ -73,7 +77,7 @@ public class RemoteControlController : ControllerBase
             return BadRequest("Request body is missing required values.");
         }
 
-        var userResult = await _dataService.GetUserByName(rcRequest.Email);
+        var userResult = await _userDirectoryService.GetUserByName(rcRequest.Email);
         if (!userResult.IsSuccess)
         {
             return NotFound();
@@ -117,7 +121,7 @@ public class RemoteControlController : ControllerBase
 
         if (User.Identity?.IsAuthenticated == true)
         {
-            var userResult = await _dataService.GetUserByName($"{User.Identity.Name}");
+            var userResult = await _userDirectoryService.GetUserByName($"{User.Identity.Name}");
 
             if (!userResult.IsSuccess)
             {

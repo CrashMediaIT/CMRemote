@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Authorization;
 using Remotely.Server.Services;
+using Remotely.Server.Services.UserDirectory;
 
 namespace Remotely.Server.Auth;
 
@@ -11,10 +12,14 @@ namespace Remotely.Server.Auth;
 public class PackageManagerRequirementHandler : AuthorizationHandler<PackageManagerRequirement>
 {
     private readonly IDataService _dataService;
+    private readonly IUserDirectoryService _userDirectoryService;
 
-    public PackageManagerRequirementHandler(IDataService dataService)
+    public PackageManagerRequirementHandler(
+        IDataService dataService,
+        IUserDirectoryService userDirectoryService)
     {
         _dataService = dataService;
+        _userDirectoryService = userDirectoryService;
     }
 
     protected override async Task HandleRequirementAsync(AuthorizationHandlerContext context, PackageManagerRequirement requirement)
@@ -26,7 +31,7 @@ public class PackageManagerRequirementHandler : AuthorizationHandler<PackageMana
             return;
         }
 
-        var userResult = await _dataService.GetUserByName(context.User.Identity.Name);
+        var userResult = await _userDirectoryService.GetUserByName(context.User.Identity.Name);
 
         if (!userResult.IsSuccess || !userResult.Value.IsAdministrator)
         {

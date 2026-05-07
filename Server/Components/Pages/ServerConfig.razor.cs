@@ -8,6 +8,7 @@ using Remotely.Server.Services;
 using Remotely.Shared.Entities;
 using Remotely.Shared.Interfaces;
 using System.Net;
+using Remotely.Server.Services.UserDirectory;
 
 namespace Remotely.Server.Components.Pages;
 
@@ -37,6 +38,9 @@ public partial class ServerConfig : AuthComponentBase
 
     [Inject]
     public required IEmailSenderEx EmailSender { get; init; }
+
+    [Inject]
+    public required IUserDirectoryService UserDirectoryService { get; init; }
 
     [Inject]
     public required IWebHostEnvironment HostEnv { get; init; }
@@ -89,7 +93,7 @@ public partial class ServerConfig : AuthComponentBase
 
         Input = await DataService.GetSettings();
 
-        _userList.AddRange(DataService.GetAllUsersForServer().OrderBy(x => x.UserName));
+        _userList.AddRange(UserDirectoryService.GetAllUsersForServer().OrderBy(x => x.UserName));
     }
 
     private void AddBannedDevice()
@@ -248,7 +252,7 @@ public partial class ServerConfig : AuthComponentBase
 
         EnsureUserSet();
 
-        DataService.SetIsServerAdmin(user.Id, isAdmin, User.Id);
+        UserDirectoryService.SetIsServerAdmin(user.Id, isAdmin, User.Id);
         ToastService.ShowToast("Server admins updated.");
     }
 

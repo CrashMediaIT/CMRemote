@@ -4,7 +4,7 @@
 
 @inject AuthenticationStateProvider AuthProvider
 @inject UserManager<RemotelyUser> UserManager
-@inject IDataService DataService
+@inject IUserDirectoryService UserDirectoryService
 @inject IToastService ToastService
 @inject IModalService ModalService
 
@@ -121,7 +121,7 @@
             _options.CommandModeShortcutWinPS = "/" + _options.CommandModeShortcutWinPS;
         }
 
-        DataService.UpdateUserOptions(UserName, _options);
+        UserDirectoryService.UpdateUserOptions(UserName, _options);
 
         _alertMessage = "Options saved";
 

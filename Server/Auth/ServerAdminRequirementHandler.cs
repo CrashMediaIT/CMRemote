@@ -1,17 +1,17 @@
-﻿#nullable enable
+#nullable enable
 
+using Remotely.Server.Services.UserDirectory;
 using Microsoft.AspNetCore.Authorization;
-using Remotely.Server.Services;
 
 namespace Remotely.Server.Auth;
 
 public class ServerAdminRequirementHandler : AuthorizationHandler<ServerAdminRequirement>
 {
-    private readonly IDataService _dataService;
+    private readonly IUserDirectoryService _userDirectoryService;
 
-    public ServerAdminRequirementHandler(IDataService dataService)
+    public ServerAdminRequirementHandler(IUserDirectoryService userDirectoryService)
     {
-        _dataService = dataService;
+        _userDirectoryService = userDirectoryService;
     }
 
     protected override async Task HandleRequirementAsync(AuthorizationHandlerContext context, ServerAdminRequirement requirement)
@@ -23,7 +23,7 @@ public class ServerAdminRequirementHandler : AuthorizationHandler<ServerAdminReq
             return;
         }
 
-        var userResult = await _dataService.GetUserByName(context.User.Identity.Name);
+        var userResult = await _userDirectoryService.GetUserByName(context.User.Identity.Name);
 
         if (!userResult.IsSuccess ||
             !userResult.Value.IsServerAdmin)

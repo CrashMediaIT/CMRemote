@@ -3,19 +3,23 @@ using Microsoft.AspNetCore.Mvc.Filters;
 using Remotely.Server.Services;
 using Remotely.Shared;
 using System.Net;
+using Remotely.Server.Services.UserDirectory;
 
 namespace Remotely.Server.Auth;
 
 public class ApiAuthorizationFilter : IAsyncAuthorizationFilter
 {
     private readonly IDataService _dataService;
+    private readonly IUserDirectoryService _userDirectoryService;
     private readonly ILogger<ApiAuthorizationFilter> _logger;
 
     public ApiAuthorizationFilter(
-        IDataService dataService, 
+        IDataService dataService,
+        IUserDirectoryService userDirectoryService,
         ILogger<ApiAuthorizationFilter> logger)
     {
         _dataService = dataService;
+        _userDirectoryService = userDirectoryService;
         _logger = logger;
     }
 
@@ -38,7 +42,7 @@ public class ApiAuthorizationFilter : IAsyncAuthorizationFilter
 
         if (http.User.Identity?.IsAuthenticated == true)
         {
-            var userResult = await _dataService.GetUserByName($"{http.User.Identity.Name}");
+            var userResult = await _userDirectoryService.GetUserByName($"{http.User.Identity.Name}");
             if (userResult.IsSuccess && userResult.Value.IsAdministrator)
             {
                 http.Request.Headers["OrganizationID"] = userResult.Value.OrganizationID;

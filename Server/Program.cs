@@ -25,6 +25,7 @@ using Serilog;
 using System.Net;
 using RatePolicyNames = Remotely.Server.RateLimiting.PolicyNames;
 using Remotely.Server.Filters;
+using Remotely.Server.Services.UserDirectory;
 
 var builder = WebApplication.CreateBuilder(args);
 var configuration = builder.Configuration;
@@ -232,6 +233,7 @@ else
 }
 services.AddSingleton<IAppDbFactory, AppDbFactory>();
 services.AddTransient<IDataService, DataService>();
+services.AddTransient<IUserDirectoryService, UserDirectoryService>();
 services.AddScoped<ApiAuthorizationFilter>();
 services.AddScoped<LocalOnlyFilter>();
 services.AddScoped<ExpiringTokenFilter>();

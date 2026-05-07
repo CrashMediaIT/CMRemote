@@ -9,6 +9,7 @@ using Remotely.Shared.Utilities;
 using System;
 using System.Linq;
 using System.Threading.Tasks;
+using Remotely.Server.Services.UserDirectory;
 
 namespace Remotely.Server.Tests;
 
@@ -17,6 +18,7 @@ public class DataServiceTests
 {
     private readonly string _newDeviceID = "NewDeviceName";
     private IDataService _dataService = null!;
+    private IUserDirectoryService _userDirectoryService = null!;
     private TestData _testData = null!;
 
     [TestMethod]
@@ -194,6 +196,7 @@ public class DataServiceTests
         _testData = new TestData();
         await _testData.Init();
         _dataService = IoCActivator.ServiceProvider.GetRequiredService<IDataService>();
+        _userDirectoryService = IoCActivator.ServiceProvider.GetRequiredService<IUserDirectoryService>();
     }
 
     [TestMethod]
@@ -212,7 +215,7 @@ public class DataServiceTests
 
         Assert.AreEqual(1, currentAdmins.Count);
 
-        await _dataService.SetIsServerAdmin(_testData.Org1Admin2.Id, true, _testData.Org1Admin1.Id);
+        await _userDirectoryService.SetIsServerAdmin(_testData.Org1Admin2.Id, true, _testData.Org1Admin1.Id);
 
         currentAdmins = _dataService.GetServerAdmins();
         Assert.AreEqual(2, currentAdmins.Count);
@@ -220,16 +223,16 @@ public class DataServiceTests
         Assert.IsTrue(currentAdmins.Contains(_testData.Org1Admin2.UserName!));
 
         // Shouldn't be able to change themselves.
-        await _dataService.SetIsServerAdmin(_testData.Org1Admin2.Id, false, _testData.Org1Admin2.Id);
+        await _userDirectoryService.SetIsServerAdmin(_testData.Org1Admin2.Id, false, _testData.Org1Admin2.Id);
         currentAdmins = _dataService.GetServerAdmins();
         Assert.AreEqual(2, currentAdmins.Count);
 
         // Non-admins shouldn't be able to change admins.
-        await _dataService.SetIsServerAdmin(_testData.Org1User1.Id, false, _testData.Org1Admin2.Id);
+        await _userDirectoryService.SetIsServerAdmin(_testData.Org1User1.Id, false, _testData.Org1Admin2.Id);
         currentAdmins = _dataService.GetServerAdmins();
         Assert.AreEqual(2, currentAdmins.Count);
 
-        await _dataService.SetIsServerAdmin(_testData.Org1Admin2.Id, false, _testData.Org1Admin1.Id);
+        await _userDirectoryService.SetIsServerAdmin(_testData.Org1Admin2.Id, false, _testData.Org1Admin1.Id);
         currentAdmins = _dataService.GetServerAdmins();
         Assert.AreEqual(1, currentAdmins.Count);
         Assert.AreEqual(_testData.Org1Admin1.UserName, currentAdmins[0]);
@@ -238,10 +241,10 @@ public class DataServiceTests
     [TestMethod]
     public async Task VerifyInitialData()
     {
-        Assert.IsNotNull((await _dataService.GetUserByName(_testData.Org1Admin1.UserName!)).Value);
-        Assert.IsNotNull((await _dataService.GetUserByName(_testData.Org1Admin2.UserName!)).Value);
-        Assert.IsNotNull((await _dataService.GetUserByName(_testData.Org1User1.UserName!)).Value);
-        Assert.IsNotNull((await _dataService.GetUserByName(_testData.Org1User2.UserName!)).Value);
+        Assert.IsNotNull((await _userDirectoryService.GetUserByName(_testData.Org1Admin1.UserName!)).Value);
+        Assert.IsNotNull((await _userDirectoryService.GetUserByName(_testData.Org1Admin2.UserName!)).Value);
+        Assert.IsNotNull((await _userDirectoryService.GetUserByName(_testData.Org1User1.UserName!)).Value);
+        Assert.IsNotNull((await _userDirectoryService.GetUserByName(_testData.Org1User2.UserName!)).Value);
         Assert.AreEqual(2, _dataService.GetOrganizationCount());
 
         var devices1 = _dataService.GetAllDevices(_testData.Org1Id);
