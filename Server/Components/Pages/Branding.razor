@@ -2,6 +2,7 @@
 @inherits AuthComponentBase
 @attribute [Authorize(Policy = PolicyNames.OrganizationAdminRequired)]
 @inject IDataService DataService
+@inject IOrganizationService OrganizationService
 @inject IToastService ToastService
 @inject IJsInterop JsInterop
 @using Remotely.Server.Models
@@ -106,7 +107,7 @@
 
     private async Task LoadBrandingInfo()
     {
-        var orgResult = await DataService.GetOrganizationByUserName($"{UserName}");
+        var orgResult = await OrganizationService.GetOrganizationByUserName($"{UserName}");
 
         if (!orgResult.IsSuccess)
         {

@@ -10,6 +10,7 @@ using System;
 using System.Linq;
 using System.Threading.Tasks;
 using Remotely.Server.Services.UserDirectory;
+using Remotely.Server.Services.Organizations;
 
 namespace Remotely.Server.Tests;
 
@@ -19,6 +20,7 @@ public class DataServiceTests
     private readonly string _newDeviceID = "NewDeviceName";
     private IDataService _dataService = null!;
     private IUserDirectoryService _userDirectoryService = null!;
+    private IOrganizationService _organizationService = null!;
     private TestData _testData = null!;
 
     [TestMethod]
@@ -197,14 +199,15 @@ public class DataServiceTests
         await _testData.Init();
         _dataService = IoCActivator.ServiceProvider.GetRequiredService<IDataService>();
         _userDirectoryService = IoCActivator.ServiceProvider.GetRequiredService<IUserDirectoryService>();
+        _organizationService = IoCActivator.ServiceProvider.GetRequiredService<IOrganizationService>();
     }
 
     [TestMethod]
     public async Task UpdateOrganizationName()
     {
         Assert.AreEqual("Org1", _testData.Org1Admin1.Organization!.OrganizationName);
-        await _dataService.UpdateOrganizationName(_testData.Org1Id, "Test Org");
-        var updatedOrg = (await _dataService.GetOrganizationById(_testData.Org1Id)).Value;
+        await _organizationService.UpdateOrganizationName(_testData.Org1Id, "Test Org");
+        var updatedOrg = (await _organizationService.GetOrganizationById(_testData.Org1Id)).Value;
         Assert.AreEqual("Test Org", updatedOrg!.OrganizationName);
     }
 
@@ -245,7 +248,7 @@ public class DataServiceTests
         Assert.IsNotNull((await _userDirectoryService.GetUserByName(_testData.Org1Admin2.UserName!)).Value);
         Assert.IsNotNull((await _userDirectoryService.GetUserByName(_testData.Org1User1.UserName!)).Value);
         Assert.IsNotNull((await _userDirectoryService.GetUserByName(_testData.Org1User2.UserName!)).Value);
-        Assert.AreEqual(2, _dataService.GetOrganizationCount());
+        Assert.AreEqual(2, _organizationService.GetOrganizationCount());
 
         var devices1 = _dataService.GetAllDevices(_testData.Org1Id);
         Assert.AreEqual(2, devices1.Length);

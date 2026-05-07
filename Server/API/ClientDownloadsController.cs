@@ -2,6 +2,7 @@
 using Remotely.Server.Auth;
 using Remotely.Server.Extensions;
 using Remotely.Server.Services;
+using Remotely.Server.Services.Organizations;
 using Remotely.Shared.Extensions;
 using Remotely.Shared.Models;
 using Remotely.Shared.Services;
@@ -15,6 +16,7 @@ namespace Remotely.Server.API;
 public class ClientDownloadsController : ControllerBase
 {
     private readonly IDataService _dataService;
+    private readonly IOrganizationService _organizationService;
     private readonly IEmbeddedServerDataProvider _embeddedDataSearcher;
     private readonly SemaphoreSlim _fileLock = new(1, 1);
     private readonly IWebHostEnvironment _hostEnv;
@@ -24,11 +26,13 @@ public class ClientDownloadsController : ControllerBase
         IWebHostEnvironment hostEnv,
         IEmbeddedServerDataProvider embeddedDataSearcher,
         IDataService dataService,
+        IOrganizationService organizationService,
         ILogger<ClientDownloadsController> logger)
     {
         _hostEnv = hostEnv;
         _embeddedDataSearcher = embeddedDataSearcher;
         _dataService = dataService;
+        _organizationService = organizationService;
         _logger = logger;
     }
 
@@ -140,7 +144,7 @@ public class ClientDownloadsController : ControllerBase
     private async Task<IActionResult> GetDesktopFile(string relativeFilePath, string? organizationId = null)
     {
         await LogRequest(nameof(GetDesktopFile));
-        var defaultOrg = await _dataService.GetDefaultOrganization();
+        var defaultOrg = await _organizationService.GetDefaultOrganization();
 
         // The default org will be used if unspecified, so might as well save the
         // space in the file name.

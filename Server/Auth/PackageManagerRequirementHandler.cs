@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Authorization;
 using Remotely.Server.Services;
+using Remotely.Server.Services.Organizations;
 using Remotely.Server.Services.UserDirectory;
 
 namespace Remotely.Server.Auth;
@@ -11,14 +12,14 @@ namespace Remotely.Server.Auth;
 /// </summary>
 public class PackageManagerRequirementHandler : AuthorizationHandler<PackageManagerRequirement>
 {
-    private readonly IDataService _dataService;
+    private readonly IOrganizationService _organizationService;
     private readonly IUserDirectoryService _userDirectoryService;
 
     public PackageManagerRequirementHandler(
-        IDataService dataService,
+        IOrganizationService organizationService,
         IUserDirectoryService userDirectoryService)
     {
-        _dataService = dataService;
+        _organizationService = organizationService;
         _userDirectoryService = userDirectoryService;
     }
 
@@ -39,7 +40,7 @@ public class PackageManagerRequirementHandler : AuthorizationHandler<PackageMana
             return;
         }
 
-        var orgResult = await _dataService.GetOrganizationById(userResult.Value.OrganizationID);
+        var orgResult = await _organizationService.GetOrganizationById(userResult.Value.OrganizationID);
         if (!orgResult.IsSuccess || !orgResult.Value.PackageManagerEnabled)
         {
             context.Fail();

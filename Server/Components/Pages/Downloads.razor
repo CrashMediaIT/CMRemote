@@ -4,6 +4,7 @@
 
 @inject IAuthService Auth
 @inject IDataService DataService
+@inject IOrganizationService OrganizationService
 @inject UserManager<RemotelyUser> UserManager
 @inject IWebHostEnvironment HostEnv
 @inject NavigationManager NavManager
@@ -219,7 +220,7 @@
         }
         else
         {
-            var orgResult = await DataService.GetDefaultOrganization();
+            var orgResult = await OrganizationService.GetDefaultOrganization();
             if (orgResult.IsSuccess)
             {
                 _organizationId = orgResult.Value.ID;

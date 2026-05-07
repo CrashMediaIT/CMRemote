@@ -1,6 +1,7 @@
 ﻿#nullable enable
 using Remotely.Server.Services;
 using Remotely.Server.Services.AuditLog;
+using Remotely.Server.Services.Organizations;
 using Bitbound.SimpleMessenger;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -55,6 +56,7 @@ public class CircuitConnectionTests
         _circuitConnection = new CircuitConnection(
             _authService.Object,
             _dataService,
+            IoCActivator.ServiceProvider.GetRequiredService<IOrganizationService>(),
             _clientAppState.Object,
             _agentHubContextFixture.HubContextMock.Object,
             _circuitManager.Object,

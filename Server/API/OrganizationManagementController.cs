@@ -10,6 +10,7 @@ using Remotely.Shared.ViewModels;
 using System.Text;
 using System.Text.Encodings.Web;
 using Remotely.Server.Services.UserDirectory;
+using Remotely.Server.Services.Organizations;
 
 // For more information on enabling Web API for empty projects, visit https://go.microsoft.com/fwlink/?LinkID=397860
 
@@ -21,6 +22,7 @@ public class OrganizationManagementController : ControllerBase
 {
     private readonly IDataService _dataService;
     private readonly IUserDirectoryService _userDirectoryService;
+    private readonly IOrganizationService _organizationService;
     private readonly IEmailSenderEx _emailSender;
     private readonly ILogger<OrganizationManagementController> _logger;
     private readonly UserManager<RemotelyUser> _userManager;
@@ -29,11 +31,13 @@ public class OrganizationManagementController : ControllerBase
         UserManager<RemotelyUser> userManager,
         IDataService dataService,
         IUserDirectoryService userDirectoryService,
+        IOrganizationService organizationService,
         IEmailSenderEx emailSender,
         ILogger<OrganizationManagementController> logger)
     {
         _dataService = dataService;
         _userDirectoryService = userDirectoryService;
+        _organizationService = organizationService;
         _userManager = userManager;
         _emailSender = emailSender;
         _logger = logger;
@@ -253,7 +257,7 @@ public class OrganizationManagementController : ControllerBase
             return BadRequest();
         }
 
-        var result = await _dataService.UpdateOrganizationName(orgId, organizationName.Trim());
+        var result = await _organizationService.UpdateOrganizationName(orgId, organizationName.Trim());
         _logger.LogResult(result);
         if (!result.IsSuccess)
         {
@@ -271,7 +275,7 @@ public class OrganizationManagementController : ControllerBase
             return Unauthorized();
         }
 
-        await _dataService.SetIsDefaultOrganization(orgId, isDefault);
+        await _organizationService.SetIsDefaultOrganization(orgId, isDefault);
         return NoContent();
     }
 

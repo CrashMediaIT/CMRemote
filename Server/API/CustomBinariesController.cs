@@ -1,5 +1,6 @@
 ﻿using Microsoft.AspNetCore.Mvc;
 using Remotely.Server.Services;
+using Remotely.Server.Services.Organizations;
 using Remotely.Shared.Models;
 using Remotely.Shared.Services;
 
@@ -9,6 +10,7 @@ namespace Remotely.Server.API;
 [ApiController]
 public class CustomBinariesController(
     IDataService _dataService,
+    IOrganizationService _organizationService,
     IWebHostEnvironment _hostingEnvironment,
     IEmbeddedServerDataProvider _embeddedData) : ControllerBase
 {
@@ -34,7 +36,7 @@ public class CustomBinariesController(
 
     private async Task<EmbeddedServerData> GetEmbeddedData(string? organizationId)
     {
-        var defaultOrg = await _dataService.GetDefaultOrganization();
+        var defaultOrg = await _organizationService.GetDefaultOrganization();
 
         // The default org will be used if unspecified, so might as well save the
         // space in the file name.

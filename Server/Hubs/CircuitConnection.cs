@@ -1,4 +1,5 @@
-﻿using Remotely.Server.Services;
+using Remotely.Server.Services;
+using Remotely.Server.Services.Organizations;
 using Remotely.Shared.Helpers;
 using Bitbound.SimpleMessenger;
 using Microsoft.AspNetCore.Components.Server.Circuits;
@@ -101,6 +102,7 @@ public class CircuitConnection : CircuitHandler, ICircuitConnection
 {
     private readonly IHubContext<AgentHub, IAgentHubClient> _agentHubContext;
     private readonly IDataService _dataService;
+    private readonly IOrganizationService _organizationService;
     private readonly IInstalledApplicationsService _installedApplicationsService;
     private readonly IPackageService _packageService;
     private readonly IPackageInstallJobService _packageInstallJobService;
@@ -121,6 +123,7 @@ public class CircuitConnection : CircuitHandler, ICircuitConnection
     public CircuitConnection(
         IAuthService authService,
         IDataService dataService,
+        IOrganizationService organizationService,
         ISelectedCardsStore cardStore,
         IHubContext<AgentHub, IAgentHubClient> agentHubContext,
         ICircuitManager circuitManager,
@@ -138,6 +141,7 @@ public class CircuitConnection : CircuitHandler, ICircuitConnection
         ILogger<CircuitConnection> logger)
     {
         _dataService = dataService;
+        _organizationService = organizationService;
         _agentHubContext = agentHubContext;
         _cardStore = cardStore;
         _authService = authService;
@@ -326,7 +330,7 @@ public class CircuitConnection : CircuitHandler, ICircuitConnection
 
         _remoteControlSessionCache.AddOrUpdate($"{sessionId}", session);
 
-        var orgResult = await _dataService.GetOrganizationNameByUserName($"{User.UserName}");
+        var orgResult = await _organizationService.GetOrganizationNameByUserName($"{User.UserName}");
 
         if (!orgResult.IsSuccess)
         {
@@ -410,7 +414,7 @@ public class CircuitConnection : CircuitHandler, ICircuitConnection
             return;
         }
 
-        var orgResult = await _dataService.GetOrganizationNameByUserName($"{User.UserName}");
+        var orgResult = await _organizationService.GetOrganizationNameByUserName($"{User.UserName}");
         if (!orgResult.IsSuccess)
         {
             _toastService.ShowToast2("Organization not found.", Enums.ToastType.Warning);

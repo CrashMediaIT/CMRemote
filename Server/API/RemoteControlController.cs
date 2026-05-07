@@ -10,6 +10,7 @@ using Remotely.Server.Extensions;
 using Remotely.Shared.Entities;
 using Remotely.Shared.Interfaces;
 using Remotely.Server.Services.UserDirectory;
+using Remotely.Server.Services.Organizations;
 
 // For more information on enabling Web API for empty projects, visit https://go.microsoft.com/fwlink/?LinkID=397860
 
@@ -24,6 +25,7 @@ public class RemoteControlController : ControllerBase
     private readonly IAgentHubSessionCache _serviceSessionCache;
     private readonly IDataService _dataService;
     private readonly IUserDirectoryService _userDirectoryService;
+    private readonly IOrganizationService _organizationService;
     private readonly IOtpProvider _otpProvider;
     private readonly SignInManager<RemotelyUser> _signInManager;
     private readonly ILogger<RemoteControlController> _logger;
@@ -32,6 +34,7 @@ public class RemoteControlController : ControllerBase
         SignInManager<RemotelyUser> signInManager,
         IDataService dataService,
         IUserDirectoryService userDirectoryService,
+        IOrganizationService organizationService,
         IRemoteControlSessionCache remoteControlSessionCache,
         IHubContext<AgentHub, IAgentHubClient> agentHub,
         IAgentHubSessionCache serviceSessionCache,
@@ -40,6 +43,7 @@ public class RemoteControlController : ControllerBase
     {
         _dataService = dataService;
         _userDirectoryService = userDirectoryService;
+        _organizationService = organizationService;
         _agentHub = agentHub;
         _remoteControlSessionCache = remoteControlSessionCache;
         _serviceSessionCache = serviceSessionCache;
@@ -154,7 +158,7 @@ public class RemoteControlController : ControllerBase
             return v;
         });
 
-        var orgNameResult = await _dataService.GetOrganizationNameById(orgId);
+        var orgNameResult = await _organizationService.GetOrganizationNameById(orgId);
 
         if (!orgNameResult.IsSuccess)
         {

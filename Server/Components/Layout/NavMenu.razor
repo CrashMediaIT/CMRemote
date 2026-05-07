@@ -2,7 +2,7 @@
 @inject NavigationManager NavigationManager
 @inject IAuthService AuthService 
 @inject IDataService DataService
-@inject IDataService DataService
+@inject IOrganizationService OrganizationService
 
 <div class="ps-4 pb-1 pe-0 pt-0 navbar navbar-dark" style="background-color: rgba(0,0,0,0.3)">
     <a class="navbar-brand text-start" href="">
@@ -222,7 +222,7 @@
     protected override async Task OnInitializedAsync()
     {
         var settings = await DataService.GetSettings();
-        _isRegistrationEnabled = settings.MaxOrganizationCount < 0 || DataService.GetOrganizationCount() < settings.MaxOrganizationCount;
+        _isRegistrationEnabled = settings.MaxOrganizationCount < 0 || OrganizationService.GetOrganizationCount() < settings.MaxOrganizationCount;
 
         await base.OnInitializedAsync();
 
@@ -240,7 +240,7 @@
 
         if (!string.IsNullOrWhiteSpace(_user?.OrganizationID))
         {
-            var orgResult = await DataService.GetOrganizationById(_user.OrganizationID);
+            var orgResult = await OrganizationService.GetOrganizationById(_user.OrganizationID);
             if (orgResult.IsSuccess)
             {
                 _organization = orgResult.Value;
@@ -248,7 +248,7 @@
         }
         else
         {
-            var orgResult = await DataService.GetDefaultOrganization();
+            var orgResult = await OrganizationService.GetDefaultOrganization();
             if (orgResult.IsSuccess)
             {
                 _organization = orgResult.Value;

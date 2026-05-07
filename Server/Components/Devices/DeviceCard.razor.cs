@@ -5,6 +5,7 @@ using Remotely.Server.Enums;
 using Remotely.Server.Hubs;
 using Remotely.Server.Models.Messages;
 using Remotely.Server.Services;
+using Remotely.Server.Services.Organizations;
 using Remotely.Server.Services.Stores;
 using Remotely.Shared;
 using Remotely.Shared.Entities;
@@ -46,6 +47,9 @@ public partial class DeviceCard : AuthComponentBase
     public required IDataService DataService { get; init; }
 
     [Inject]
+    public required IOrganizationService OrganizationService { get; init; }
+
+    [Inject]
     public required IChatSessionStore ChatCache { get; init; }
 
     [Inject]
@@ -84,7 +88,7 @@ public partial class DeviceCard : AuthComponentBase
 
         if (User.IsAdministrator && !string.IsNullOrEmpty(User.OrganizationID))
         {
-            var orgResult = await DataService.GetOrganizationById(User.OrganizationID);
+            var orgResult = await OrganizationService.GetOrganizationById(User.OrganizationID);
             _packageManagerEnabled = orgResult.IsSuccess && orgResult.Value.PackageManagerEnabled;
         }
 

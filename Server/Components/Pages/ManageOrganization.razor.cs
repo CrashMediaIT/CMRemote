@@ -10,6 +10,7 @@ using Remotely.Shared.ViewModels;
 using System.Text;
 using System.Text.Encodings.Web;
 using Remotely.Server.Services.UserDirectory;
+using Remotely.Server.Services.Organizations;
 
 namespace Remotely.Server.Components.Pages;
 
@@ -27,6 +28,9 @@ public partial class ManageOrganization : AuthComponentBase
 
     [Inject]
     private IDataService DataService { get; set; } = null!;
+
+    [Inject]
+    private IOrganizationService OrganizationService { get; set; } = null!;
 
     [Inject]
     private IEmailSenderEx EmailSender { get; set; } = null!;
@@ -108,7 +112,7 @@ public partial class ManageOrganization : AuthComponentBase
             return;
         }
 
-        DataService.SetIsDefaultOrganization(_organization.ID, isDefault);
+        OrganizationService.SetIsDefaultOrganization(_organization.ID, isDefault);
         ToastService.ShowToast("Default organization set.");
     }
 
@@ -135,7 +139,7 @@ public partial class ManageOrganization : AuthComponentBase
             return;
         }
 
-        await DataService.SetOrganizationPackageManagerEnabled(_organization.ID, isEnabled);
+        await OrganizationService.SetOrganizationPackageManagerEnabled(_organization.ID, isEnabled);
         _organization.PackageManagerEnabled = isEnabled;
         ToastService.ShowToast(isEnabled ? "Package Manager enabled." : "Package Manager disabled.");
     }
@@ -271,7 +275,7 @@ public partial class ManageOrganization : AuthComponentBase
             return;
         }
 
-        DataService.UpdateOrganizationName(_organization.ID, newName);
+        OrganizationService.UpdateOrganizationName(_organization.ID, newName);
         _organization.OrganizationName = newName;
         ToastService.ShowToast("Organization name changed.");
     }
@@ -280,7 +284,7 @@ public partial class ManageOrganization : AuthComponentBase
     {
         EnsureUserSet();
 
-        var orgResult = await DataService.GetOrganizationByUserName(UserName);
+        var orgResult = await OrganizationService.GetOrganizationByUserName(UserName);
         if (!orgResult.IsSuccess)
         {
             ToastService.ShowToast2(orgResult.Reason, Enums.ToastType.Warning);

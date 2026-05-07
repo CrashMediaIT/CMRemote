@@ -26,6 +26,7 @@ using System.Net;
 using RatePolicyNames = Remotely.Server.RateLimiting.PolicyNames;
 using Remotely.Server.Filters;
 using Remotely.Server.Services.UserDirectory;
+using Remotely.Server.Services.Organizations;
 
 var builder = WebApplication.CreateBuilder(args);
 var configuration = builder.Configuration;
@@ -234,6 +235,7 @@ else
 services.AddSingleton<IAppDbFactory, AppDbFactory>();
 services.AddTransient<IDataService, DataService>();
 services.AddTransient<IUserDirectoryService, UserDirectoryService>();
+services.AddTransient<IOrganizationService, OrganizationService>();
 services.AddScoped<ApiAuthorizationFilter>();
 services.AddScoped<LocalOnlyFilter>();
 services.AddScoped<ExpiringTokenFilter>();

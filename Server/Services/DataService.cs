@@ -92,8 +92,6 @@ public interface IDataService
 
     Task<Result<BrandingInfo>> GetBrandingInfo(string organizationId);
 
-    Task<Result<Organization>> GetDefaultOrganization();
-
     Task<Result<Device>> GetDevice(
           string deviceId,
           Action<IQueryable<Device>>? queryBuilder = null);
@@ -116,17 +114,6 @@ public interface IDataService
     List<Device> GetDevices(IEnumerable<string> deviceIds);
 
     Device[] GetDevicesForUser(string userName);
-
-    Task<Result<Organization>> GetOrganizationById(string organizationId);
-
-    Task<Result<Organization>> GetOrganizationByUserName(string userName);
-
-    int GetOrganizationCount();
-    Task<int> GetOrganizationCountAsync();
-
-    Task<Result<string>> GetOrganizationNameById(string organizationId);
-
-    Task<Result<string>> GetOrganizationNameByUserName(string userName);
 
     Task<IEnumerable<ScriptRun>> GetPendingScriptRuns(string deviceId);
 
@@ -168,15 +155,6 @@ public interface IDataService
 
     Task SetAllDevicesNotOnline();
 
-    Task SetIsDefaultOrganization(string orgId, bool isDefault);
-
-    /// <summary>
-    /// Toggles the per-org Package Manager opt-in. Disabling clears all
-    /// existing inventory snapshots for the org so previously-cached app
-    /// lists aren't visible after the feature is turned off.
-    /// </summary>
-    Task SetOrganizationPackageManagerEnabled(string orgId, bool isEnabled);
-
     void SetServerVerificationToken(string deviceId, string verificationToken);
 
     Task<bool> TempPasswordSignIn(string email, string password);
@@ -189,8 +167,6 @@ public interface IDataService
     Task<Result<Device>> UpdateDevice(DeviceSetupOptions deviceOptions, string organizationId);
 
     Task UpdateDevice(string deviceId, string? tag, string? alias, string? deviceGroupId, string? notes);
-
-    Task<Result> UpdateOrganizationName(string orgId, string newName);
 
     Task UpdateTags(string deviceID, string tags);
 
@@ -1119,22 +1095,6 @@ public class DataService : IDataService
         return Result.Ok(organization.BrandingInfo);
     }
 
-    public async Task<Result<Organization>> GetDefaultOrganization()
-    {
-        using var dbContext = _appDbFactory.GetContext();
-
-        var org = await dbContext.Organizations
-            .AsNoTracking()
-            .FirstOrDefaultAsync(x => x.IsDefaultOrganization);
-        
-        if (org is null)
-        {
-            return Result.Fail<Organization>("Organization not found.");
-        }
-
-        return Result.Ok(org);
-    }
-
     public async Task<Result<Device>> GetDevice(string orgId, string deviceId)
     {
         using var dbContext = _appDbFactory.GetContext();
@@ -1323,94 +1283,6 @@ public class DataService : IDataService
             .ToArray();
     }
 
-    public async Task<Result<Organization>> GetOrganizationById(string organizationId)
-    {
-        using var dbContext = _appDbFactory.GetContext();
-
-        var org = await dbContext.Organizations.FindAsync(organizationId);
-
-        if (org is null)
-        {
-            return Result.Fail<Organization>("Organization not found.");
-        }
-        return Result.Ok(org);
-    }
-
-
-    public async Task<Result<Organization>> GetOrganizationByUserName(string userName)
-    {
-        if (string.IsNullOrWhiteSpace(userName))
-        {
-            return Result.Fail<Organization>("User name is required.");
-        }
-
-        using var dbContext = _appDbFactory.GetContext();
-
-        var user = await dbContext.Users
-            .AsNoTracking()
-            .Include(x => x.Organization)
-            .FirstOrDefaultAsync(x => x.UserName!.ToLower() == userName.ToLower());
-
-        if (user?.Organization is null)
-        {
-            return Result.Fail<Organization>("User not found.");
-        }
-
-        return Result.Ok(user.Organization);
-    }
-
-    public int GetOrganizationCount()
-    {
-        using var dbContext = _appDbFactory.GetContext();
-
-        return dbContext.Organizations.Count();
-    }
-
-    public async Task<int> GetOrganizationCountAsync()
-    {
-        using var dbContext = _appDbFactory.GetContext();
-
-        return await dbContext.Organizations.CountAsync();
-    }
-
-    public async Task<Result<string>> GetOrganizationNameById(string organizationId)
-    {
-        using var dbContext = _appDbFactory.GetContext();
-
-        var org = await dbContext.Organizations
-            .AsNoTracking()
-            .FirstOrDefaultAsync(x => x.ID == organizationId);
-
-        if (org is null)
-        {
-            return Result.Fail<string>("Organization not found.");
-        }
-
-        return Result.Ok(org.OrganizationName);
-    }
-
-    public async Task<Result<string>> GetOrganizationNameByUserName(string userName)
-    {
-        if (string.IsNullOrWhiteSpace(userName))
-        {
-            return Result.Fail<string>("Username cannot be empty.");
-        }
-
-        using var dbContext = _appDbFactory.GetContext();
-
-        var user = await dbContext.Users
-            .AsNoTracking()
-            .Include(x => x.Organization)
-            .FirstOrDefaultAsync(x => x.UserName == userName);
-
-        if (user is null)
-        {
-            return Result.Fail<string>("User not found.");
-        }
-
-        var orgName = $"{user.Organization?.OrganizationName}";
-        return Result.Ok(orgName);
-    }
 
     public async Task<IEnumerable<ScriptRun>> GetPendingScriptRuns(string deviceId)
     {
@@ -1794,53 +1666,6 @@ public class DataService : IDataService
         await dbContext.SaveChangesAsync();
     }
 
-    public async Task SetIsDefaultOrganization(string orgID, bool isDefault)
-    {
-        using var dbContext = _appDbFactory.GetContext();
-
-        var organization = await dbContext.Organizations.FindAsync(orgID);
-        if (organization is null)
-        {
-            return;
-        }
-
-        if (isDefault)
-        {
-            await dbContext.Organizations.ForEachAsync(x => x.IsDefaultOrganization = false);
-        }
-
-        organization.IsDefaultOrganization = isDefault;
-        await dbContext.SaveChangesAsync();
-    }
-
-    public async Task SetOrganizationPackageManagerEnabled(string orgId, bool isEnabled)
-    {
-        using var dbContext = _appDbFactory.GetContext();
-
-        var organization = await dbContext.Organizations.FindAsync(orgId);
-        if (organization is null)
-        {
-            return;
-        }
-
-        organization.PackageManagerEnabled = isEnabled;
-
-        if (!isEnabled)
-        {
-            // Drop any cached inventory so disabling the feature also
-            // hides previously-collected app lists from the UI.
-            var deviceIds = dbContext.Devices
-                .Where(d => d.OrganizationID == orgId)
-                .Select(d => d.ID);
-
-            var snapshots = dbContext.DeviceInstalledApplicationsSnapshots
-                .Where(s => deviceIds.Contains(s.DeviceId));
-            dbContext.DeviceInstalledApplicationsSnapshots.RemoveRange(snapshots);
-        }
-
-        await dbContext.SaveChangesAsync();
-    }
-
     public void SetServerVerificationToken(string deviceID, string verificationToken)
     {
         using var dbContext = _appDbFactory.GetContext();
@@ -1951,22 +1776,6 @@ public class DataService : IDataService
         device.Alias = deviceOptions.DeviceAlias;
         await dbContext.SaveChangesAsync();
         return Result.Ok(device);
-    }
-
-    public async Task<Result> UpdateOrganizationName(string orgId, string newName)
-    {
-        using var dbContext = _appDbFactory.GetContext();
-
-        var org = await dbContext.Organizations.FirstOrDefaultAsync(x => x.ID == orgId);
-
-        if (org is null)
-        {
-            return Result.Fail("Organization not found.");
-        }
-        
-        org.OrganizationName = newName;
-        await dbContext.SaveChangesAsync();
-        return Result.Ok();
     }
 
     public async Task UpdateTags(string deviceID, string tags)

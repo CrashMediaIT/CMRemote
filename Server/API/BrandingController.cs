@@ -1,6 +1,7 @@
 ﻿using Remotely.Shared.Extensions;
 using Microsoft.AspNetCore.Mvc;
 using Remotely.Server.Services;
+using Remotely.Server.Services.Organizations;
 using Remotely.Shared.Entities;
 
 namespace Remotely.Server.API;
@@ -10,13 +11,16 @@ namespace Remotely.Server.API;
 public class BrandingController : ControllerBase
 {
     private readonly IDataService _dataService;
+    private readonly IOrganizationService _organizationService;
     private readonly ILogger<BrandingController> _logger;
 
     public BrandingController(
         IDataService dataService,
+        IOrganizationService organizationService,
         ILogger<BrandingController> logger)
     {
         _dataService = dataService;
+        _organizationService = organizationService;
         _logger = logger;
     }
 
@@ -36,7 +40,7 @@ public class BrandingController : ControllerBase
     [HttpGet]
     public async Task<BrandingInfo> GetDefault()
     {
-        var orgResult = await _dataService.GetDefaultOrganization();
+        var orgResult = await _organizationService.GetDefaultOrganization();
         _logger.LogResult(orgResult);
 
         if (!orgResult.IsSuccess)
